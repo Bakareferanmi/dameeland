@@ -33,7 +33,6 @@ export function Comments({list,body,onBody,attachment,onPreset,onPhoto,onRemove,
     ? (Object.keys(commentGifs) as (keyof typeof commentGifs)[]).map(id=>({kind:'gif',id}))
     : (Object.keys(commentStickers) as (keyof typeof commentStickers)[]).map(id=>({kind:'sticker',id}))
   return <>
-    <Copy size={23} weight={800}>Comments</Copy>
     <ScrollView style={{maxHeight:260}} nestedScrollEnabled keyboardShouldPersistTaps="handled" contentContainerStyle={{gap:14,paddingVertical:4}}>
       {list.length?list.map(item=><View key={item.id} style={{...row,alignItems:'flex-start'}}>
         <Pressable accessibilityRole="button" accessibilityLabel={'Open '+item.author.name+' profile'} onPress={()=>onProfile(item.author)}

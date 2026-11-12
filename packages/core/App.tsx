@@ -27,9 +27,11 @@ type Props={
   demo:boolean; base:string; phone?:boolean; initialTheme:Theme; font:(weight:number)=>object; renderIcon:React.ComponentType<IconRendererProps>;
   loadToken?:()=>Promise<string|null>; saveToken?:(token:string|null)=>Promise<void>;
   openGoogle?:(getUrl:()=>Promise<string>)=>Promise<GoogleWindow>;
+  modalViewport?:React.ComponentType<{color:string;children:React.ReactNode}>;
   pickMedia?:()=>Promise<Media|null>; renderGif?:GifRenderer; share?:(text:string)=>Promise<void>;
 }
 type Overlay={kind:'connections';list:FollowListKind;person:Person}|{kind:'comments'|'share'|'post';post:Post}|{kind:'story';person:Person}|{kind:'create'|'wish'|'newStory'}|{kind:'call';video:boolean;person:Person;ringing?:boolean;incoming?:boolean}
+type PageEntry={page:Page;profile:Person;room:Room|null;overlays:Overlay[];scrollY:number}
 const tabs:[Page,Glyph][]=[['Home','home'],['Learn','book'],['Explore','search'],['Play','game']]
 const localRooms=people.filter(p=>p.id in initialChats).map(person=>({id:person.id,person}))
 const storyPeople=[people[0],people[4],people[2],people[1]]
@@ -54,6 +56,10 @@ function Motion({children,reduced,style,distance=10,axis='y'}:{children:React.Re
   const offset=animation.interpolate({inputRange:[0,1],outputRange:[distance,0]})
   return <Animated.View style={[style,{opacity:animation,transform:[axis==='x'?{translateX:offset}:{translateY:offset}]}]}>{children}</Animated.View>
 }
+function DefaultModalViewport({color,children}:{color:string;children:React.ReactNode}){
+  return <View style={{flex:1,backgroundColor:color}}>{children}</View>
+}
+
 function Intro({step,onNext,onBack,onSkip,reduced,desktop}:{step:number;onNext:()=>void;onBack:()=>void;onSkip:()=>void;reduced:boolean;desktop:boolean}){
   const slide=slides[step]
   const illustration:Glyph=(['book','grp','trophy'] as const)[step]
@@ -200,7 +206,6 @@ function ConnectionList({base,token,profile,list,samples,onProfile}:{base:string
   },[base,token,profile.id,list,cursor,revision,sampleMode])
   const entries=samples??people
   return <>
-    <Copy size={23} weight={800}>{list==='followers'?'Followers':'Following'}</Copy>
     {entries.map(person=><Pressable key={person.id} accessibilityRole="button" accessibilityLabel={'View '+person.name+' profile'} onPress={()=>onProfile(person)} style={{...row,minHeight:52}}>
       <Avatar person={person}/><View style={{flex:1}}><PersonName person={person}/><Copy size={12} color={theme.muted}>{person.detail}</Copy></View>
     </Pressable>)}
@@ -254,13 +259,15 @@ export default function App(props:Props){
   const [step,setStep]=useState(0)
   const [user,setUser]=useState<Viewer>(me),[token,setToken]=useState('')
   const [page,setPage]=useState<Page>('Home')
-  const pageHistory=useRef<Page[]>([])
+  const pageHistory=useRef<PageEntry[]>([])
   const googleRequest=useRef<AbortController|null>(null)
   const [googlePending,setGooglePending]=useState(false)
   const [busy,setBusy]=useState(false),[error,setError]=useState('')
   const [posts,setPosts]=useState<Post[]>(demo?initialPosts:[])
   const [loading,setLoading]=useState(false),[feedError,setFeedError]=useState(''),[followingOnly,setFollowingOnly]=useState(false)
   const [overlay,setOverlay]=useState<Overlay|null>(null)
+  const overlayHistory=useRef<Overlay[]>([])
+  const pageScroll=useRef(0)
   const [toast,setToast]=useState<ToastMessage|null>(null)
   const [seen,setSeen]=useState(new Set<string>())
   const [demoAccounts,setDemoAccounts]=useState<AdminAccount[]>(()=>people.filter(person=>!person.group).map(person=>({person,email:'',created:null,independentlyVerified:person.role!=='tech'&&!!person.verified})))
@@ -406,19 +413,31 @@ export default function App(props:Props){
     if(!pendingOffset.current)return
     const frame=requestAnimationFrame(restorePageScroll)
     return ()=>cancelAnimationFrame(frame)
-  },[page,loading,stage])
-  const open=(next:Page,back=false)=>{
-    if(next===page){
-      if(tabs.some(([tab])=>tab===next))scroll.current?.scrollTo({y:0,animated:!reduced})
-      return
-    }
-    pendingOffset.current=tabs.some(([tab])=>tab===next)?{page:next,y:scrollOffsets.current[next]??0}:null
-    if(!back){
-      if(tabs.some(([tab])=>tab===next))pageHistory.current=[]
-      else pageHistory.current.push(page)
-    }
+  },[page,profile.id,room?.id,loading,stage])
+  function changePage(next:Page,scrollY=0){
+    pendingOffset.current={page:next,y:scrollY}
+    pageScroll.current=scrollY
     setPage(next);setFeedError('')
     if(next==='Notifications')setUnread(false)
+  }
+  function dismissOverlays(){
+    overlayHistory.current=[]
+    setOverlay(null)
+    clearComment()
+  }
+  function open(next:Page,details?:{profile?:Person;room?:Room}){
+    const sameDestination=next===page&&(!details?.profile||details.profile.id===profile.id)&&(!details?.room||details.room.id===room?.id)
+    const isTab=tabs.some(([tab])=>tab===next)
+    if(sameDestination&&!overlay){
+      if(isTab)scroll.current?.scrollTo({y:0,animated:!reduced})
+      return
+    }
+    if(isTab)pageHistory.current=[]
+    else pageHistory.current.push({page,profile,room,scrollY:pageScroll.current,overlays:overlay?[...overlayHistory.current,overlay]:[]})
+    if(overlay)dismissOverlays()
+    if(details?.profile)setProfile(details.profile)
+    if(details?.room)setRoom(details.room)
+    changePage(next,isTab?scrollOffsets.current[next]??0:0)
   }
   const startQuiz=()=>open('Quiz')
   useEffect(()=>{
@@ -440,9 +459,11 @@ export default function App(props:Props){
     const timer=setTimeout(()=>setVoicePlaying(false),8000)
     return ()=>clearTimeout(timer)
   },[voicePlaying])
-  const showProfile=(person:Person)=>{setProfile(demo?demoAccounts.find(account=>account.person.id===person.id)?.person??person:person);open('Profile')}
+  const showProfile=(person:Person)=>open('Profile',{profile:demo?demoAccounts.find(account=>account.person.id===person.id)?.person??person:person})
   const selectOverlay=(value:Overlay)=>{
     if(value.kind==='newStory'){setStoryMode('Text');setStoryImage(undefined)}
+    if(overlay)overlayHistory.current.push(overlay)
+    clearComment()
     setOverlay(value)
     if(value.kind==='story')setSeen(previous=>new Set(previous).add(value.person.id))
     if(value.kind==='comments'&&!demo){
@@ -521,7 +542,7 @@ export default function App(props:Props){
       demoSession.current++
       replyTimers.current.forEach(clearTimeout);replyTimers.current=[]
       scrollOffsets.current={};pendingOffset.current=null;setToast(null)
-      pageHistory.current=[];setToken('');setUser(me);setPage('Home');setStage('auth');setError('')
+      pageHistory.current=[];dismissOverlays();setToken('');setUser(me);setPage('Home');setStage('auth');setError('')
       setPosts(demo?initialPosts:[]);setNotes({});setChats(demo?initialChats:{});setFollows({});setProfileStats(null)
       setRooms(demo?localRooms:[]);setRoom(null);setDraft('');setAttachment(null);clearComment();setMessage('');setSeen(new Set());setOwnStory(null);setWishes([]);setLessonComplete(false);setVoicePlaying(false);setQuietMode(false);setFollowingOnly(false)
     }catch(reason){fail(reason)}
@@ -586,7 +607,7 @@ export default function App(props:Props){
         await call('/posts',attachment?{method:'POST',body:form}:json({body:draft}))
         setRetry(n=>n+1)
       }
-      setDraft('');setAttachment(null);setOverlay(null);setFollowingOnly(false);open('Home');notify('Post shared')
+      setDraft('');setAttachment(null);dismissOverlays();setFollowingOnly(false);open('Home');notify('Post shared')
     }catch(reason){fail(reason)}finally{setBusy(false)}
   }
   async function pickCommentPhoto(){
@@ -628,7 +649,7 @@ export default function App(props:Props){
   }
   function openRoom(next:Room){
     stickToChatEnd.current=true;initialChatScroll.current=true
-    setRoom(next);setMessage('');open('Chat')
+    setMessage('');open('Chat',{room:next})
   }
   async function messagePerson(person:Person){
     try{
@@ -653,7 +674,19 @@ export default function App(props:Props){
       }
     }catch(reason){fail(reason)}finally{setBusy(false)}
   }
-  const goBack=()=>open(pageHistory.current.pop()??'Home',true)
+  const goBack=()=>{
+    const previous=pageHistory.current.pop()
+    if(!previous){changePage('Home',scrollOffsets.current.Home??0);return}
+    setProfile(previous.profile)
+    setRoom(previous.room)
+    overlayHistory.current=previous.overlays.slice(0,-1)
+    setOverlay(previous.overlays.at(-1)??null)
+    if(previous.page==='Chat'){
+      stickToChatEnd.current=false
+      initialChatScroll.current=false
+    }
+    changePage(previous.page,previous.scrollY)
+  }
   useEffect(()=>{
     if(Platform.OS!=='android'||stage!=='app'||overlay||(!pageHistory.current.length&&page==='Home'))return
     const subscription=BackHandler.addEventListener('hardwareBackPress',()=>{goBack();return true})
@@ -663,12 +696,12 @@ export default function App(props:Props){
   const displayedPosts=demo&&followingOnly?posts.filter(p=>p.author.id===user.id||follows[p.author.id]):posts
   const displayedPeople=demo?people.map(person=>demoAccounts.find(account=>account.person.id===person.id)?.person??person).filter(p=>(p.name+' '+p.detail).toLowerCase().includes(query.trim().toLowerCase())):results
   const canShare=Boolean(props.share)
-  const modalClose=()=>{setOverlay(null);clearComment()}
+  const modalClose=()=>{setOverlay(overlayHistory.current.pop()??null);clearComment()}
   const compose=()=>selectOverlay({kind:'create'})
   const section=(title:string)=> <Copy size={19} weight={800}>{title}</Copy>
   const failure=<Empty title="Couldn’t connect" detail={feedError} action="Try again" onPress={()=>setRetry(n=>n+1)}/>
   const navButton=(name:Page,glyph:Glyph)=>{
-    const active=page===name||name==='Messages'&&page==='Chat'||tabs.some(([tab])=>tab===name)&&pageHistory.current[0]===name
+    const active=page===name||name==='Messages'&&page==='Chat'||tabs.some(([tab])=>tab===name)&&pageHistory.current[0]?.page===name
     const color=active?theme.ink:theme.muted
     return <Pressable accessibilityRole="button" accessibilityLabel={name} accessibilityState={{selected:active}} key={name} onPress={()=>open(name)}
       style={({pressed})=>({...row,flexDirection:desktop?'row':'column',justifyContent:desktop?'flex-start':'center',minHeight:desktop?48:54,flex:desktop?0:1,paddingHorizontal:desktop?12:0,gap:desktop?12:3,borderRadius:13,backgroundColor:desktop&&active?theme.chip:'transparent',opacity:pressed?.68:1})}>
@@ -797,25 +830,25 @@ export default function App(props:Props){
   }
   let sheet:React.ReactNode
   if(overlay?.kind==='connections'){
-    sheet=<ConnectionList key={overlay.person.id+':'+overlay.list} base={base} token={token} profile={overlay.person} list={overlay.list} samples={demo?demoConnections(overlay.person.id,overlay.list):undefined} onProfile={person=>{modalClose();showProfile(person)}}/>
+    sheet=<ConnectionList key={overlay.person.id+':'+overlay.list} base={base} token={token} profile={overlay.person} list={overlay.list} samples={demo?demoConnections(overlay.person.id,overlay.list):undefined} onProfile={showProfile}/>
   }else if(overlay?.kind==='post'){
     const post=posts.find(item=>item.id===overlay.post.id)??overlay.post
-    sheet=<><Copy size={23} weight={800}>Post detail</Copy><PostCard detail post={post} onReact={react} onOverlay={selectOverlay} onProfile={person=>{modalClose();showProfile(person)}}/><Button label="Read comments" variant="secondary" onPress={()=>selectOverlay({kind:'comments',post})}/></>
+    sheet=<><PostCard detail post={post} onReact={react} onOverlay={selectOverlay} onProfile={showProfile}/><Button label="Read comments" variant="secondary" onPress={()=>selectOverlay({kind:'comments',post})}/></>
   }else if(overlay?.kind==='comments'){
     const list=notes[overlay.post.id]??(demo&&overlay.post.id==='quadratics'?initialComments:[])
     sheet=<Comments key={overlay.post.id} list={list} body={comment} onBody={setComment} busy={busy} renderGif={props.renderGif}
       attachment={commentMedia&&'uri' in commentMedia?{kind:'image',url:commentMedia.uri}:commentMedia??undefined}
       onPreset={value=>{commentDraft.current+=1;setCommentMedia(value)}} onRemove={()=>{commentDraft.current+=1;setCommentMedia(null)}}
       onPhoto={props.pickMedia?()=>void pickCommentPhoto():undefined} onPost={()=>void addComment(overlay.post)}
-      onProfile={person=>{modalClose();showProfile(person)}}/>
+      onProfile={showProfile}/>
   }else if(overlay?.kind==='create'){
-    sheet=<><Copy size={23} weight={800}>Create post</Copy><View style={row}><Avatar person={user}/><PersonName person={user}/></View><Field label="What’s happening?" value={draft} onChangeText={setDraft} multiline maxLength={1200} style={{minHeight:106,textAlignVertical:'top'}}/>
+    sheet=<><View style={row}><Avatar person={user}/><PersonName person={user}/></View><Field label="What’s happening?" value={draft} onChangeText={setDraft} multiline maxLength={1200} style={{minHeight:106,textAlignVertical:'top'}}/>
       {attachment&&<View style={spread}><Copy size={12}>{attachment.name}</Copy><IconButton name="close" label="Remove image" onPress={()=>setAttachment(null)}/></View>}
       {props.pickMedia&&<Button label="Add image" leading="image" variant="secondary" onPress={()=>{void props.pickMedia?.().then(value=>{if(value)setAttachment(value)}).catch(fail)}}/>}
       <Button label={busy?'Posting…':'Publish post'} onPress={()=>void createPost()} disabled={busy||(!draft.trim()&&!attachment)}/></>
   }else if(overlay?.kind==='newStory'){
     const valid=storyMode==='Text'?!!comment.trim():storyMode==='Photo'?!!storyImage:true
-    sheet=<><Copy size={23} weight={800}>Create story</Copy>
+    sheet=<>
       <Segmented options={['Text','Photo','Video']} selected={storyMode} onSelect={setStoryMode}/>
       {storyMode==='Photo'&&<>{storyImage&&<Image source={{uri:storyImage}} style={{width:'100%',height:140,borderRadius:12}}/>}{props.pickMedia&&<Button label={storyImage?'Replace photo':'Choose photo'} leading="image" variant="secondary" onPress={()=>{void props.pickMedia?.().then(value=>{if(value)setStoryImage(value.uri)}).catch(fail)}}/>}</>}
       {storyMode==='Video'&&<Card><IconTile name="vid"/><Copy>Try the video story layout with a sample preview.</Copy></Card>}
@@ -823,13 +856,17 @@ export default function App(props:Props){
       <Button label="Share story" disabled={!valid} onPress={()=>{setOwnStory({text:comment.trim(),image:storyMode==='Photo'?storyImage:undefined,videoPreview:storyMode==='Video'});modalClose();notify('Story shared in the preview')}}/>
     </>
   }else if(overlay?.kind==='share'){
-    sheet=<><Copy size={23} weight={800}>Share post</Copy><Copy>{overlay.post.body||'Image post'}</Copy>{canShare&&<Button label="Share post text" onPress={()=>{void props.share?.(overlay.post.body).then(()=>{modalClose();notify('Post text ready to share')}).catch(fail)}}/>}</>
+    sheet=<><Copy>{overlay.post.body||'Image post'}</Copy>{canShare&&<Button label="Share post text" onPress={()=>{void props.share?.(overlay.post.body).then(()=>{modalClose();notify('Post text ready to share')}).catch(fail)}}/>}</>
   }else if(overlay?.kind==='wish'){
-    sheet=<><Copy size={23} weight={800}>Happy birthday, Zee!</Copy><Avatar person={people[2]} size={65}/><Field label="Write a birthday wish" value={comment} onChangeText={setComment} maxLength={300}/><Button label="Send wish" disabled={!comment.trim()} variant="fun" onPress={()=>{setWishes(previous=>[...previous,comment.trim()]);modalClose();notify('Birthday wish sent in the preview')}}/></>
+    sheet=<><Avatar person={people[2]} size={65}/><Field label="Write a birthday wish" value={comment} onChangeText={setComment} maxLength={300}/><Button label="Send wish" disabled={!comment.trim()} variant="fun" onPress={()=>{setWishes(previous=>[...previous,comment.trim()]);modalClose();notify('Birthday wish sent in the preview')}}/></>
   }else if(overlay?.kind==='call'&&overlay.ringing){
     const call=overlay
-    sheet=<Card><Copy size={23} weight={800}>Ringing</Copy><PersonName person={call.person}/><Copy>Simulated voice call</Copy><Button label={call.incoming?'Accept preview call':'Connect preview call'} onPress={()=>setOverlay({...call,ringing:false})}/><Button label={call.incoming?'Decline call':'Cancel call'} variant="secondary" onPress={modalClose}/></Card>
+    sheet=<Card><PersonName person={call.person}/><Copy>Simulated voice call</Copy><Button label={call.incoming?'Accept preview call':'Connect preview call'} onPress={()=>setOverlay({...call,ringing:false})}/><Button label={call.incoming?'Decline call':'Cancel call'} variant="secondary" onPress={modalClose}/></Card>
   }else if(overlay?.kind==='call')sheet=<CallPreview video={overlay.video} person={overlay.person} onClose={modalClose}/>
+  const ModalViewport=props.modalViewport??DefaultModalViewport
+  const overlayTitle=overlay?.kind==='connections'?(overlay.list==='followers'?'Followers':'Following')
+    :overlay?.kind==='call'?(overlay.ringing?'Ringing':overlay.video?'Video call':'Voice call')
+    :overlay&&overlay.kind!=='story'?{comments:'Comments',share:'Share post',post:'Post detail',create:'Create post',wish:'Happy birthday, Zee!',newStory:'Create story'}[overlay.kind]:''
   const story=overlay?.kind==='story'?(demoAccounts.find(account=>account.person.id===overlay.person.id)?.person??overlay.person):null
   const personalStory=story?.id===user.id?ownStory:null
   const storyText=personalStory?.text??(story?.id==='ada'?'Study session after school. Bring your notes!':story?.id==='code'?'Code Club meets on Friday!':'See you at quiz night!')
@@ -858,10 +895,13 @@ export default function App(props:Props){
               {!desktop&&<><View><IconButton name="bell" label="Notifications" onPress={()=>open('Notifications')}/>{unread&&<View pointerEvents="none" style={{position:'absolute',right:8,top:7,width:7,height:7,borderRadius:5,backgroundColor:theme.purple}}/>}</View><IconButton name="msg" label="Messages" onPress={()=>open('Messages')}/><Pressable accessibilityRole="button" accessibilityLabel="Your profile" style={{width:44,height:44,alignItems:'center',justifyContent:'center'}} onPress={()=>showProfile(user)}><Avatar person={user} size={31}/></Pressable></>}
             </View>
           </View>
-          <ScrollView key={page==='Chat'?'chat:'+room?.id:page} ref={scroll} testID="main-scroll" style={{flex:1}} keyboardShouldPersistTaps="handled" keyboardDismissMode="on-drag"
+          <ScrollView key={page==='Chat'?'chat:'+room?.id:page==='Profile'?'profile:'+profile.id:page} ref={scroll} testID="main-scroll" style={{flex:1}} keyboardShouldPersistTaps="handled" keyboardDismissMode="on-drag"
             scrollEventThrottle={64} onScroll={({nativeEvent})=>{
               const {contentOffset,contentSize,layoutMeasurement}=nativeEvent
-              if(tabs.some(([tab])=>tab===page)&&!pendingOffset.current)scrollOffsets.current[page]=Math.max(0,contentOffset.y)
+              if(!pendingOffset.current){
+                pageScroll.current=Math.max(0,contentOffset.y)
+                if(tabs.some(([tab])=>tab===page))scrollOffsets.current[page]=pageScroll.current
+              }
               if(page==='Chat'&&!initialChatScroll.current)stickToChatEnd.current=contentSize.height-layoutMeasurement.height-contentOffset.y<80
             }} onContentSizeChange={()=>{
               if(page==='Chat'&&stickToChatEnd.current){
@@ -870,7 +910,7 @@ export default function App(props:Props){
               }else restorePageScroll()
             }}
             contentContainerStyle={{padding:desktop?20:13,gap:16,width:'100%',maxWidth:640,alignSelf:'center'}}>
-            <Motion key={page} reduced={reduced} style={stack}>{content[page]??<Suspense fallback={<LoadingScreen compact/>}><FeatureScreen key={page} page={page as ExtraPage} open={open} demo={demo} user={user} startQuiz={startQuiz} completed={lessonComplete} markComplete={()=>setLessonComplete(true)} wish={()=>selectOverlay({kind:'wish'})} wishes={wishes} incomingCall={()=>selectOverlay({kind:'call',video:false,person:people[0],ringing:true,incoming:true})}/></Suspense>}</Motion></ScrollView>
+            <Motion key={page} reduced={reduced} distance={0} style={stack}>{content[page]??<Suspense fallback={<LoadingScreen compact/>}><FeatureScreen key={page} page={page as ExtraPage} open={open} demo={demo} user={user} startQuiz={startQuiz} completed={lessonComplete} markComplete={()=>setLessonComplete(true)} wish={()=>selectOverlay({kind:'wish'})} wishes={wishes} incomingCall={()=>selectOverlay({kind:'call',video:false,person:people[0],ringing:true,incoming:true})}/></Suspense>}</Motion></ScrollView>
           {page==='Chat'&&<View style={{...row,padding:10,borderTopWidth:1,borderColor:theme.border,backgroundColor:theme.card}}><View style={{flex:1}}><Field label="Message" placeholder="Write a message" value={message} onChangeText={setMessage} onSubmitEditing={()=>void send()} maxLength={800}/></View><View style={{alignSelf:'flex-end'}}><Button label="Send" trailing="send" disabled={busy||!message.trim()} onPress={()=>void send()}/></View></View>}
           {!desktop&&<View style={{...row,gap:0,justifyContent:'space-around',minHeight:64,paddingHorizontal:6,borderTopWidth:1,borderColor:theme.border,backgroundColor:theme.card}}>{tabs.slice(0,2).map(([name,glyph])=>navButton(name,glyph))}<View style={{width:61,alignItems:'center',marginTop:-13}}><IconButton name="plus" label="Create post" size={26} solid onPress={compose}/></View>{tabs.slice(2).map(([name,glyph])=>navButton(name,glyph))}</View>}
         </View>
@@ -892,7 +932,8 @@ export default function App(props:Props){
         </ScrollView>}
       </View>}
     {toast&&!overlay&&<Toast key={toast.id} item={toast} reduced={reduced} onDismiss={dismissToast} bottom={desktop?24:76}/>}
-    <Modal transparent visible={overlay!==null} animationType={reduced?'none':'fade'} onRequestClose={modalClose}>
+    <Modal presentationStyle="fullScreen" visible={overlay!==null} animationType={reduced?'none':'fade'} onRequestClose={modalClose}>
+      <ModalViewport color={story?(personalStory?.image?'#120D1F':'#4F25D6'):theme.bg}>
       {story?<View accessibilityViewIsModal style={{flex:1,backgroundColor:personalStory?.image?'#120D1F':'#4F25D6',padding:18}}>
         <View style={{width:'100%',maxWidth:640,alignSelf:'center',flex:1,gap:14}}>
           <View style={{height:3,backgroundColor:lime,borderRadius:3}}/>
@@ -910,14 +951,20 @@ export default function App(props:Props){
             </View>
           </View>
         </View>
-      </View>:<View style={{flex:1,justifyContent:desktop?'center':'flex-end',alignItems:'center',backgroundColor:'#0A0714AA'}}>
-        <Pressable accessibilityLabel="Dismiss overlay" onPress={modalClose} style={{position:'absolute',top:0,left:0,right:0,bottom:0}}/>
-        <Motion reduced={reduced} distance={desktop?9:24} style={{width:'100%',maxWidth:desktop?460:phone?390:560,maxHeight:'94%',borderTopLeftRadius:28,borderTopRightRadius:28,borderBottomLeftRadius:desktop?28:0,borderBottomRightRadius:desktop?28:0,backgroundColor:theme.card,padding:17,gap:8}}>
-          <View style={{...spread}}><View style={{width:40,height:5,borderRadius:5,backgroundColor:theme.border}}/><IconButton name="close" label="Close" onPress={modalClose}/></View>
-          <ScrollView keyboardShouldPersistTaps="handled" contentContainerStyle={{gap:12,paddingBottom:8}}>{sheet}</ScrollView>
-        </Motion>
+      </View>:<View accessibilityViewIsModal style={{flex:1,backgroundColor:theme.bg}}>
+        <View style={{backgroundColor:theme.card,borderBottomWidth:1,borderColor:theme.border}}>
+          <View style={{...row,width:'100%',maxWidth:720,alignSelf:'center',minHeight:60,paddingHorizontal:16}}>
+            <IconButton name={overlayHistory.current.length?'back':'close'} label={overlayHistory.current.length?'Back':'Close'} onPress={modalClose}/>
+            <Copy size={21} weight={800}>{overlayTitle}</Copy>
+          </View>
+        </View>
+        <ScrollView key={overlay?.kind} style={{flex:1}} keyboardShouldPersistTaps="handled"
+          contentContainerStyle={{width:'100%',maxWidth:720,alignSelf:'center',padding:16,paddingBottom:30,gap:14}}>
+          {sheet}
+        </ScrollView>
         {toast&&overlay&&<Toast key={toast.id} item={toast} reduced={reduced} onDismiss={dismissToast} bottom={18}/>}
       </View>}
+      </ModalViewport>
     </Modal>
   </View></Design.Provider>
 }

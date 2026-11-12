@@ -43,6 +43,10 @@ function CommentGif({uri,label,animate}:{uri:string;label:string;animate:boolean
   return <ExpoImage source={{uri}} accessibilityLabel={label} accessible autoplay={animate} contentFit="cover"
     style={{width:96,height:64,borderRadius:10}}/>
 }
+function NativeModalViewport({color,children}:{color:string;children:React.ReactNode}){
+  const style={flex:1,backgroundColor:color}
+  return <SafeAreaProvider style={style}><SafeAreaView style={style}>{children}</SafeAreaView></SafeAreaProvider>
+}
 export default function App(){
   const theme=useColorScheme()==='dark'?'dark':'light'
   const offline=Platform.OS==='web'&&document.documentElement.dataset.preview==='true'
@@ -50,5 +54,5 @@ export default function App(){
   const configuredBase=process.env.EXPO_PUBLIC_API_URL
   const base=configuredBase??(Platform.OS==='android'?'http://10.0.2.2:8787':'http://localhost:8787')
   const demo=offline||process.env.EXPO_PUBLIC_DEMO==='1'||!configuredBase
-  return <SafeAreaProvider><SafeAreaView style={{flex:1,backgroundColor:theme==='dark'?'#120D1F':'#FAF8FF'}}>{loaded||error?<Dameeland phone={offline} demo={demo} base={base} renderIcon={HugeiconsIcon} initialTheme={theme} font={error?()=>({}):font} loadToken={loadToken} saveToken={saveToken} openGoogle={openGoogle} pickMedia={pickMedia} renderGif={CommentGif} share={share}/>:<LoadingScreen/>}</SafeAreaView></SafeAreaProvider>
+  return <SafeAreaProvider><SafeAreaView style={{flex:1,backgroundColor:theme==='dark'?'#120D1F':'#FAF8FF'}}>{loaded||error?<Dameeland phone={offline} demo={demo} base={base} renderIcon={HugeiconsIcon} initialTheme={theme} font={error?()=>({}):font} loadToken={loadToken} saveToken={saveToken} openGoogle={openGoogle} modalViewport={Platform.OS==='web'?undefined:NativeModalViewport} pickMedia={pickMedia} renderGif={CommentGif} share={share}/>:<LoadingScreen/>}</SafeAreaView></SafeAreaProvider>
 }
