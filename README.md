@@ -21,7 +21,7 @@ The apps render the Hugeicons Stroke Rounded set as vectors. The original icon s
 
 ## Run with the local Worker
 
-Use Node.js 24 and npm. From the workspace root:
+Use Node.js 24.3 or newer on the 24 release line, or Node.js 26 and npm. From the workspace root:
 
 ```bash
 npm ci
@@ -38,10 +38,12 @@ npm run dev:web
 Open `http://localhost:5173` for the live local flow, or `http://localhost:5173/?demo=1` for sample data. Vite proxies API and WebSocket traffic to Wrangler on port 8787. A production Vite build can target a Worker using `VITE_API_URL`, with its exact web origin allowed by the Worker config.
 
 ```bash
-npm run dev:mobile
+npm -w @dameeland/mobile run start -- --go --lan
 ```
 
-Expo starts in demo mode by default. To connect a simulator or compatible Expo SDK 54 development build, set `EXPO_PUBLIC_API_URL` in `apps/mobile/.env.local`. Use `http://localhost:8787` for iOS Simulator or `http://10.0.2.2:8787` for the standard Android emulator. For a physical device, use the development machine's LAN address and start Wrangler with `npm -w @dameeland/api run dev -- --ip 0.0.0.0` on a trusted local network.
+Scan the Metro QR code using Expo Go for SDK 58 on a phone connected to the same network. If LAN access is unavailable, sign into Expo from `apps/mobile` with `npx expo login`, then run `npm -w @dameeland/mobile run start -- --go --tunnel` from the workspace root.
+
+Expo starts in demo mode by default. To connect a simulator or physical device to the local API, set `EXPO_PUBLIC_API_URL` in `apps/mobile/.env.local`. Use `http://localhost:8787` for iOS Simulator or `http://10.0.2.2:8787` for the standard Android emulator. For a physical device, use the development machine's LAN address and start Wrangler with `npm -w @dameeland/api run dev -- --ip 0.0.0.0` on a trusted local network.
 
 ## Implemented flows
 

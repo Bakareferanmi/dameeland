@@ -285,7 +285,7 @@ export default function App(props:Props){
   const [unread,setUnread]=useState(demo)
   const [notifications,setNotifications]=useState(true)
   const pending=useRef(new Set<string>())
-  const scroll=useRef<ScrollView>(null)
+  const scroll=useRef<React.ComponentRef<typeof ScrollView>>(null)
   const scrollOffsets=useRef<Partial<Record<Page,number>>>({})
   const pendingOffset=useRef<{page:Page;y:number}|null>(null)
   const stickToChatEnd=useRef(true)
