@@ -3,7 +3,7 @@ import {cors} from 'hono/cors'
 import {bodyLimit} from 'hono/body-limit'
 import {HTTPException} from 'hono/http-exception'
 import {DurableObject} from 'cloudflare:workers'
-import {capitalizeName,initials,normalizeUsername,usernameHint,validUsername,type FollowPage,type FollowStats,type Person,type Role} from '@dameeland/core'
+import {commentGifs,commentStickers,capitalizeName,initials,normalizeUsername,usernameHint,validUsername,type CommentAttachment,type FollowPage,type FollowStats,type Person,type Role} from '@dameeland/core'
 
 interface Env {DB:D1Database;MEDIA:R2Bucket;ROOMS:DurableObjectNamespace<ChatRoom>;ALLOWED_ORIGIN:string;GOOGLE_CLIENT_ID?:string;GOOGLE_CLIENT_SECRET?:string;GOOGLE_REDIRECT_URI?:string}
 type Account={id:string;email:string;name:string;role:Role;salt:string;password_hash:string;username?:string|null}
@@ -45,7 +45,7 @@ async function authAllowed(db:D1Database,ip:string,flow:string){
 app.use('/api/*',async(c,next)=>cors({origin:[c.env.ALLOWED_ORIGIN,'http://127.0.0.1:5173'],allowMethods:['GET','POST','PUT','DELETE','OPTIONS'],allowHeaders:['Authorization','Content-Type']})(c,next))
 app.use('/api/*',async(c,next)=>{
   if(c.req.method!=='POST'&&c.req.method!=='PUT')return next()
-  const maxSize=c.req.path==='/api/posts'||c.req.path.startsWith('/api/me/photos/')?5300000:8192
+  const maxSize=c.req.path==='/api/posts'||c.req.path.startsWith('/api/me/photos/')||/^\/api\/posts\/[^/]+\/comments$/.test(c.req.path)?5300000:8192
   return bodyLimit({maxSize,onError:()=>{throw new HTTPException(413,{message:'The request is too large.'})}})(c,next)
 })
 app.get('/api/health',c=>c.json({ok:true}))
@@ -178,7 +178,7 @@ app.post('/api/google/exchange',async c=>{
 })
 app.get('/api/media/:id',async c=>{
   const id=c.req.param('id')
-  const attachment=await c.env.DB.prepare('SELECT id FROM users WHERE avatar_media=? OR cover_media=? UNION ALL SELECT id FROM posts WHERE media=? LIMIT 1').bind(id,id,id).first()
+  const attachment=await c.env.DB.prepare('SELECT id FROM users WHERE avatar_media=? OR cover_media=? UNION ALL SELECT id FROM posts WHERE media=? UNION ALL SELECT id FROM comments WHERE media=? LIMIT 1').bind(id,id,id,id).first()
   if(!attachment) return c.json({error:'Image unavailable.'},404)
   const object=await c.env.MEDIA.get(id)
   if(!object) return c.json({error:'Image unavailable.'},404)
@@ -284,19 +284,51 @@ app.put('/api/posts/:id/:kind',async c=>{
 })
 type NoteRow=PublicAccount&{note_id:string;body:string}
 const note=(r:NoteRow,url:string)=>({id:r.note_id,author:person(r,url),body:r.body})
+type CommentRow=NoteRow&{media:string|null;gif:keyof typeof commentGifs|null;sticker:keyof typeof commentStickers|null}
+function commentAttachment(row:Pick<CommentRow,'media'|'gif'|'sticker'>,url:string):CommentAttachment|undefined{
+  if(row.media)return {kind:'image',url:mediaUrl(row.media,url)}
+  if(row.gif)return {kind:'gif',id:row.gif}
+  if(row.sticker)return {kind:'sticker',id:row.sticker}
+}
 app.get('/api/posts/:id/comments',async c=>{
-  const {results}=await c.env.DB.prepare('SELECT u.id,u.name,u.role,u.username,u.avatar_media,u.cover_media,x.id note_id,x.body FROM comments x JOIN users u ON u.id=x.author WHERE post_id=? ORDER BY x.created LIMIT 100').bind(c.req.param('id')).all<NoteRow>()
-  return c.json(results.map(r=>note(r,c.req.url)))
+  const {results}=await c.env.DB.prepare(`
+    SELECT u.id,u.name,u.role,u.username,u.avatar_media,u.cover_media,x.id note_id,x.body,x.media,x.gif,x.sticker
+    FROM comments x JOIN users u ON u.id=x.author WHERE post_id=? ORDER BY x.created LIMIT 100
+  `).bind(c.req.param('id')).all<CommentRow>()
+  return c.json(results.map(r=>({...note(r,c.req.url),attachment:commentAttachment(r,c.req.url)})))
 })
 app.post('/api/posts/:id/comments',async c=>{
-  const body=clean((await readBody(c.req.raw))?.body,500)
-  if(!body) return c.json({error:'Enter a comment.'},400)
+  const {DB,MEDIA}=c.env
   const post=c.req.param('id')
   const author=c.get('user')
   const id=crypto.randomUUID()
-  const result=await c.env.DB.prepare('INSERT INTO comments SELECT ?,id,?,?,? FROM posts WHERE id=?').bind(id,author.id,body,now(),post).run()
-  if(!result.meta.changes) return c.json({error:'Post unavailable.'},404)
-  return c.json({id,author:person(author,c.req.url),body},201)
+  const multipart=c.req.header('Content-Type')?.startsWith('multipart/form-data')
+  const form=multipart?await c.req.raw.formData().catch(()=>null):null
+  const payload=multipart?null:await readBody(c.req.raw)
+  const body=clean(form?.get('body')??payload?.body,500)
+  const file:unknown=form?.get('image')
+  const gif=payload?.gif
+  const sticker=payload?.sticker
+  if((gif!==undefined&&(typeof gif!=='string'||!Object.hasOwn(commentGifs,gif)))||
+     (sticker!==undefined&&(typeof sticker!=='string'||!Object.hasOwn(commentStickers,sticker)))||
+     (gif!==undefined&&sticker!==undefined))return c.json({error:'Choose a GIF or sticker from the picker.'},400)
+  const contentType=file instanceof File?await imageType(file):null
+  if(multipart&&(!contentType||!(file instanceof File)))return c.json({error:'Choose a PNG, JPEG or WebP image under 5 MB.'},400)
+  if(!body&&!contentType&&gif===undefined&&sticker===undefined)return c.json({error:'Write a comment or add an attachment.'},400)
+  const media=contentType?id:null
+  if(media&&file instanceof File&&contentType)await MEDIA.put(media,await file.arrayBuffer(),{httpMetadata:{contentType}})
+  const attachment={media,gif:(gif??null) as CommentRow['gif'],sticker:(sticker??null) as CommentRow['sticker']}
+  try{
+    const result=await DB.prepare(`
+      INSERT INTO comments (id,post_id,author,body,created,media,gif,sticker)
+      SELECT ?,id,?,?,?,?,?,? FROM posts WHERE id=?
+    `).bind(id,author.id,body,now(),media,attachment.gif,attachment.sticker,post).run()
+    if(!result.meta.changes){
+      if(media)await MEDIA.delete(media)
+      return c.json({error:'Post unavailable.'},404)
+    }
+  }catch(error){if(media)await MEDIA.delete(media);throw error}
+  return c.json({id,author:person(author,c.req.url),body,attachment:commentAttachment(attachment,c.req.url)},201)
 })
 app.get('/api/people',async c=>{
   const user=c.get('user').id

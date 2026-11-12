@@ -1,3 +1,4 @@
+import StickerIcon from '@hugeicons/core-free-icons/StickerIcon'
 import ArrowLeft01Icon from '@hugeicons/core-free-icons/ArrowLeft01Icon'
 import ArrowRight01Icon from '@hugeicons/core-free-icons/ArrowRight01Icon'
 import BookOpen01Icon from '@hugeicons/core-free-icons/BookOpen01Icon'
@@ -40,7 +41,7 @@ export const glyphs = {
   settings:Settings02Icon, check:Tick02Icon, arrow:ArrowRight01Icon,
   gift:GiftIcon, bolt:ZapIcon, trophy:TrophyIcon, maths:Calculator01Icon,
   type:TextFontIcon, code:CodeIcon, eye:ViewIcon, eyeOff:ViewOffIcon,
-  play:PlayIcon, send:SentIcon,
+  play:PlayIcon, send:SentIcon, sticker:StickerIcon,
 }
 export type Glyph = keyof typeof glyphs
 export type IconRendererProps = {icon: typeof Home01Icon; size:number; color:string; strokeWidth:number; fill?:string}

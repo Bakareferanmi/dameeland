@@ -3,6 +3,7 @@ import {HugeiconsIcon} from '@hugeicons/react-native'
 import {Linking,Platform,Share,useColorScheme} from 'react-native'
 import {SafeAreaProvider,SafeAreaView} from 'react-native-safe-area-context'
 import {useFonts} from 'expo-font'
+import {Image as ExpoImage} from 'expo-image'
 import {PlusJakartaSans_500Medium} from '@expo-google-fonts/plus-jakarta-sans/500Medium'
 import {PlusJakartaSans_700Bold} from '@expo-google-fonts/plus-jakarta-sans/700Bold'
 import {PlusJakartaSans_800ExtraBold} from '@expo-google-fonts/plus-jakarta-sans/800ExtraBold'
@@ -38,6 +39,10 @@ async function pickMedia(){
   const type=image.mimeType??'image/jpeg'
   return {name,uri:image.uri,data:image.file??{name,type,uri:image.uri}}
 }
+function CommentGif({uri,label,animate}:{uri:string;label:string;animate:boolean}){
+  return <ExpoImage source={{uri}} accessibilityLabel={label} accessible autoplay={animate} contentFit="cover"
+    style={{width:96,height:64,borderRadius:10}}/>
+}
 export default function App(){
   const theme=useColorScheme()==='dark'?'dark':'light'
   const offline=Platform.OS==='web'&&document.documentElement.dataset.preview==='true'
@@ -45,5 +50,5 @@ export default function App(){
   const configuredBase=process.env.EXPO_PUBLIC_API_URL
   const base=configuredBase??(Platform.OS==='android'?'http://10.0.2.2:8787':'http://localhost:8787')
   const demo=offline||process.env.EXPO_PUBLIC_DEMO==='1'||!configuredBase
-  return <SafeAreaProvider><SafeAreaView style={{flex:1,backgroundColor:theme==='dark'?'#120D1F':'#FAF8FF'}}>{loaded||error?<Dameeland phone={offline} demo={demo} base={base} renderIcon={HugeiconsIcon} initialTheme={theme} font={error?()=>({}):font} loadToken={loadToken} saveToken={saveToken} openGoogle={openGoogle} pickMedia={pickMedia} share={share}/>:<LoadingScreen/>}</SafeAreaView></SafeAreaProvider>
+  return <SafeAreaProvider><SafeAreaView style={{flex:1,backgroundColor:theme==='dark'?'#120D1F':'#FAF8FF'}}>{loaded||error?<Dameeland phone={offline} demo={demo} base={base} renderIcon={HugeiconsIcon} initialTheme={theme} font={error?()=>({}):font} loadToken={loadToken} saveToken={saveToken} openGoogle={openGoogle} pickMedia={pickMedia} renderGif={CommentGif} share={share}/>:<LoadingScreen/>}</SafeAreaView></SafeAreaProvider>
 }

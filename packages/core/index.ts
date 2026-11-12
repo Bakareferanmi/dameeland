@@ -15,7 +15,18 @@ export type FollowListKind = 'followers'|'following'
 export type FollowPage = {people:Person[]; nextCursor:string|null}
 export type FollowStats = {followers:number; following:number; followedByViewer:boolean}
 export type Post = {id:string; author:Person; body:string; likes:number; liked:boolean; comments:number; reposts:number; reposted:boolean; time:string; kind?:'image'|'video'; media?:string}
-export type Note = {id:string; author:Person; body:string}
+export const commentGifs = {cheer:'Cheer',sparkle:'Sparkle',highfive:'High five'} as const
+export const commentStickers = {
+  nice:{label:'Nice!',emoji:'✨'},
+  smart:{label:'Big brain',emoji:'🧠'},
+  done:{label:'You got this',emoji:'💪'},
+  laugh:{label:'Too funny',emoji:'😂'},
+} as const
+export type CommentAttachment =
+  | {kind:'image';url:string}
+  | {kind:'gif';id:keyof typeof commentGifs}
+  | {kind:'sticker';id:keyof typeof commentStickers}
+export type Note = {id:string; author:Person; body:string; attachment?:CommentAttachment}
 export const me:Person = {id:'you',name:'You',initials:'YO',role:'student',color:lime,detail:'Student'}
 export const people:Person[] = [
   {id:'ada',name:'Ada O.',initials:'AO',role:'student',color:'#FFD9B8',detail:'SS2 · Student',verified:true},

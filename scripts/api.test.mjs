@@ -117,6 +117,26 @@ test('local Worker persists accounts, social activity, media, and private realti
   assert.deepEqual([updated.likes,updated.comments,updated.reposts,updated.liked],[1,1,1,true])
   assert.equal((await request(postPath+'/comments',{token:ada.token}))[0].id,comment.id)
 
+  const commentsPath=postPath+'/comments'
+  const gif=await request(commentsPath,{token:tobi.token,method:'POST',body:{gif:'cheer'},status:201})
+  const sticker=await request(commentsPath,{token:tobi.token,method:'POST',body:{body:'Nice work',sticker:'nice'},status:201})
+  const commentPhotoForm=new FormData()
+  commentPhotoForm.set('image',new Blob([file],{type:'image/png'}),'comment.png')
+  const photo=await request(commentsPath,{token:tobi.token,method:'POST',form:commentPhotoForm,status:201})
+  await request(commentsPath,{token:tobi.token,method:'POST',body:{gif:'__proto__'},status:400})
+  await request(commentsPath,{token:tobi.token,method:'POST',body:{gif:'cheer',sticker:'nice'},status:400})
+  await request(commentsPath,{token:tobi.token,method:'POST',body:{body:' '},status:400})
+  await request('/posts/missing/comments',{token:tobi.token,method:'POST',form:commentPhotoForm,status:404})
+  const stored=await request(commentsPath,{token:ada.token})
+  assert.deepEqual(stored.find(item=>item.id===gif.id).attachment,{kind:'gif',id:'cheer'})
+  assert.deepEqual(stored.find(item=>item.id===sticker.id).attachment,{kind:'sticker',id:'nice'})
+  assert.deepEqual(stored.find(item=>item.id===photo.id).attachment,photo.attachment)
+  assert.equal(stored.find(item=>item.id===photo.id).author.id,tobi.user.id)
+  const commentImage=await fetch(photo.attachment.url)
+  assert.equal(commentImage.headers.get('content-type'),'image/png')
+  assert.deepEqual(Buffer.from(await commentImage.arrayBuffer()),file)
+  assert.equal((await request('/feed',{token:tobi.token})).find(item=>item.id===post.id).comments,4)
+
   const room=await request('/rooms',{token:ada.token,method:'POST',body:{target:tobi.user.id}})
   assert.equal((await request('/rooms',{token:tobi.token,method:'POST',body:{target:ada.user.id}})).id,room.id)
   const roomPath='/rooms/'+room.id

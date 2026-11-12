@@ -6,6 +6,8 @@ import type {ExtraPage} from './FeatureScreens'
 import {LoadingScreen} from './LoadingScreen'
 import {GoogleButton} from './GoogleButton'
 import {Toast,type ToastMessage} from './Toast'
+import {Comments,type GifRenderer} from './Comments'
+import type {CommentAttachment} from './index'
 
 const FeatureScreen=lazy(()=>import('./FeatureScreens'))
 
@@ -23,7 +25,7 @@ type Props={
   demo:boolean; base:string; phone?:boolean; initialTheme:Theme; font:(weight:number)=>object; renderIcon:React.ComponentType<IconRendererProps>;
   loadToken?:()=>Promise<string|null>; saveToken?:(token:string|null)=>Promise<void>;
   openGoogle?:(getUrl:()=>Promise<string>)=>Promise<GoogleWindow>;
-  pickMedia?:()=>Promise<Media|null>; share?:(text:string)=>Promise<void>;
+  pickMedia?:()=>Promise<Media|null>; renderGif?:GifRenderer; share?:(text:string)=>Promise<void>;
 }
 type Overlay={kind:'connections';list:FollowListKind;person:Person}|{kind:'comments'|'share'|'post';post:Post}|{kind:'story';person:Person}|{kind:'create'|'wish'|'newStory'}|{kind:'call';video:boolean;person:Person;ringing?:boolean;incoming?:boolean}
 const tabs:[Page,Glyph][]=[['Home','home'],['Learn','book'],['Explore','search'],['Play','game']]
@@ -166,9 +168,9 @@ function PreviewMedia({kind}:{kind:'image'|'video'}){
 
 function PostCard({post,onReact,onOverlay,onProfile,detail=false}:{post:Post;detail?:boolean;onReact:(p:Post,k:'like'|'repost')=>void;onOverlay:(o:Overlay)=>void;onProfile:(p:Person)=>void}){
   const {theme}=useDesign()
-  return <Card>
-    <Pressable accessibilityRole="button" accessibilityLabel={'Open '+post.author.name+' profile'} onPress={()=>onProfile(post.author)} style={row}><Avatar person={post.author}/><View style={{flex:1}}><PersonName person={post.author}/><Copy color={theme.muted} size={12}>{post.author.detail} · {shortTime(post.time)}</Copy></View></Pressable>
-    {!!post.body&&(detail?<Copy size={15}>{post.body}</Copy>:<Pressable accessibilityRole="button" accessibilityLabel="Open post details" onPress={()=>onOverlay({kind:'post',post})} style={{minHeight:44,justifyContent:'center'}}><Copy size={15}>{post.body}</Copy></Pressable>)}
+  return <Card style={{padding:14,gap:9}}>
+    <Pressable accessibilityRole="button" accessibilityLabel={'Open '+post.author.name+' profile'} onPress={()=>onProfile(post.author)} style={row}><Avatar person={post.author} size={40}/><View style={{flex:1}}><PersonName person={post.author}/><Copy color={theme.muted} size={12}>{post.author.detail} · {shortTime(post.time)}</Copy></View></Pressable>
+    {!!post.body&&(detail?<Copy size={15}>{post.body}</Copy>:<Pressable accessibilityRole="button" accessibilityLabel="Open post details" onPress={()=>onOverlay({kind:'post',post})} style={{minHeight:32,justifyContent:'center'}}><Copy size={15}>{post.body}</Copy></Pressable>)}
     {post.media?<Image accessibilityLabel="Post attachment" source={{uri:post.media}} resizeMode="cover" style={{width:'100%',height:195,borderRadius:14,backgroundColor:theme.chip}}/>:post.kind&&<PreviewMedia kind={post.kind}/>}
     <View style={{...row,justifyContent:'space-between',gap:1,borderTopWidth:1,borderColor:theme.border,paddingTop:3}}><IconButton name={post.liked?'heartOn':'heart'} label={post.liked?'Unlike post':'Like post'} active={post.liked} count={post.likes} onPress={()=>onReact(post,'like')}/><IconButton name="cm" label="Comments" count={post.comments} onPress={()=>onOverlay({kind:'comments',post})}/><IconButton name="rp" label={post.reposted?'Undo repost':'Repost'} active={post.reposted} count={post.reposts} onPress={()=>onReact(post,'repost')}/><IconButton name="sh" label="Share post" onPress={()=>onOverlay({kind:'share',post})}/></View>
   </Card>
@@ -282,6 +284,9 @@ export default function App(props:Props){
   const [chats,setChats]=useState<Record<string,Note[]>>(demo?initialChats:{})
   const [draft,setDraft]=useState(''),[attachment,setAttachment]=useState<Media|null>(null)
   const [message,setMessage]=useState(''),[comment,setComment]=useState('')
+  const [commentMedia,setCommentMedia]=useState<Media|Exclude<CommentAttachment,{kind:'image'}>|null>(null)
+  const commentDraft=useRef(0)
+  const clearComment=()=>{commentDraft.current+=1;setComment('');setCommentMedia(null)}
   const [unread,setUnread]=useState(demo)
   const [notifications,setNotifications]=useState(true)
   const pending=useRef(new Set<string>())
@@ -497,7 +502,7 @@ export default function App(props:Props){
       scrollOffsets.current={};pendingOffset.current=null;setToast(null)
       setToken('');setUser(me);setPage('Home');setStage('auth');setError('')
       setPosts(demo?initialPosts:[]);setNotes({});setChats(demo?initialChats:{});setFollows({});setProfileStats(null)
-      setRooms(demo?localRooms:[]);setRoom(null);setDraft('');setAttachment(null);setComment('');setMessage('');setSeen(new Set());setOwnStory(null);setWishes([]);setLessonComplete(false);setVoicePlaying(false);setQuietMode(false);setFollowingOnly(false)
+      setRooms(demo?localRooms:[]);setRoom(null);setDraft('');setAttachment(null);clearComment();setMessage('');setSeen(new Set());setOwnStory(null);setWishes([]);setLessonComplete(false);setVoicePlaying(false);setQuietMode(false);setFollowingOnly(false)
     }catch(reason){fail(reason)}
   }
   async function react(post:Post,kind:'like'|'repost'){
@@ -563,15 +568,42 @@ export default function App(props:Props){
       setDraft('');setAttachment(null);setOverlay(null);setFollowingOnly(false);open('Home');notify('Post shared')
     }catch(reason){fail(reason)}finally{setBusy(false)}
   }
+  async function pickCommentPhoto(){
+    const revision=commentDraft.current
+    try{
+      const media=await props.pickMedia?.()
+      if(media&&revision===commentDraft.current)setCommentMedia(media)
+    }catch(reason){if(revision===commentDraft.current)fail(reason)}
+  }
   async function addComment(post:Post){
-    if(busy||!comment.trim())return
+    const key='comment:'+post.id
+    const body=comment.trim()
+    if(busy||pending.current.has(key)||(!body&&!commentMedia))return
+    const revision=commentDraft.current
+    const session=demoSession.current
+    pending.current.add(key)
     setBusy(true)
     try{
-      const item=demo?{id:uid(),author:user,body:comment.trim()}:await call<Note>('/posts/'+post.id+'/comments',json({body:comment}))
+      let item:Note
+      if(demo){
+        item={id:uid(),author:user,body,attachment:commentMedia&&'uri' in commentMedia?{kind:'image',url:commentMedia.uri}:commentMedia??undefined}
+      }else{
+        let request=json({body,...(commentMedia&&'kind' in commentMedia?{[commentMedia.kind]:commentMedia.id}:{})}) as RequestInit
+        if(commentMedia&&'uri' in commentMedia){
+          const form=new FormData()
+          form.append('body',body)
+          if(commentMedia.data instanceof Blob)form.append('image',commentMedia.data,commentMedia.name)
+          else form.append('image',commentMedia.data as unknown as Blob)
+          request={method:'POST',body:form}
+        }
+        item=await call<Note>('/posts/'+post.id+'/comments',request)
+      }
+      if(session!==demoSession.current)return
       setNotes(previous=>({...previous,[post.id]:[...(previous[post.id]??(demo&&post.id==='quadratics'?initialComments:[])),item]}))
       setPosts(previous=>previous.map(p=>p.id===post.id?{...p,comments:p.comments+1}:p))
-      setComment('')
-    }catch(reason){fail(reason)}finally{setBusy(false)}
+      if(revision===commentDraft.current)clearComment()
+    }catch(reason){if(session===demoSession.current)fail(reason)}
+    finally{pending.current.delete(key);setBusy(false)}
   }
   function openRoom(next:Room){
     stickToChatEnd.current=true;initialChatScroll.current=true
@@ -604,7 +636,7 @@ export default function App(props:Props){
   const displayedPosts=demo&&followingOnly?posts.filter(p=>p.author.id===user.id||follows[p.author.id]):posts
   const displayedPeople=demo?people.filter(p=>(p.name+' '+p.detail).toLowerCase().includes(query.trim().toLowerCase())):results
   const canShare=Boolean(props.share)
-  const modalClose=()=>{setOverlay(null);setComment('')}
+  const modalClose=()=>{setOverlay(null);clearComment()}
   const compose=()=>selectOverlay({kind:'create'})
   const section=(title:string)=> <Copy size={19} weight={800}>{title}</Copy>
   const failure=<Empty title="Couldn’t connect" detail={feedError} action="Try again" onPress={()=>setRetry(n=>n+1)}/>
@@ -621,17 +653,13 @@ export default function App(props:Props){
     </Pressable>
   }
   const home=<>
-    {demo&&<Card style={{padding:13,gap:10}}><Copy size={13} weight={800}>Stories</Copy><StoryRow onStory={person=>selectOverlay({kind:'story',person})} onCreate={()=>selectOverlay(ownStory?{kind:'story',person:user}:{kind:'newStory'})} seen={seen} own={ownStory?user:null}/></Card>}
+    {demo&&<View style={{paddingHorizontal:2}}><StoryRow onStory={person=>selectOverlay({kind:'story',person})} onCreate={()=>selectOverlay(ownStory?{kind:'story',person:user}:{kind:'newStory'})} seen={seen} own={ownStory?user:null}/></View>}
     <Segmented options={['For you','Following']} selected={followingOnly?'Following':'For you'} onSelect={value=>setFollowingOnly(value==='Following')}/>
-    {demo&&<Pressable accessibilityRole="button" accessibilityLabel="Wish Zee a happy birthday" onPress={()=>open('Birthdays')}>
-      <Card style={{...spread,padding:11,backgroundColor:theme.card}}>
-        <IconTile name="gift" color="#24134A" background={lime} size={38}/>
-        <View style={{flex:1}}><Copy weight={800}>It’s Zee’s birthday!</Copy><Copy color={theme.muted} size={11}>Leave a wish on the birthday wall.</Copy></View>
-
-      </Card>
-    </Pressable>}
-    {demo&&<ScreenLinks items={ [['Events','grp']] } open={open}/>}
     {feedError?failure:loading?<Loading/>:displayedPosts.length?displayedPosts.map(post=><PostCard key={post.id} post={post} onReact={react} onOverlay={selectOverlay} onProfile={showProfile}/>):<Empty title={followingOnly?'Your following feed is empty':'Start the conversation'} detail={followingOnly?'Follow classmates to see their posts here.':'Share the first post with your classmates.'} action={followingOnly?'Find people':'Create post'} onPress={followingOnly?()=>open('Explore'):compose}/>}
+    {demo&&!followingOnly&&<View style={{...row,flexWrap:'wrap'}}>
+      <Button label="Birthdays" leading="gift" variant="secondary" onPress={()=>open('Birthdays')}/>
+      <Button label="Events" leading="grp" variant="secondary" onPress={()=>open('Events')}/>
+    </View>}
   </>
   const explore=<>
     <Field label="Search" glyph="search" placeholder="Search people, groups, topics" value={query} onChangeText={setQuery} autoCapitalize="none"/>
@@ -728,7 +756,11 @@ export default function App(props:Props){
     sheet=<><Copy size={23} weight={800}>Post detail</Copy><PostCard detail post={post} onReact={react} onOverlay={selectOverlay} onProfile={person=>{modalClose();showProfile(person)}}/><Button label="Read comments" variant="secondary" onPress={()=>selectOverlay({kind:'comments',post})}/></>
   }else if(overlay?.kind==='comments'){
     const list=notes[overlay.post.id]??(demo&&overlay.post.id==='quadratics'?initialComments:[])
-    sheet=<><Copy size={23} weight={800}>Comments</Copy><ScrollView style={{maxHeight:270}} keyboardShouldPersistTaps="handled" contentContainerStyle={stack}>{list.length?list.map(item=><View key={item.id} style={{...row,alignItems:'flex-start'}}><Avatar person={item.author} size={35}/><View style={{flex:1}}><PersonName person={item.author}/><Copy>{item.body}</Copy></View></View>):<Copy color={theme.muted}>Be the first to leave a comment.</Copy>}</ScrollView><Field label="Add a comment" value={comment} onChangeText={setComment} maxLength={500}/><Button label="Post comment" disabled={busy||!comment.trim()} onPress={()=>void addComment(overlay.post)}/></>
+    sheet=<Comments key={overlay.post.id} list={list} body={comment} onBody={setComment} busy={busy} renderGif={props.renderGif}
+      attachment={commentMedia&&'uri' in commentMedia?{kind:'image',url:commentMedia.uri}:commentMedia??undefined}
+      onPreset={value=>{commentDraft.current+=1;setCommentMedia(value)}} onRemove={()=>{commentDraft.current+=1;setCommentMedia(null)}}
+      onPhoto={props.pickMedia?()=>void pickCommentPhoto():undefined} onPost={()=>void addComment(overlay.post)}
+      onProfile={person=>{modalClose();showProfile(person)}}/>
   }else if(overlay?.kind==='create'){
     sheet=<><Copy size={23} weight={800}>Create post</Copy><View style={row}><Avatar person={user}/><PersonName person={user}/></View><Field label="What’s happening?" value={draft} onChangeText={setDraft} multiline maxLength={1200} style={{minHeight:106,textAlignVertical:'top'}}/>
       {attachment&&<View style={spread}><Copy size={12}>{attachment.name}</Copy><IconButton name="close" label="Remove image" onPress={()=>setAttachment(null)}/></View>}
