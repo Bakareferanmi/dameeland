@@ -1,0 +1,25 @@
+{
+  "name": "dameeland",
+  "private": true,
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "dev:web": "npm -w @dameeland/web run dev",
+    "dev:mobile": "npm -w @dameeland/mobile run start",
+    "dev:api": "npm -w @dameeland/api run dev",
+    "db:local": "npm -w @dameeland/api run db:local",
+    "build": "npm -w @dameeland/web run build",
+    "typecheck": "npm run typecheck --workspaces",
+    "test": "node --test scripts/*.test.mjs",
+    "build:mobile": "npm -w @dameeland/mobile run export -- --platform all",
+    "build:previews": "npm -w @dameeland/web run build -- --mode offline-preview && npm run build:mobile && node scripts/previews.mjs",
+    "test:browser": "node scripts/browser-check.mjs"
+  },
+  "devDependencies": {
+    "typescript": "~5.9.2",
+    "@types/react": "~19.1.0",
+    "playwright": "^1.55.0"
+  }
+}

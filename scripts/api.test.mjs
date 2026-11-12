@@ -1,0 +1,109 @@
+import {test} from 'node:test'
+import assert from 'node:assert/strict'
+import {randomUUID} from 'node:crypto'
+import {readFile} from 'node:fs/promises'
+
+const base=process.env.TEST_API_URL??'http://localhost:8787'
+async function request(path,{token,method='GET',body,form,status=200}={}){
+  const response=await fetch(base+'/api'+path,{
+    method,
+    headers:{...(token?{Authorization:'Bearer '+token}:{}),...(body?{'Content-Type':'application/json'}:{})},
+    body:form??(body?JSON.stringify(body):undefined),
+  })
+  assert.equal(response.status,status,method+' '+path+' '+(response.ok?'':await response.clone().text()))
+  return response.json()
+}
+const create=async(name,role='student')=>{
+  const email=randomUUID()+'@example.test'
+  const password='example-passphrase-42'
+  const result=await request('/auth/signup',{method:'POST',body:{name,email,password,role},status:201})
+  return {...result,email,password}
+}
+const oneMessage=socket=>new Promise((resolve,reject)=>{
+  const timer=setTimeout(()=>reject(new Error('Timed out waiting for Durable Object broadcast')),5000)
+  socket.addEventListener('message',event=>{clearTimeout(timer);resolve(JSON.parse(event.data))},{once:true})
+})
+const openSocket=(path,token)=>new Promise((resolve,reject)=>{
+  const socket=new WebSocket(base.replace(/^http/,'ws')+'/api'+path,['dameeland','ticket.'+token])
+  const timer=setTimeout(()=>{socket.close();reject(new Error('WebSocket handshake timed out'))},5000)
+  socket.addEventListener('open',()=>{clearTimeout(timer);resolve(socket)},{once:true})
+  socket.addEventListener('error',()=>{clearTimeout(timer);reject(new Error('WebSocket handshake failed'))},{once:true})
+})
+test('local Worker persists accounts, social activity, media, and private realtime chat',async()=>{
+  await request('/health')
+  await request('/feed',{status:401})
+  const ada=await create('Ada QA')
+  const tobi=await create('Tobi QA','tech')
+  const outsider=await create('Outside QA')
+  assert.equal(tobi.user.role,'tech')
+  await request('/auth/signup',{method:'POST',body:{...ada,name:ada.user.name},status:409})
+  await request('/auth/login',{method:'POST',body:{email:ada.email,password:'incorrect passphrase'},status:401})
+  const login=await request('/auth/login',{method:'POST',body:ada})
+  assert.equal((await request('/me',{token:login.token})).id,ada.user.id)
+  assert.notEqual(login.token,ada.token)
+
+  const file=await readFile(new URL('../packages/core/assets/dameeland-logo.png',import.meta.url))
+  const photoForm=()=>{const form=new FormData();form.append('image',new Blob([file],{type:'image/png'}),'profile.png');return form}
+  await request('/me/photos/avatar',{method:'PUT',form:photoForm(),status:401})
+  await request('/me/photos/avatar',{token:ada.token,method:'PUT',body:{image:'not a file'},status:400})
+  const avatar=await request('/me/photos/avatar',{token:ada.token,method:'PUT',form:photoForm()})
+  const covered=await request('/me/photos/cover',{token:ada.token,method:'PUT',form:photoForm()})
+  assert.equal(covered.avatar,avatar.avatar)
+  assert.ok(covered.cover)
+  assert.deepEqual(Buffer.from(await (await fetch(covered.cover)).arrayBuffer()),file)
+  const replaced=await request('/me/photos/avatar',{token:ada.token,method:'PUT',form:photoForm()})
+  assert.notEqual(replaced.avatar,avatar.avatar)
+  assert.equal((await fetch(avatar.avatar)).status,404)
+  assert.equal((await request('/me',{token:ada.token})).avatar,replaced.avatar)
+  const form=new FormData()
+  form.append('body','Maths notes from the local test')
+  form.append('image',new Blob([file],{type:'image/png'}),'notes.png')
+  const post=await request('/posts',{token:ada.token,method:'POST',form,status:201})
+  assert.equal((await request('/feed?following=1',{token:tobi.token})).some(p=>p.id===post.id),false)
+  const followPath='/people/'+ada.user.id+'/follow'
+  const adaStats=followPath+'-stats'
+  const tobiStats='/people/'+tobi.user.id+'/follow-stats'
+  assert.deepEqual(await request(adaStats,{token:tobi.token}),{followers:0,following:0,followedByViewer:false})
+  await request(adaStats,{status:401})
+  await request('/people/missing/follow-stats',{token:tobi.token,status:404})
+  await request(followPath,{token:tobi.token,method:'PUT',body:{active:true}})
+  const followers=await request('/people/'+ada.user.id+'/connections/followers',{token:tobi.token})
+  assert.deepEqual(followers.people.map(person=>person.id),[tobi.user.id])
+  const followingList=await request('/people/'+tobi.user.id+'/connections/following',{token:tobi.token})
+  assert.equal(followingList.people[0].avatar,replaced.avatar)
+  assert.equal(followingList.nextCursor,null)
+  assert.deepEqual((await request('/people/'+tobi.user.id+'/connections/following?cursor='+ada.user.id,{token:tobi.token})).people,[])
+  const active=(await request('/feed?following=1',{token:tobi.token})).find(p=>p.id===post.id)
+  const image=await fetch(active.media)
+  assert.equal(image.headers.get('content-type'),'image/png')
+  assert.deepEqual(Buffer.from(await image.arrayBuffer()),file)
+  assert.ok((await request('/people?q=Ada%20QA',{token:tobi.token})).some(p=>p.id===ada.user.id&&p.following))
+  await request(followPath,{token:tobi.token,method:'PUT',body:{active:true}})
+  assert.deepEqual(await request(adaStats,{token:tobi.token}),{followers:1,following:0,followedByViewer:true})
+  assert.deepEqual(await request(tobiStats,{token:tobi.token}),{followers:0,following:1,followedByViewer:false})
+  await request(followPath,{token:tobi.token,method:'PUT',body:{active:false}})
+  assert.deepEqual(await request(adaStats,{token:tobi.token}),{followers:0,following:0,followedByViewer:false})
+  assert.equal((await request(tobiStats,{token:tobi.token})).following,0)
+  const postPath='/posts/'+post.id
+  for(let attempt=0;attempt<2;attempt++) await request(postPath+'/like',{token:tobi.token,method:'PUT',body:{active:true}})
+  await request(postPath+'/repost',{token:tobi.token,method:'PUT',body:{active:true}})
+  const comment=await request(postPath+'/comments',{token:tobi.token,method:'POST',body:{body:'This helped!'},status:201})
+  const updated=(await request('/feed',{token:tobi.token})).find(p=>p.id===post.id)
+  assert.deepEqual([updated.likes,updated.comments,updated.reposts,updated.liked],[1,1,1,true])
+  assert.equal((await request(postPath+'/comments',{token:ada.token}))[0].id,comment.id)
+
+  const room=await request('/rooms',{token:ada.token,method:'POST',body:{target:tobi.user.id}})
+  assert.equal((await request('/rooms',{token:tobi.token,method:'POST',body:{target:ada.user.id}})).id,room.id)
+  const roomPath='/rooms/'+room.id
+  await request(roomPath+'/messages',{token:outsider.token,status:404})
+  await request(roomPath+'/messages',{token:outsider.token,method:'POST',body:{body:'intrusion'},status:404})
+  const socket=await openSocket(roomPath+'/socket',tobi.token)
+  try{
+    const event=oneMessage(socket)
+    const message=await request(roomPath+'/messages',{token:ada.token,method:'POST',body:{body:'Ready for the quiz?'},status:201})
+    assert.equal((await event).id,message.id)
+    assert.equal((await request(roomPath+'/messages',{token:tobi.token}))[0].body,'Ready for the quiz?')
+  }finally{socket.close()}
+  await request('/logout',{token:login.token,method:'POST'})
+  await request('/me',{token:login.token,status:401})
+})

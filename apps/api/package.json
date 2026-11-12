@@ -1,0 +1,1 @@
+{"name":"@dameeland/api","private":true,"type":"module","scripts":{"dev":"wrangler dev --port 8787","db:local":"wrangler d1 migrations apply dameeland --local","typecheck":"tsc --noEmit"},"dependencies":{"@dameeland/core":"*","hono":"^4.10.0"},"devDependencies":{"wrangler":"^4.50.0","@cloudflare/workers-types":"^4.20251105.0"}}

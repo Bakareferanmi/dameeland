@@ -1,0 +1,14 @@
+CREATE TABLE users(id TEXT PRIMARY KEY,email TEXT NOT NULL UNIQUE,name TEXT NOT NULL,role TEXT NOT NULL CHECK(role IN ('student','tech')),salt TEXT NOT NULL,password_hash TEXT NOT NULL);
+CREATE TABLE sessions(token_hash TEXT PRIMARY KEY,user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,expires INTEGER NOT NULL);
+CREATE INDEX sessions_user ON sessions(user_id);
+CREATE TABLE posts(id TEXT PRIMARY KEY,author TEXT NOT NULL REFERENCES users(id),body TEXT NOT NULL,created INTEGER NOT NULL,media TEXT);
+CREATE INDEX post_feed ON posts(created DESC);
+CREATE TABLE reactions(post_id TEXT REFERENCES posts(id) ON DELETE CASCADE,user_id TEXT REFERENCES users(id),kind TEXT CHECK(kind IN ('like','repost')),PRIMARY KEY(post_id,user_id,kind));
+CREATE TABLE comments(id TEXT PRIMARY KEY,post_id TEXT NOT NULL REFERENCES posts(id) ON DELETE CASCADE,author TEXT NOT NULL REFERENCES users(id),body TEXT NOT NULL,created INTEGER NOT NULL);
+CREATE INDEX post_comments ON comments(post_id,created);
+CREATE TABLE follows(follower TEXT REFERENCES users(id),target TEXT REFERENCES users(id),PRIMARY KEY(follower,target));
+CREATE TABLE rooms(id TEXT PRIMARY KEY,first_user TEXT NOT NULL REFERENCES users(id),second_user TEXT NOT NULL REFERENCES users(id),UNIQUE(first_user,second_user));
+CREATE INDEX room_second ON rooms(second_user);
+CREATE TABLE messages(id TEXT PRIMARY KEY,room TEXT NOT NULL REFERENCES rooms(id),author TEXT NOT NULL REFERENCES users(id),body TEXT NOT NULL,created INTEGER NOT NULL);
+CREATE INDEX room_messages ON messages(room,created DESC);
+CREATE TABLE auth_limits(id TEXT PRIMARY KEY, attempts INTEGER NOT NULL, expires INTEGER NOT NULL);

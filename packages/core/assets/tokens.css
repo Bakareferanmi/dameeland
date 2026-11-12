@@ -1,0 +1,18 @@
+/* dameeland design tokens. Light is the default; dark overrides the same names. */
+:root{
+  --bg:#FAF8FF; --cd:#fff; --bd:#E2DBF5; --tx:#1B1233; --mu:#5A5274;
+  --pu:#6A35F0;   /* brand purple: buttons, active tabs, links */
+  --pt:#4F25D6;   /* deep purple: text on chips, onboarding background */
+  --pl:#EEE8FC;   /* chip / secondary button background */
+  --lm:#C8F53F;   /* lime: fun accent, game and reward moments */
+  --pg:#E9E0FF;   /* lavender: image placeholder blocks */
+}
+[data-theme="dark"]{
+  --bg:#120D1F; --cd:#1D1630; --bd:#2E2548; --tx:#F4F0FF; --mu:#A99FC6;
+  --pu:#7C4DFF; --pt:#C9B8FF; --pl:#2E2548;
+  --accent:#9B7BFF;   /* purple used for text/rings on dark */
+  --out:#0A0714;      /* page backdrop behind the phone */
+}
+/* avatar pastels (dark ink text on all): #FFD9B8 #CFE8FF #FFD6E8 #E9E0FF #FFE9A8 #C8F53F */
+/* status: online #2FBF71, danger #D13438, success chip #E3F6EC/#1F6B42, late chip #FFF1D6/#8A5300, missing chip #FDE7E7/#B3261E */
+/* type: Plus Jakarta Sans 500/700/800. radius: cards 20, sheets 28 top, inputs 14, buttons full pill */

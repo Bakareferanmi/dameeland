@@ -1,0 +1,17 @@
+{
+  "name": "@dameeland/core",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./index.ts",
+    "./app": "./App.tsx",
+    "./ui": "./ui.tsx",
+    "./loading": "./LoadingScreen.tsx"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@hugeicons/core-free-icons": "^4.4.0"
+  }
+}

@@ -1,0 +1,37 @@
+import React from 'react'
+import {HugeiconsIcon} from '@hugeicons/react-native'
+import {Platform,Share,useColorScheme} from 'react-native'
+import {SafeAreaProvider,SafeAreaView} from 'react-native-safe-area-context'
+import {useFonts} from 'expo-font'
+import {PlusJakartaSans_500Medium} from '@expo-google-fonts/plus-jakarta-sans/500Medium'
+import {PlusJakartaSans_700Bold} from '@expo-google-fonts/plus-jakarta-sans/700Bold'
+import {PlusJakartaSans_800ExtraBold} from '@expo-google-fonts/plus-jakarta-sans/800ExtraBold'
+import * as SecureStore from 'expo-secure-store'
+import Dameeland from '@dameeland/core/app'
+import {LoadingScreen} from '@dameeland/core/loading'
+
+const names={500:'PlusJakartaSans_500Medium',700:'PlusJakartaSans_700Bold',800:'PlusJakartaSans_800ExtraBold'} as const
+const font=(weight:number)=>({fontFamily:names[weight as keyof typeof names]??names[500]})
+const tokenKey='dameeland-session'
+const loadToken=()=>SecureStore.getItemAsync(tokenKey)
+const saveToken=(value:string|null)=>value?SecureStore.setItemAsync(tokenKey,value):SecureStore.deleteItemAsync(tokenKey)
+const share=async(message:string)=>{await Share.share({message})}
+async function pickMedia(){
+  const ImagePicker=await import('expo-image-picker')
+  const result=await ImagePicker.launchImageLibraryAsync({mediaTypes:['images'],quality:.8})
+  if(result.canceled)return null
+  const image=result.assets[0]
+  if(image.fileSize&&image.fileSize>5*1024*1024)throw new Error('Choose an image under 5 MB.')
+  const name=image.fileName??'image.jpg'
+  const type=image.mimeType??'image/jpeg'
+  return {name,uri:image.uri,data:image.file??{name,type,uri:image.uri}}
+}
+export default function App(){
+  const theme=useColorScheme()==='dark'?'dark':'light'
+  const offline=Platform.OS==='web'&&document.documentElement.dataset.preview==='true'
+  const [loaded,error]=useFonts(offline?{}:{PlusJakartaSans_500Medium,PlusJakartaSans_700Bold,PlusJakartaSans_800ExtraBold})
+  const configuredBase=process.env.EXPO_PUBLIC_API_URL
+  const base=configuredBase??(Platform.OS==='android'?'http://10.0.2.2:8787':'http://localhost:8787')
+  const demo=offline||process.env.EXPO_PUBLIC_DEMO==='1'||!configuredBase
+  return <SafeAreaProvider><SafeAreaView style={{flex:1,backgroundColor:theme==='dark'?'#120D1F':'#FAF8FF'}}>{loaded||error?<Dameeland phone={offline} demo={demo} base={base} renderIcon={HugeiconsIcon} initialTheme={theme} font={error?()=>({}):font} loadToken={loadToken} saveToken={saveToken} pickMedia={pickMedia} share={share}/>:<LoadingScreen/>}</SafeAreaView></SafeAreaProvider>
+}

@@ -1,0 +1,25 @@
+{
+  "name": "@dameeland/mobile",
+  "private": true,
+  "main": "index.ts",
+  "scripts": {
+    "start": "expo start",
+    "export": "expo export",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@dameeland/core": "*",
+    "@expo-google-fonts/plus-jakarta-sans": "^0.4.0",
+    "@hugeicons/react-native": "^1.0.16",
+    "expo": "~54.0.0",
+    "expo-font": "~14.0.0",
+    "expo-image-picker": "~17.0.0",
+    "expo-secure-store": "~15.0.0",
+    "react": "19.1.0",
+    "react-dom": "19.1.0",
+    "react-native": "0.81.5",
+    "react-native-safe-area-context": "~5.6.0",
+    "react-native-svg": "^15.12.1",
+    "react-native-web": "^0.21.0"
+  }
+}
