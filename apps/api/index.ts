@@ -5,7 +5,7 @@ import {HTTPException} from 'hono/http-exception'
 import {DurableObject} from 'cloudflare:workers'
 import {commentGifs,commentStickers,capitalizeName,initials,normalizeUsername,usernameHint,validUsername,type AdminAccount,type AdminActivity,type AdminDay,type AdminOverview,type CommentAttachment,type FollowPage,type FollowStats,type Person,type Role} from '@dameeland/core'
 
-interface Env {DB:D1Database;MEDIA:R2Bucket;ROOMS:DurableObjectNamespace<ChatRoom>;ALLOWED_ORIGIN:string;GOOGLE_CLIENT_ID?:string;GOOGLE_CLIENT_SECRET?:string;GOOGLE_REDIRECT_URI?:string;ADMIN_USER_IDS?:string}
+interface Env {DB:D1Database;MEDIA:R2Bucket;ROOMS:DurableObjectNamespace<ChatRoom>;ALLOWED_ORIGIN:string;GOOGLE_CLIENT_ID?:string;GOOGLE_CLIENT_SECRET?:string;GOOGLE_REDIRECT_URI?:string;ADMIN_USER_IDS?:string;RESEND_API_KEY?:string;RECOVERY_FROM?:string}
 type Account={id:string;email:string;name:string;role:Role;salt:string;password_hash:string;username?:string|null;verified?:number}
 type PublicAccount=Pick<Account,'id'|'name'|'role'|'username'|'verified'> & {avatar_media?:string|null;cover_media?:string|null}
 type App={Bindings:Env;Variables:{user:PublicAccount;tokenHash:string}}
@@ -38,11 +38,11 @@ function equal(left:string,right:string){
   for(let i=0;i<left.length;i++) difference|=left.charCodeAt(i)^(right.charCodeAt(i)||0)
   return difference===0
 }
-async function authAllowed(db:D1Database,ip:string,flow:string){
+async function authAllowed(db:D1Database,ip:string,flow:string,maxAttempts=25){
   const window=Math.floor(now()/600000)
   const limit=await db.prepare('INSERT INTO auth_limits VALUES (?,1,?) ON CONFLICT(id) DO UPDATE SET attempts=attempts+1 RETURNING attempts')
     .bind(await hash(flow+':'+ip+':'+window),(window+1)*600000).first<number>('attempts')
-  return (limit??0)<=25
+  return (limit??0)<=maxAttempts
 }
 app.use('/api/*',async(c,next)=>cors({origin:[c.env.ALLOWED_ORIGIN,'http://127.0.0.1:5173'],allowMethods:['GET','POST','PUT','DELETE','OPTIONS'],allowHeaders:['Authorization','Content-Type']})(c,next))
 app.use('/api/*',async(c,next)=>{
@@ -59,11 +59,67 @@ app.get('/api/auth/username',async c=>{
   c.header('Cache-Control','no-store')
   return c.json({available:!await usernameTaken(c.env.DB,username)})
 })
+const emailPattern=/^[^\s@]+@[^\s@]+\.[^\s@]+$/
+app.post('/api/auth/recovery/request',async c=>{
+  const {DB,RESEND_API_KEY,RECOVERY_FROM}=c.env
+  if(!RESEND_API_KEY||!RECOVERY_FROM)return c.json({error:'Email recovery is not configured yet.'},503)
+  const input=await readBody(c.req.raw)
+  const email=clean(input?.email,254).toLowerCase()
+  const kind=input?.kind
+  if(!emailPattern.test(email)||(kind!=='password'&&kind!=='username'))return c.json({error:'Enter your account email.'},400)
+  const ip=c.req.header('CF-Connecting-IP')??'local'
+  if(!await authAllowed(DB,ip,'recovery-request',10))return c.json({error:'Too many requests. Try again in a few minutes.'},429)
+  const account=await DB.prepare('SELECT id,username FROM users WHERE email=?').bind(email).first<{id:string;username:string|null}>()
+  if(account&&await authAllowed(DB,account.id,'recovery-email',3)){
+    let text=account.username?'Your dameeland username is @'+account.username+'.':'You can sign in to dameeland with this email address.'
+    if(kind==='password'){
+      const code=random(6)
+      await DB.prepare(`INSERT INTO password_resets(user_id,code_hash,expires) VALUES (?,?,?)
+        ON CONFLICT(user_id) DO UPDATE SET code_hash=excluded.code_hash,expires=excluded.expires`)
+        .bind(account.id,await hash(code),now()+15*60000).run()
+      text='Your dameeland password reset code is '+code.toUpperCase()+'. It expires in 15 minutes. If you did not request this, you can ignore this email.'
+    }
+    c.executionCtx.waitUntil(fetch('https://api.resend.com/emails',{
+      method:'POST',headers:{Authorization:'Bearer '+RESEND_API_KEY,'Content-Type':'application/json'},
+      body:JSON.stringify({from:RECOVERY_FROM,to:[email],subject:kind==='password'?'Reset your dameeland password':'Your dameeland username',text}),
+    }).then(response=>{if(!response.ok)console.error('Recovery email delivery rejected',response.status)})
+      .catch(()=>console.error('Recovery email delivery failed')))
+  }
+  c.executionCtx.waitUntil(DB.batch([
+    DB.prepare('DELETE FROM password_resets WHERE expires<=?').bind(now()),
+    DB.prepare('DELETE FROM auth_limits WHERE expires<=?').bind(now()),
+  ]))
+  return c.json({ok:true})
+})
+app.post('/api/auth/recovery/reset',async c=>{
+  const input=await readBody(c.req.raw)
+  const email=clean(input?.email,254).toLowerCase()
+  const code=typeof input?.code==='string'?input.code.trim().toLowerCase():''
+  const password=typeof input?.password==='string'?input.password:''
+  if(!emailPattern.test(email)||!/^[a-f0-9]{12}$/.test(code)||password.length<8||password.length>128)
+    return c.json({error:'Enter your email, a valid reset code and a password with 8 to 128 characters.'},400)
+  const db=c.env.DB
+  if(!await authAllowed(db,c.req.header('CF-Connecting-IP')??'local','recovery-reset',10))
+    return c.json({error:'Too many attempts. Try again in a few minutes.'},429)
+  const codeHash=await hash(code)
+  const salt=random(16)
+  const digest=await passwordHash(password,salt)
+  const validAt=now()
+  const accountQuery='SELECT r.user_id FROM password_resets r JOIN users u ON u.id=r.user_id WHERE r.code_hash=? AND r.expires>? AND u.email=?'
+  const [updated]=await db.batch([
+    db.prepare('UPDATE users SET salt=?,password_hash=? WHERE id IN ('+accountQuery+')').bind(salt,digest,codeHash,validAt,email),
+    db.prepare('DELETE FROM sessions WHERE user_id IN ('+accountQuery+')').bind(codeHash,validAt,email),
+    db.prepare('DELETE FROM password_resets WHERE user_id IN ('+accountQuery+')').bind(codeHash,validAt,email),
+  ])
+  return updated.meta.changes?c.json({ok:true}):c.json({error:'That code is invalid or expired.'},400)
+})
 app.post('/api/auth/:action',async c=>{
   const action=c.req.param('action')
   if(action!=='signup'&&action!=='login') return c.json({error:'Unknown action.'},404)
   const body=await readBody(c.req.raw)
   const email=clean(body?.email,254).toLowerCase()
+  const identifier=clean(body?.identifier??body?.email,254).toLowerCase()
+  const loginUsername=identifier.replace(/^@/,'')
   const firstName=capitalizeName(clean(body?.firstName,60))
   const lastName=capitalizeName(clean(body?.lastName,60))
   const name=[firstName,lastName].join(' ')
@@ -71,11 +127,14 @@ app.post('/api/auth/:action',async c=>{
   const password=typeof body?.password==='string'?body.password:''
   if(action==='signup'&&!validUsername(username))return c.json({error:usernameHint},400)
   if(action==='signup'&&(!firstName||!lastName))return c.json({error:'Enter your first and last name.'},400)
-  if(!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)||password.length<8||password.length>128) return c.json({error:'Enter a valid email and a password with 8 to 128 characters.'},400)
+  const validIdentifier=action==='signup'?emailPattern.test(email):emailPattern.test(identifier)||validUsername(loginUsername)
+  if(!validIdentifier||password.length<8||password.length>128) return c.json({error:action==='signup'?'Enter a valid email and a password with 8 to 128 characters.':'Enter your email or username and password.'},400)
   const db=c.env.DB
   if(!await authAllowed(db,c.req.header('CF-Connecting-IP')??'local','password'))return c.json({error:'Too many attempts. Try again in a few minutes.'},429)
   c.executionCtx.waitUntil(db.batch([db.prepare('DELETE FROM auth_limits WHERE expires < ?').bind(now()),db.prepare('DELETE FROM sessions WHERE expires < ?').bind(now())]))
-  let account=await db.prepare('SELECT * FROM users WHERE email=?').bind(email).first<Account>()
+  let account=action==='signup'||emailPattern.test(identifier)
+    ?await db.prepare('SELECT * FROM users WHERE email=?').bind(action==='signup'?email:identifier).first<Account>()
+    :await db.prepare('SELECT * FROM users WHERE username=? COLLATE NOCASE').bind(loginUsername).first<Account>()
   if(action==='signup'){
     if(account) return c.json({error:'An account already uses this email.'},409)
     const salt=random(16)
@@ -88,7 +147,7 @@ app.post('/api/auth/:action',async c=>{
     }
   }else{
     const candidate=await passwordHash(password,account?.salt??'8d039d76714da531')
-    if(!account||!equal(candidate,account.password_hash)) return c.json({error:'Email or password is incorrect.'},401)
+    if(!account||!equal(candidate,account.password_hash)) return c.json({error:'Email, username or password is incorrect.'},401)
   }
   return c.json(await session(c.env,account,c.req.url),action==='signup'?201:200)
 })

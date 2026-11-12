@@ -1,10 +1,11 @@
-import React,{lazy,Suspense,useEffect,useLayoutEffect,useRef,useState} from 'react'
-import {AccessibilityInfo,Animated,Easing,Image,Modal,Platform,Pressable,ScrollView,View,useWindowDimensions,type ViewStyle} from 'react-native'
+import React,{lazy,Suspense,useCallback,useEffect,useLayoutEffect,useRef,useState} from 'react'
+import {AccessibilityInfo,Animated,BackHandler,Easing,Image,Modal,PanResponder,Platform,Pressable,ScrollView,View,useWindowDimensions,type ViewStyle} from 'react-native'
 import {api,capitalizeName,normalizeUsername,usernameHint,validUsername,initialChats,initialComments,initialPosts,initials,lime,me,people,questions,slides,themes,type FollowListKind,type FollowPage,type FollowStats,type Note,type Person,type Post,type Role,type Theme} from './index'
 import {Avatar,Button,Card,Copy,Design,Field,Icon,IconButton,IconTile,Logo,PersonName,ScreenLinks,Segmented,row,spread,stack,useDesign,type Glyph,type IconRendererProps} from './ui'
 import type {ExtraPage} from './FeatureScreens'
 import {LoadingScreen} from './LoadingScreen'
 import {GoogleButton} from './GoogleButton'
+import AccountRecovery from './AccountRecovery'
 import {Toast,type ToastMessage} from './Toast'
 import {Comments,type GifRenderer} from './Comments'
 import type {AdminAccount,AdminOverview,CommentAttachment,Viewer} from './index'
@@ -30,11 +31,6 @@ type Props={
 }
 type Overlay={kind:'connections';list:FollowListKind;person:Person}|{kind:'comments'|'share'|'post';post:Post}|{kind:'story';person:Person}|{kind:'create'|'wish'|'newStory'}|{kind:'call';video:boolean;person:Person;ringing?:boolean;incoming?:boolean}
 const tabs:[Page,Glyph][]=[['Home','home'],['Learn','book'],['Explore','search'],['Play','game']]
-const featureParents:Record<ExtraPage,Page>={
-  Leaderboard:'Play',Lesson:'Learn','Teacher dashboard':'Learn','Study timer':'Learn',Progress:'Learn',
-  Games:'Play',Rewards:'Play',Birthdays:'Home','Birthday wall':'Birthdays','Birthday celebration':'Birthdays',
-  Events:'Home','Screen states':'Settings','Design system':'Screen states','Logo board':'Screen states',
-}
 const localRooms=people.filter(p=>p.id in initialChats).map(person=>({id:person.id,person}))
 const storyPeople=[people[0],people[4],people[2],people[1]]
 const uid=()=>Date.now().toString(36)+Math.random().toString(36).slice(2)
@@ -110,10 +106,13 @@ function Auth({base,demo,busy,error,submit,onGoogle,onCancelGoogle,googlePending
   },[base,demo,handle,mode])
   const [email,setEmail]=useState(''),[password,setPassword]=useState('')
   const [show,setShow]=useState(false)
+  const [recovering,setRecovering]=useState(false)
   const {theme}=useDesign()
   return <ScrollView keyboardShouldPersistTaps="handled" contentContainerStyle={{flexGrow:1,justifyContent:'center',padding:20}}>
     <Motion reduced={reduced} style={{...stack,width:'100%',maxWidth:448,alignSelf:'center'}}>
       <Logo size={40}/>
+      {recovering?<AccountRecovery base={base} demoEmail={email} findDemoAccount={demo?address=>welcomeAccounts.get(address):undefined}
+        onBack={()=>{setPassword('');setRecovering(false)}}/>:<>
       <Segmented options={['Sign up','Log in']} selected={mode==='signup'?'Sign up':'Log in'} onSelect={value=>setMode(value==='Sign up'?'signup':'login')}/>
       {mode==='signup'&&<View style={{...row,alignItems:'flex-start'}}>
         <View style={{flex:1,minWidth:0}}><Field label="First name" value={firstName} onChangeText={value=>setFirstName(capitalizeName(value))} autoCapitalize="words" maxLength={60} autoComplete="given-name"/></View>
@@ -127,13 +126,15 @@ function Auth({base,demo,busy,error,submit,onGoogle,onCancelGoogle,googlePending
           </Copy>
         </View>
       </View>}
-      <Field label="Email" placeholder="you@example.com" value={email} onChangeText={setEmail} keyboardType="email-address" autoCapitalize="none" autoComplete="email" maxLength={254}/>
+      <Field label={mode==='signup'?'Email':'Email or username'} placeholder={mode==='signup'?'you@example.com':'Email address or @username'} value={email} onChangeText={setEmail} keyboardType={mode==='signup'?'email-address':'default'} autoCapitalize="none" autoCorrect={false} autoComplete={mode==='signup'?'email':'username'} maxLength={254}/>
       <Field label="Password" placeholder="At least 8 characters" value={password} onChangeText={setPassword} secureTextEntry={!show} autoCapitalize="none" maxLength={128} action={show?'eyeOff':'eye'} actionLabel={show?'Hide password':'Show password'} onAction={()=>setShow(!show)}/>
       {!!error&&<View accessibilityRole="alert"><Copy color={theme.ink}>{error}</Copy></View>}
       <Button label={busy?'Please wait…':mode==='signup'?'Create account':'Log in to dameeland'} disabled={busy||mode==='signup'&&usernameStatus==='taken'} onPress={()=>submit(mode,{firstName,lastName,username:handle,email,password})}/>
+      {mode==='login'&&<Button label="Forgot password or username?" variant="plain" disabled={busy} onPress={()=>setRecovering(true)}/>}
       <GoogleButton signup={mode==='signup'} disabled={busy||mode==='signup'&&usernameStatus==='taken'} onPress={()=>onGoogle(mode,handle)}/>
       {googlePending&&<Button label="Cancel Google sign-in" variant="plain" onPress={onCancelGoogle}/>}
       {demo&&<><Button label="Explore demo" variant="secondary" onPress={onDemo}/><Copy color={theme.muted} center size={12}>Preview accounts reset when you reload.</Copy></>}
+      </>}
     </Motion>
   </ScrollView>
 }
@@ -252,7 +253,8 @@ export default function App(props:Props){
   const [stage,setStage]=useState<'intro'|'auth'|'app'|'restore'>(props.loadToken&&!demo?'restore':'intro')
   const [step,setStep]=useState(0)
   const [user,setUser]=useState<Viewer>(me),[token,setToken]=useState('')
-  const [page,setPage]=useState<Page>('Home'),[origin,setOrigin]=useState<Page>('Home')
+  const [page,setPage]=useState<Page>('Home')
+  const pageHistory=useRef<Page[]>([])
   const googleRequest=useRef<AbortController|null>(null)
   const [googlePending,setGooglePending]=useState(false)
   const [busy,setBusy]=useState(false),[error,setError]=useState('')
@@ -309,7 +311,7 @@ export default function App(props:Props){
     return ()=>{alive=false;sub?.remove();replyTimers.current.forEach(clearTimeout)}
   },[])
   useEffect(()=>{
-    const timer=setTimeout(()=>setStarting(false),850)
+    const timer=setTimeout(()=>setStarting(false),1400)
     return ()=>clearTimeout(timer)
   },[])
   useEffect(()=>{
@@ -376,16 +378,24 @@ export default function App(props:Props){
     return ()=>{active=false;clearInterval(poll);socket.close()}
   },[base,demo,token,page,roomId])
   const storyId=overlay?.kind==='story'?overlay.person.id:null
+  const moveStory=useCallback((direction:1|-1)=>{
+    if(!storyId)return
+    const queue=ownStory?[user,...storyPeople]:storyPeople
+    const index=queue.findIndex(person=>person.id===storyId)
+    const next=queue[index+direction]
+    if(index<0||(!next&&direction===-1))return
+    if(next)setSeen(previous=>new Set(previous).add(next.id))
+    setOverlay(current=>current?.kind==='story'&&current.person.id===storyId?(next?{kind:'story',person:next}:null):current)
+  },[storyId,ownStory,user])
   useEffect(()=>{
     if(!storyId)return
-    const index=storyPeople.findIndex(person=>person.id===storyId)
-    const next=storyPeople[index+1]
-    const timer=setTimeout(()=>{
-      if(next)setSeen(previous=>new Set(previous).add(next.id))
-      setOverlay(current=>current?.kind==='story'&&current.person.id===storyId?(next?{kind:'story',person:next}:null):current)
-    },6500)
+    const timer=setTimeout(()=>moveStory(1),6500)
     return ()=>clearTimeout(timer)
-  },[storyId])
+  },[storyId,moveStory])
+  const storySwipe=React.useMemo(()=>PanResponder.create({
+    onMoveShouldSetPanResponderCapture:(_,gesture)=>Math.abs(gesture.dx)>14&&Math.abs(gesture.dx)>Math.abs(gesture.dy)*1.4,
+    onPanResponderRelease:(_,gesture)=>{if(Math.abs(gesture.dx)>=42)moveStory(gesture.dx<0?1:-1)},
+  }),[moveStory])
   const restorePageScroll=()=>{
     const target=pendingOffset.current
     if(!target||target.page!==page||page==='Home'&&loading||!scroll.current)return
@@ -397,13 +407,17 @@ export default function App(props:Props){
     const frame=requestAnimationFrame(restorePageScroll)
     return ()=>cancelAnimationFrame(frame)
   },[page,loading,stage])
-  const open=(next:Page)=>{
+  const open=(next:Page,back=false)=>{
     if(next===page){
       if(tabs.some(([tab])=>tab===next))scroll.current?.scrollTo({y:0,animated:!reduced})
       return
     }
     pendingOffset.current=tabs.some(([tab])=>tab===next)?{page:next,y:scrollOffsets.current[next]??0}:null
-    setOrigin(page);setPage(next);setFeedError('')
+    if(!back){
+      if(tabs.some(([tab])=>tab===next))pageHistory.current=[]
+      else pageHistory.current.push(page)
+    }
+    setPage(next);setFeedError('')
     if(next==='Notifications')setUnread(false)
   }
   const startQuiz=()=>open('Quiz')
@@ -444,21 +458,23 @@ export default function App(props:Props){
     if(mode==='signup'&&(!firstName||!lastName)){setError('Enter your first and last name.');return}
     if(mode==='signup'&&!validUsername(username)){setError(usernameHint);return}
     const name=[firstName,lastName].join(' ')
-    if(!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)||values.password.length<8){
-      setError('Enter your details and a password with at least 8 characters.');return
+    const isEmail=/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)
+    const loginUsername=email.replace(/^@/,'')
+    if((!isEmail&&(mode==='signup'||!validUsername(loginUsername)))||values.password.length<8){
+      setError(mode==='signup'?'Enter a valid email and a password with at least 8 characters.':'Enter your email or username and password.');return
     }
     setBusy(true);setError('')
     try{
       if(demo){
-        const saved=welcomeAccounts.get(email)
-        if(mode==='login'&&(!saved||saved.password!==values.password))throw new Error('Email or password is incorrect.')
+        const saved=mode==='signup'||isEmail?welcomeAccounts.get(email):[...welcomeAccounts.values()].find(account=>account.user.username===loginUsername)
+        if(mode==='login'&&(!saved||saved.password!==values.password))throw new Error('Email, username or password is incorrect.')
         if(mode==='signup'&&saved)throw new Error('An account already uses this email.')
         if(mode==='signup'&&demoUsernameTaken(username))throw new Error('That username is taken.')
         const account=saved?.user??{...me,name,username,initials:initials(name)}
         if(mode==='signup')welcomeAccounts.set(email,{user:account,password:values.password})
         setUser(account)
       }else{
-        const result=await api<Session>(base,'/auth/'+mode,json({...values,email,firstName,lastName,username}))
+        const result=await api<Session>(base,'/auth/'+mode,json(mode==='signup'?{...values,email,firstName,lastName,username}:{identifier:email,password:values.password}))
         setToken(result.token);setUser(result.user)
         try{await props.saveToken?.(result.token)}catch{notify('You’re signed in for this session.')}
       }
@@ -505,7 +521,7 @@ export default function App(props:Props){
       demoSession.current++
       replyTimers.current.forEach(clearTimeout);replyTimers.current=[]
       scrollOffsets.current={};pendingOffset.current=null;setToast(null)
-      setToken('');setUser(me);setPage('Home');setStage('auth');setError('')
+      pageHistory.current=[];setToken('');setUser(me);setPage('Home');setStage('auth');setError('')
       setPosts(demo?initialPosts:[]);setNotes({});setChats(demo?initialChats:{});setFollows({});setProfileStats(null)
       setRooms(demo?localRooms:[]);setRoom(null);setDraft('');setAttachment(null);clearComment();setMessage('');setSeen(new Set());setOwnStory(null);setWishes([]);setLessonComplete(false);setVoicePlaying(false);setQuietMode(false);setFollowingOnly(false)
     }catch(reason){fail(reason)}
@@ -637,7 +653,13 @@ export default function App(props:Props){
       }
     }catch(reason){fail(reason)}finally{setBusy(false)}
   }
-  const goBack=()=>open(featureParents[page as ExtraPage]??(page==='Chat'?'Messages':page==='Quiz'?(origin==='Games'?'Games':origin==='Play'?'Play':'Learn'):page==='Admin'?'Settings':page==='Settings'?'Profile':'Home'))
+  const goBack=()=>open(pageHistory.current.pop()??'Home',true)
+  useEffect(()=>{
+    if(Platform.OS!=='android'||stage!=='app'||overlay||(!pageHistory.current.length&&page==='Home'))return
+    const subscription=BackHandler.addEventListener('hardwareBackPress',()=>{goBack();return true})
+    return ()=>subscription.remove()
+  })
+
   const displayedPosts=demo&&followingOnly?posts.filter(p=>p.author.id===user.id||follows[p.author.id]):posts
   const displayedPeople=demo?people.map(person=>demoAccounts.find(account=>account.person.id===person.id)?.person??person).filter(p=>(p.name+' '+p.detail).toLowerCase().includes(query.trim().toLowerCase())):results
   const canShare=Boolean(props.share)
@@ -646,7 +668,7 @@ export default function App(props:Props){
   const section=(title:string)=> <Copy size={19} weight={800}>{title}</Copy>
   const failure=<Empty title="Couldn’t connect" detail={feedError} action="Try again" onPress={()=>setRetry(n=>n+1)}/>
   const navButton=(name:Page,glyph:Glyph)=>{
-    const active=page===name
+    const active=page===name||name==='Messages'&&page==='Chat'||tabs.some(([tab])=>tab===name)&&pageHistory.current[0]===name
     const color=active?theme.ink:theme.muted
     return <Pressable accessibilityRole="button" accessibilityLabel={name} accessibilityState={{selected:active}} key={name} onPress={()=>open(name)}
       style={({pressed})=>({...row,flexDirection:desktop?'row':'column',justifyContent:desktop?'flex-start':'center',minHeight:desktop?48:54,flex:desktop?0:1,paddingHorizontal:desktop?12:0,gap:desktop?12:3,borderRadius:13,backgroundColor:desktop&&active?theme.chip:'transparent',opacity:pressed?.68:1})}>
@@ -850,7 +872,7 @@ export default function App(props:Props){
             contentContainerStyle={{padding:desktop?20:13,gap:16,width:'100%',maxWidth:640,alignSelf:'center'}}>
             <Motion key={page} reduced={reduced} style={stack}>{content[page]??<Suspense fallback={<LoadingScreen compact/>}><FeatureScreen key={page} page={page as ExtraPage} open={open} demo={demo} user={user} startQuiz={startQuiz} completed={lessonComplete} markComplete={()=>setLessonComplete(true)} wish={()=>selectOverlay({kind:'wish'})} wishes={wishes} incomingCall={()=>selectOverlay({kind:'call',video:false,person:people[0],ringing:true,incoming:true})}/></Suspense>}</Motion></ScrollView>
           {page==='Chat'&&<View style={{...row,padding:10,borderTopWidth:1,borderColor:theme.border,backgroundColor:theme.card}}><View style={{flex:1}}><Field label="Message" placeholder="Write a message" value={message} onChangeText={setMessage} onSubmitEditing={()=>void send()} maxLength={800}/></View><View style={{alignSelf:'flex-end'}}><Button label="Send" trailing="send" disabled={busy||!message.trim()} onPress={()=>void send()}/></View></View>}
-          {!desktop&&tabs.some(([name])=>name===page)&&<View style={{...row,gap:0,justifyContent:'space-around',minHeight:64,paddingHorizontal:6,borderTopWidth:1,borderColor:theme.border,backgroundColor:theme.card}}>{tabs.slice(0,2).map(([name,glyph])=>navButton(name,glyph))}<View style={{width:61,alignItems:'center',marginTop:-13}}><IconButton name="plus" label="Create post" size={26} solid onPress={compose}/></View>{tabs.slice(2).map(([name,glyph])=>navButton(name,glyph))}</View>}
+          {!desktop&&<View style={{...row,gap:0,justifyContent:'space-around',minHeight:64,paddingHorizontal:6,borderTopWidth:1,borderColor:theme.border,backgroundColor:theme.card}}>{tabs.slice(0,2).map(([name,glyph])=>navButton(name,glyph))}<View style={{width:61,alignItems:'center',marginTop:-13}}><IconButton name="plus" label="Create post" size={26} solid onPress={compose}/></View>{tabs.slice(2).map(([name,glyph])=>navButton(name,glyph))}</View>}
         </View>
         {rail&&<ScrollView style={{flex:1,maxWidth:324,borderLeftWidth:1,borderColor:theme.border}} contentContainerStyle={{padding:17,paddingTop:20,gap:15}}>
           <FeatureCard glyph="bolt" title="Daily challenge" description="Three quick maths questions." action="Start challenge" onPress={startQuiz} compact/>
@@ -878,10 +900,14 @@ export default function App(props:Props){
             <View style={{...row,flex:1}}><Avatar person={story} size={40}/><Copy color="#fff" weight={800}>{story.name}</Copy></View>
             <IconButton name="close" label="Close story" tint="#fff" onPress={modalClose}/>
           </View>
-          <View style={{flex:1,minHeight:0,justifyContent:'center',gap:16,paddingBottom:16}}>
+          <View {...storySwipe.panHandlers} style={{flex:1,minHeight:0,justifyContent:'center',gap:16,paddingBottom:16}}>
             {personalStory?.image&&<Image accessibilityLabel="Story photo" source={{uri:personalStory.image}} resizeMode="contain" style={{width:'100%',flex:1,minHeight:0}}/>}
             {personalStory?.videoPreview&&<View style={{...row,justifyContent:'center'}}><IconTile name="vid"/><Copy color="#fff">Video story preview</Copy></View>}
             {!!storyText&&<Copy center color="#fff" weight={800} size={personalStory?.image?18:28}>{storyText}</Copy>}
+            <View style={{position:'absolute',inset:0,flexDirection:'row'}}>
+              <Pressable accessibilityRole="button" accessibilityLabel="Next story" onPress={()=>moveStory(1)} style={{flex:1}}/>
+              <Pressable accessibilityRole="button" accessibilityLabel="Previous story" onPress={()=>moveStory(-1)} style={{flex:1}}/>
+            </View>
           </View>
         </View>
       </View>:<View style={{flex:1,justifyContent:desktop?'center':'flex-end',alignItems:'center',backgroundColor:'#0A0714AA'}}>

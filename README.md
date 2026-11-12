@@ -45,6 +45,10 @@ Scan the Metro QR code using Expo Go for SDK 58 on a phone connected to the same
 
 Expo starts in demo mode by default. To connect a simulator or physical device to the local API, set `EXPO_PUBLIC_API_URL` in `apps/mobile/.env.local`. Use `http://localhost:8787` for iOS Simulator or `http://10.0.2.2:8787` for the standard Android emulator. For a physical device, use the development machine's LAN address and start Wrangler with `npm -w @dameeland/api run dev -- --ip 0.0.0.0` on a trusted local network.
 
+## Account recovery
+
+Apply D1 migration `0009_password_resets.sql`. Set `RESEND_API_KEY` as a Worker secret and `RECOVERY_FROM` to an email address on your verified Resend domain. For local development, set both in `apps/api/.dev.vars`. Users can log in with an email address or username. From the login screen, they can request a username reminder or a single-use password reset code by email. Reset codes expire after 15 minutes. A successful password reset ends previous sessions.
+
 ## Admin access
 
 Create a regular account, get its immutable user ID from the authenticated `GET /api/me` response, then set `ADMIN_USER_IDS` on the Worker to that ID. Separate multiple IDs with commas. For local development, set it in `apps/api/.dev.vars`. Reopen the app after changing the allowlist and go to **Profile → Settings → Admin dashboard**.

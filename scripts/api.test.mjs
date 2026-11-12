@@ -90,6 +90,23 @@ test('local Worker persists accounts, social activity, media, and private realti
   assert.equal((await request('/me',{token:login.token})).id,ada.user.id)
   assert.notEqual(login.token,ada.token)
 
+  const byUsername=await request('/auth/login',{method:'POST',body:{identifier:'@'+ada.username.toUpperCase(),password:ada.password}})
+  assert.equal(byUsername.user.id,ada.user.id)
+  await request('/auth/login',{method:'POST',body:{identifier:ada.username,password:'incorrect passphrase'},status:401})
+  if(process.env.TEST_RECOVERY_UNCONFIGURED==='1')await request('/auth/recovery/request',{method:'POST',body:{email:ada.email,kind:'password'},status:503})
+  const recoveryCode=process.env.TEST_RECOVERY_CODE
+  if(recoveryCode){
+    const email='recovery@example.test'
+    const password='new-recovery-passphrase'
+    const reset={email,code:recoveryCode.toUpperCase(),password}
+    await request('/auth/recovery/reset',{method:'POST',body:{...reset,email:ada.email},status:400})
+    await request('/auth/recovery/reset',{method:'POST',body:reset})
+    await request('/auth/recovery/reset',{method:'POST',body:reset,status:400})
+    await request('/me',{token:process.env.TEST_RECOVERY_SESSION,status:401})
+    const recovered=await request('/auth/login',{method:'POST',body:{identifier:'recovery_qa',password}})
+    assert.equal(recovered.user.username,'recovery_qa')
+  }
+
   const file=await readFile(new URL('../packages/core/assets/dameeland-logo.png',import.meta.url))
   const photoForm=()=>{const form=new FormData();form.append('image',new Blob([file],{type:'image/png'}),'profile.png');return form}
   await request('/me/photos/avatar',{method:'PUT',form:photoForm(),status:401})
