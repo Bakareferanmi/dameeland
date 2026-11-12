@@ -6,7 +6,11 @@ export const lime = '#C8F53F'
 export const danger = '#D13438'
 export type Theme = keyof typeof themes
 export type Role = 'student' | 'tech'
-export type Person = {id:string; name:string; initials:string; role:Role; color:string; detail:string; verified?:boolean; group?:boolean; avatar?:string; cover?:string}
+export const usernameHint = 'Use 3–24 letters, numbers or underscores.'
+export const normalizeUsername = (value:string) => value.trim().toLowerCase()
+export const validUsername = (value:string) => /^[a-z0-9_]{3,24}$/.test(value)
+export const capitalizeName = (value:string) => value.replace(/^(\s*)(\p{L})/u,(_,space:string,letter:string)=>space+letter.toUpperCase())
+export type Person = {id:string; name:string; initials:string; role:Role; color:string; detail:string; verified?:boolean; group?:boolean; avatar?:string; cover?:string; username?:string}
 export type FollowListKind = 'followers'|'following'
 export type FollowPage = {people:Person[]; nextCursor:string|null}
 export type FollowStats = {followers:number; following:number; followedByViewer:boolean}

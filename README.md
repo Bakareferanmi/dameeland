@@ -63,6 +63,8 @@ The normal Vite build emits a separate secondary-screen chunk. Use `npm run buil
 
 Create a Google OAuth client of type **Web application**. Set `GOOGLE_CLIENT_ID` and `GOOGLE_REDIRECT_URI` on the API Worker and set `GOOGLE_CLIENT_SECRET` as a Worker secret. Register the exact Worker callback URL, such as `https://api.example.com/api/google/callback`, as an authorized redirect URI on that client. Apply the D1 migrations before deploying the Worker.
 
+New accounts choose a unique, case-insensitive username (3–24 letters, digits or underscores). The app checks availability while typing and the database enforces uniqueness on sign-up. Existing accounts can still log in with their current credentials.
+
 Web uses a pop-up. On a phone, complete the Google flow in the system browser and return to the app. The offline previews show the Google buttons and support email-based demo accounts. Existing password accounts keep their existing login method if their email matches a new Google sign-in attempt.
 
 ## Checks and builds

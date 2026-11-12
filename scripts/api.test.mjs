@@ -16,9 +16,10 @@ async function request(path,{token,method='GET',body,form,status=200}={}){
 const create=async(name,role='student')=>{
   const email=randomUUID()+'@example.test'
   const password='example-passphrase-42'
-  const [firstName,lastName]=name.split(' ')
-  const result=await request('/auth/signup',{method:'POST',body:{firstName,lastName,email,password,role},status:201})
-  return {...result,email,password}
+  const [firstName,lastName]=name.toLowerCase().split(' ')
+  const username='u_'+randomUUID().replaceAll('-','').slice(0,16)
+  const result=await request('/auth/signup',{method:'POST',body:{firstName,lastName,username,email,password,role},status:201})
+  return {...result,email,password,username}
 }
 const oneMessage=socket=>new Promise((resolve,reject)=>{
   const timer=setTimeout(()=>reject(new Error('Timed out waiting for Durable Object broadcast')),5000)
@@ -33,7 +34,7 @@ const openSocket=(path,token)=>new Promise((resolve,reject)=>{
 test('local Worker persists accounts, social activity, media, and private realtime chat',async()=>{
   await request('/health')
   await request('/feed',{status:401})
-  await request('/auth/signup',{method:'POST',body:{firstName:'Ada',email:'incomplete@example.test',password:'example-passphrase-42'},status:400})
+  await request('/auth/signup',{method:'POST',body:{firstName:'Ada',username:'incomplete',email:'incomplete@example.test',password:'example-passphrase-42'},status:400})
   if(process.env.TEST_GOOGLE_START==='1'){
     const start=await request('/google/start',{method:'POST',body:{role:'tech'}})
     const url=new URL(start.url)
@@ -49,7 +50,14 @@ test('local Worker persists accounts, social activity, media, and private realti
   }else{
     await request('/google/start',{method:'POST',body:{role:'student'},status:503})
   }
-  const ada=await create('Ada QA')
+  const ada=await create('Ada Qa')
+  assert.equal(ada.user.name,'Ada Qa')
+  assert.equal(ada.user.username,ada.username)
+  assert.deepEqual(await request('/auth/username?username='+ada.username.toUpperCase()),{available:false})
+  assert.deepEqual(await request('/auth/username?username=unused_'+randomUUID().slice(0,8)),{available:true})
+  await request('/auth/username?username=a!',{status:400})
+  const duplicate=await request('/auth/signup',{method:'POST',body:{firstName:'Other',lastName:'User',username:ada.username.toUpperCase(),email:randomUUID()+'@example.test',password:ada.password},status:409})
+  assert.equal(duplicate.error,'That username is taken.')
   const tobi=await create('Tobi QA','tech')
   const outsider=await create('Outside QA')
   assert.equal(tobi.user.role,'tech')

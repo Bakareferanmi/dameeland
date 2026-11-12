@@ -1,6 +1,6 @@
 import React,{lazy,Suspense,useEffect,useRef,useState} from 'react'
 import {AccessibilityInfo,Animated,Easing,Image,Modal,Platform,Pressable,ScrollView,View,useWindowDimensions,type ViewStyle} from 'react-native'
-import {api,initialChats,initialComments,initialPosts,initials,lime,me,people,questions,slides,themes,type FollowListKind,type FollowPage,type FollowStats,type Note,type Person,type Post,type Role,type Theme} from './index'
+import {api,capitalizeName,normalizeUsername,usernameHint,validUsername,initialChats,initialComments,initialPosts,initials,lime,me,people,questions,slides,themes,type FollowListKind,type FollowPage,type FollowStats,type Note,type Person,type Post,type Role,type Theme} from './index'
 import {Avatar,Button,Card,Copy,Design,Field,Icon,IconButton,IconTile,Logo,PersonName,ScreenLinks,Segmented,row,spread,stack,useDesign,type Glyph,type IconRendererProps} from './ui'
 import type {ExtraPage} from './FeatureScreens'
 import {LoadingScreen} from './LoadingScreen'
@@ -13,7 +13,8 @@ const sampleFollows:Record<string,string[]>={ada:['tobi','zee'],tobi:['ada','cod
 type Page=ExtraPage|'Home'|'Learn'|'Explore'|'Play'|'Messages'|'Chat'|'Notifications'|'Profile'|'Settings'|'Quiz'
 type Room={id:string;person:Person}
 type Session={token:string;user:Person}
-type Credentials={firstName:string;lastName:string;email:string;password:string;role:Role}
+type AuthMode='signup'|'login'
+type Credentials={firstName:string;lastName:string;username:string;email:string;password:string;role:Role}
 type GoogleStart={url:string;state:string;exchange:string}
 type GoogleWindow={close:()=>void}
 type Media={name:string;uri:string;data:Blob|{uri:string;name:string;type:string}}
@@ -35,6 +36,7 @@ const storyPeople=[people[0],people[4],people[2],people[1]]
 const uid=()=>Date.now().toString(36)+Math.random().toString(36).slice(2)
 const json=(body:unknown,method='POST')=>({method,body:JSON.stringify(body)})
 const errorMessage=(error:unknown)=>error instanceof Error?error.message:'Something went wrong. Try again.'
+const demoUsernameTaken=(username:string)=>people.some(person=>person.id===username)||[...welcomeAccounts.values()].some(account=>account.user.username===username)
 const welcomeAccounts=new Map<string,{user:Person;password:string}>()
 const shortTime=(value:string)=>{
   if(!value.includes('T')) return value
@@ -84,10 +86,24 @@ function Intro({step,onNext,onBack,onSkip,reduced,desktop}:{step:number;onNext:(
     </View>
   </ScrollView>
 }
-function Auth({demo,busy,error,submit,onGoogle,onCancelGoogle,googlePending,onDemo,reduced}:{demo:boolean;busy:boolean;error:string;submit:(mode:'signup'|'login',values:Credentials)=>void;onGoogle:(role:Role)=>void;onCancelGoogle:()=>void;googlePending:boolean;onDemo:()=>void;reduced:boolean}){
+function Auth({base,demo,busy,error,submit,onGoogle,onCancelGoogle,googlePending,onDemo,reduced}:{base:string;demo:boolean;busy:boolean;error:string;submit:(mode:'signup'|'login',values:Credentials)=>void;onGoogle:(mode:AuthMode,role:Role,username:string)=>void;onCancelGoogle:()=>void;googlePending:boolean;onDemo:()=>void;reduced:boolean}){
   const [mode,setMode]=useState<'signup'|'login'>('signup')
   const [role,setRole]=useState<Role>('student')
   const [firstName,setFirstName]=useState(''),[lastName,setLastName]=useState('')
+  const [username,setUsername]=useState('')
+  const handle=normalizeUsername(username)
+  const [availability,setAvailability]=useState<{handle:string;status:'available'|'taken'|'error'}>()
+  const usernameStatus=availability?.handle===handle?availability.status:undefined
+  useEffect(()=>{
+    if(mode!=='signup'||!validUsername(handle))return
+    const controller=new AbortController()
+    const timer=setTimeout(()=>{
+      const check=demo?Promise.resolve({available:!demoUsernameTaken(handle)}):api<{available:boolean}>(base,'/auth/username?username='+encodeURIComponent(handle),{signal:controller.signal})
+      check.then(result=>{if(!controller.signal.aborted)setAvailability({handle,status:result.available?'available':'taken'})})
+        .catch(()=>{if(!controller.signal.aborted)setAvailability({handle,status:'error'})})
+    },300)
+    return ()=>{clearTimeout(timer);controller.abort()}
+  },[base,demo,handle,mode])
   const [email,setEmail]=useState(''),[password,setPassword]=useState('')
   const [show,setShow]=useState(false)
   const {theme}=useDesign()
@@ -97,14 +113,22 @@ function Auth({demo,busy,error,submit,onGoogle,onCancelGoogle,googlePending,onDe
       <Segmented options={['Sign up','Log in']} selected={mode==='signup'?'Sign up':'Log in'} onSelect={value=>setMode(value==='Sign up'?'signup':'login')}/>
       {mode==='signup'&&<View style={row}>{(['student','tech'] as const).map(value=><Pressable key={value} accessibilityRole="radio" accessibilityState={{checked:role===value}} onPress={()=>setRole(value)} style={{flex:1,borderWidth:1,borderColor:role===value?theme.purple:theme.border,borderRadius:15,padding:12,gap:8,backgroundColor:role===value?theme.chip:theme.card}}><Avatar size={32} person={{...me,role:value,initials:value==='student'?'ST':'TC',color:value==='student'?'#FFD9B8':'#CFE8FF'}}/><Copy size={12} weight={800}>{value==='student'?'Student':'Tech creator'}</Copy></Pressable>)}</View>}
       {mode==='signup'&&<View style={{...row,alignItems:'flex-start'}}>
-        <View style={{flex:1,minWidth:0}}><Field label="First name" value={firstName} onChangeText={setFirstName} maxLength={60} autoComplete="given-name"/></View>
-        <View style={{flex:1,minWidth:0}}><Field label="Last name" value={lastName} onChangeText={setLastName} maxLength={60} autoComplete="family-name"/></View>
+        <View style={{flex:1,minWidth:0}}><Field label="First name" value={firstName} onChangeText={value=>setFirstName(capitalizeName(value))} autoCapitalize="words" maxLength={60} autoComplete="given-name"/></View>
+        <View style={{flex:1,minWidth:0}}><Field label="Last name" value={lastName} onChangeText={value=>setLastName(capitalizeName(value))} autoCapitalize="words" maxLength={60} autoComplete="family-name"/></View>
+      </View>}
+      {mode==='signup'&&<View style={{gap:5}}>
+        <Field label="Username" placeholder="e.g. ada_olu" value={username} onChangeText={value=>setUsername(value.toLowerCase())} maxLength={24} autoCapitalize="none" autoCorrect={false} autoComplete="username"/>
+        <View accessibilityLiveRegion="polite">
+          <Copy size={12} color={usernameStatus==='taken'?theme.ink:theme.muted}>
+            {!validUsername(handle)?usernameHint:usernameStatus==='available'?'Username is available.':usernameStatus==='taken'?'That username is taken.':usernameStatus==='error'?'Couldn’t check availability. You can still try signing up.':'Checking availability…'}
+          </Copy>
+        </View>
       </View>}
       <Field label="Email" placeholder="you@example.com" value={email} onChangeText={setEmail} keyboardType="email-address" autoCapitalize="none" autoComplete="email" maxLength={254}/>
       <Field label="Password" placeholder="At least 8 characters" value={password} onChangeText={setPassword} secureTextEntry={!show} autoCapitalize="none" maxLength={128} action={show?'eyeOff':'eye'} actionLabel={show?'Hide password':'Show password'} onAction={()=>setShow(!show)}/>
       {!!error&&<View accessibilityRole="alert"><Copy color={theme.ink}>{error}</Copy></View>}
-      <Button label={busy?'Please wait…':mode==='signup'?'Create account':'Log in to dameeland'} disabled={busy} onPress={()=>submit(mode,{firstName,lastName,email,password,role})}/>
-      <GoogleButton signup={mode==='signup'} disabled={busy} onPress={()=>onGoogle(mode==='signup'?role:'student')}/>
+      <Button label={busy?'Please wait…':mode==='signup'?'Create account':'Log in to dameeland'} disabled={busy||mode==='signup'&&usernameStatus==='taken'} onPress={()=>submit(mode,{firstName,lastName,username:handle,email,password,role})}/>
+      <GoogleButton signup={mode==='signup'} disabled={busy||mode==='signup'&&usernameStatus==='taken'} onPress={()=>onGoogle(mode,mode==='signup'?role:'student',handle)}/>
       {googlePending&&<Button label="Cancel Google sign-in" variant="plain" onPress={onCancelGoogle}/>}
       {demo&&<><Button label="Explore demo" variant="secondary" onPress={onDemo}/><Copy color={theme.muted} center size={12}>Preview accounts reset when you reload.</Copy></>}
     </Motion>
@@ -389,8 +413,10 @@ export default function App(props:Props){
   async function authenticate(mode:'signup'|'login',values:Credentials){
     if(busy)return
     const email=values.email.trim().toLowerCase()
-    const firstName=values.firstName.trim(),lastName=values.lastName.trim()
+    const firstName=capitalizeName(values.firstName.trim()),lastName=capitalizeName(values.lastName.trim())
+    const username=normalizeUsername(values.username)
     if(mode==='signup'&&(!firstName||!lastName)){setError('Enter your first and last name.');return}
+    if(mode==='signup'&&!validUsername(username)){setError(usernameHint);return}
     const name=[firstName,lastName].join(' ')
     if(!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)||values.password.length<8){
       setError('Enter your details and a password with at least 8 characters.');return
@@ -401,11 +427,12 @@ export default function App(props:Props){
         const saved=welcomeAccounts.get(email)
         if(mode==='login'&&(!saved||saved.password!==values.password))throw new Error('Email or password is incorrect.')
         if(mode==='signup'&&saved)throw new Error('An account already uses this email.')
-        const account=saved?.user??{...me,name,initials:initials(name),role:values.role,detail:values.role==='tech'?'Tech creator':'Student'}
+        if(mode==='signup'&&demoUsernameTaken(username))throw new Error('That username is taken.')
+        const account=saved?.user??{...me,name,username,initials:initials(name),role:values.role,detail:values.role==='tech'?'Tech creator':'Student'}
         if(mode==='signup')welcomeAccounts.set(email,{user:account,password:values.password})
         setUser(account)
       }else{
-        const result=await api<Session>(base,'/auth/'+mode,json({...values,email,firstName,lastName}))
+        const result=await api<Session>(base,'/auth/'+mode,json({...values,email,firstName,lastName,username}))
         setToken(result.token);setUser(result.user)
         try{await props.saveToken?.(result.token)}catch{notify('You’re signed in for this session.')}
       }
@@ -413,10 +440,11 @@ export default function App(props:Props){
     }catch(reason){setError(errorMessage(reason))}
     finally{setBusy(false)}
   }
-  async function authenticateWithGoogle(role:Role){
+  async function authenticateWithGoogle(mode:AuthMode,role:Role,username:string){
     if(busy)return
     setError('')
     if(demo||!props.openGoogle){setError('Google sign-in is available in the connected app. Use Explore demo to continue here.');return}
+    if(mode==='signup'&&!validUsername(username)){setError('Choose a username to sign up with Google. '+usernameHint);return}
     setBusy(true)
     const controller=new AbortController()
     googleRequest.current=controller
@@ -425,7 +453,7 @@ export default function App(props:Props){
     try{
       let attempt:GoogleStart|undefined
       googleWindow=await props.openGoogle(async()=>{
-        attempt=await api<GoogleStart>(base,'/google/start',{...json({role}),signal:controller.signal})
+        attempt=await api<GoogleStart>(base,'/google/start',{...json({mode,role,username}),signal:controller.signal})
         return attempt.url
       })
       if(!attempt)throw new Error('Google sign-in could not start.')
@@ -636,7 +664,7 @@ export default function App(props:Props){
       <View style={{height:136,backgroundColor:'#4F25D6'}}>{profile.cover&&<Image accessibilityLabel="Cover photo" source={{uri:profile.cover}} resizeMode="cover" style={{width:'100%',height:'100%'}}/>}</View>
       <View style={{padding:18,paddingTop:0,gap:14}}>
         <View style={{alignSelf:'flex-start',marginTop:-40}}><Avatar person={profile} size={74} ring/></View>
-        <View style={{gap:4}}><Copy size={27} weight={800}>{profile.name}</Copy><Copy color={theme.muted}>{profile.detail}</Copy></View>
+        <View style={{gap:4}}><Copy size={27} weight={800}>{profile.name}</Copy>{profile.username&&<Copy color={theme.ink}>@{profile.username}</Copy>}<Copy color={theme.muted}>{profile.detail}</Copy></View>
         <View style={{...row,gap:22,borderTopWidth:1,borderColor:theme.border,paddingTop:12}}>
           {([{label:'Followers',count:followers},{label:'Following',count:following}]).map(({label,count})=>
             <Pressable key={label} accessibilityRole="button" accessibilityLabel={'View '+label.toLowerCase()+(count===undefined?'':' ('+count+')')} onPress={()=>selectOverlay({kind:'connections',list:label==='Followers'?'followers':'following',person:profile})} style={{gap:2,minWidth:72,minHeight:48}}>
@@ -714,7 +742,7 @@ export default function App(props:Props){
     sheet=<Card><Copy size={23} weight={800}>Ringing</Copy><PersonName person={call.person}/><Copy>Simulated voice call</Copy><Button label={call.incoming?'Accept preview call':'Connect preview call'} onPress={()=>setOverlay({...call,ringing:false})}/><Button label={call.incoming?'Decline call':'Cancel call'} variant="secondary" onPress={modalClose}/></Card>
   }else if(overlay?.kind==='call')sheet=<CallPreview video={overlay.video} person={overlay.person} onClose={modalClose}/>
   return <Design.Provider value={{theme,font,renderIcon:props.renderIcon}}><View style={{flex:1,backgroundColor:theme.bg,width:'100%'}}>
-    {starting||stage==='restore'?<LoadingScreen/>:stage==='intro'?<Intro desktop={desktop} step={step} reduced={reduced} onSkip={()=>setStage('auth')} onNext={()=>step===2?setStage('auth'):setStep(step+1)} onBack={()=>setStep(step-1)}/>:stage==='auth'?<Auth demo={demo} busy={busy} error={error} submit={authenticate} onGoogle={role=>void authenticateWithGoogle(role)} onCancelGoogle={()=>googleRequest.current?.abort()} googlePending={googlePending} onDemo={()=>{setUser(me);setPage('Home');setStage('app')}} reduced={reduced}/>:
+    {starting||stage==='restore'?<LoadingScreen/>:stage==='intro'?<Intro desktop={desktop} step={step} reduced={reduced} onSkip={()=>setStage('auth')} onNext={()=>step===2?setStage('auth'):setStep(step+1)} onBack={()=>setStep(step-1)}/>:stage==='auth'?<Auth base={base} demo={demo} busy={busy} error={error} submit={authenticate} onGoogle={(mode,role,username)=>void authenticateWithGoogle(mode,role,username)} onCancelGoogle={()=>googleRequest.current?.abort()} googlePending={googlePending} onDemo={()=>{setUser(me);setPage('Home');setStage('app')}} reduced={reduced}/>:
       <View style={{flex:1,flexDirection:'row',width:'100%',maxWidth:1360,alignSelf:'center'}}>
         {desktop&&<View style={{width:222,borderRightWidth:1,borderColor:theme.border,padding:18,gap:5,backgroundColor:theme.card}}>
           <View style={{minHeight:64,justifyContent:'center',marginBottom:14}}><Logo size={40}/></View>
