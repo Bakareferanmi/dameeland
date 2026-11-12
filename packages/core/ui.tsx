@@ -1,5 +1,5 @@
-import React,{createContext,useContext,useState} from 'react'
-import {Image,Pressable,Text,TextInput,View,type TextInputProps,type ViewStyle} from 'react-native'
+import React,{createContext,useContext,useEffect,useRef,useState} from 'react'
+import {Animated,Image,Platform,Pressable,Text,TextInput,View,type TextInputProps,type ViewStyle} from 'react-native'
 import {danger,lime,themes,type Person} from './index'
 import {art} from './art'
 import {glyphs,type Glyph,type IconRendererProps} from './icons'
@@ -7,6 +7,7 @@ import {glyphs,type Glyph,type IconRendererProps} from './icons'
 export type {Glyph,IconRendererProps} from './icons'
 export const Design=createContext({
   theme:themes.light,
+  reduced:false,
   font:(weight:number)=>({fontWeight:String(weight) as '500'|'700'|'800'}) as object,
   renderIcon:((_:IconRendererProps)=>null) as React.ComponentType<IconRendererProps>,
 })
@@ -29,15 +30,32 @@ export function ScreenLinks<Page extends string>({items,open}:{items:readonly (r
   </Card>
 }
 
+function usePressScale(disabled=false){
+  const {reduced}=useDesign()
+  const scale=useRef(new Animated.Value(1)).current
+  useEffect(()=>{
+    if(reduced||disabled)scale.setValue(1)
+    return ()=>scale.stopAnimation()
+  },[disabled,reduced,scale])
+  const animate=(toValue:number)=>{
+    if(reduced||disabled)return
+    Animated.timing(scale,{toValue,duration:toValue===1?150:90,useNativeDriver:Platform.OS!=='web',isInteraction:false}).start()
+  }
+  return {scale,onPressIn:()=>animate(.94),onPressOut:()=>animate(1)}
+}
+
 export function Button({label,onPress,variant='primary',disabled=false,leading,trailing}:{label:string;onPress:()=>void;variant?:'primary'|'secondary'|'fun'|'plain'|'danger';disabled?:boolean;leading?:Glyph;trailing?:Glyph}){
   const {theme}=useDesign()
+  const {scale,...press}=usePressScale(disabled)
   const colors={primary:[theme.purple,'#fff'],secondary:[theme.chip,theme.ink],fun:[lime,'#1B1233'],plain:['transparent',theme.text],danger:[danger,'#fff']}
   const [backgroundColor,color]=colors[variant]
-  return <Pressable accessibilityRole="button" accessibilityLabel={label} disabled={disabled} onPress={onPress}
+  return <Pressable accessibilityRole="button" accessibilityLabel={label} disabled={disabled} onPress={onPress} {...press}
     style={({pressed})=>({...row,gap:8,minHeight:46,minWidth:44,paddingHorizontal:17,borderRadius:14,justifyContent:'center',backgroundColor,opacity:disabled?.5:pressed?.75:1})}>
+    <Animated.View style={{...row,gap:8,justifyContent:'center',transform:[{scale}]}}>
     {leading&&<Icon name={leading} size={18} color={color}/>}
     <Copy color={color} weight={800} size={13}>{label}</Copy>
     {trailing&&<Icon name={trailing} size={18} color={color}/>}
+    </Animated.View>
   </Pressable>
 }
 
@@ -116,12 +134,15 @@ export function IconTile({name,color,background,size=38}:{name:Glyph;color?:stri
   </View>
 }
 
-export function IconButton({name,label,onPress,active=false,solid=false,count,size=21}:{name:Glyph;label:string;onPress:()=>void;active?:boolean;solid?:boolean;count?:number;size?:number}){
+export function IconButton({name,label,onPress,active=false,solid=false,count,size=21,tint}:{name:Glyph;label:string;onPress:()=>void;active?:boolean;solid?:boolean;count?:number;size?:number;tint?:string}){
   const {theme}=useDesign()
-  const color=solid?'#fff':active?theme.ink:theme.muted
-  return <Pressable accessibilityRole="button" accessibilityLabel={label} onPress={onPress}
+  const {scale,...press}=usePressScale()
+  const color=tint??(solid?'#fff':active?theme.ink:theme.muted)
+  return <Pressable accessibilityRole="button" accessibilityLabel={label} onPress={onPress} {...press}
     style={({pressed})=>({...row,gap:6,minHeight:44,minWidth:44,paddingHorizontal:9,borderRadius:14,backgroundColor:solid?theme.purple:active?theme.chip:'transparent',justifyContent:'center',opacity:pressed?.68:1})}>
+    <Animated.View style={{...row,gap:6,transform:[{scale}]}}>
     <Icon name={name} color={color} size={size} strong={solid||active}/>
     {count!==undefined&&<Copy color={color} size={12} weight={700}>{count}</Copy>}
+    </Animated.View>
   </Pressable>
 }

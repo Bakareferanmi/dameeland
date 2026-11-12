@@ -1,10 +1,11 @@
-import React,{lazy,Suspense,useEffect,useRef,useState} from 'react'
+import React,{lazy,Suspense,useEffect,useLayoutEffect,useRef,useState} from 'react'
 import {AccessibilityInfo,Animated,Easing,Image,Modal,Platform,Pressable,ScrollView,View,useWindowDimensions,type ViewStyle} from 'react-native'
 import {api,capitalizeName,normalizeUsername,usernameHint,validUsername,initialChats,initialComments,initialPosts,initials,lime,me,people,questions,slides,themes,type FollowListKind,type FollowPage,type FollowStats,type Note,type Person,type Post,type Role,type Theme} from './index'
 import {Avatar,Button,Card,Copy,Design,Field,Icon,IconButton,IconTile,Logo,PersonName,ScreenLinks,Segmented,row,spread,stack,useDesign,type Glyph,type IconRendererProps} from './ui'
 import type {ExtraPage} from './FeatureScreens'
 import {LoadingScreen} from './LoadingScreen'
 import {GoogleButton} from './GoogleButton'
+import {Toast,type ToastMessage} from './Toast'
 
 const FeatureScreen=lazy(()=>import('./FeatureScreens'))
 
@@ -43,15 +44,16 @@ const shortTime=(value:string)=>{
   const minutes=Math.max(0,Math.floor((Date.now()-Date.parse(value))/60000))
   return minutes<1?'Just now':minutes<60?minutes+'m':minutes<1440?Math.floor(minutes/60)+'h':Math.floor(minutes/1440)+'d'
 }
-function Motion({children,reduced,style}:{children:React.ReactNode;reduced:boolean;style?:ViewStyle}){
+function Motion({children,reduced,style,distance=10,axis='y'}:{children:React.ReactNode;reduced:boolean;style?:ViewStyle;distance?:number;axis?:'x'|'y'}){
   const animation=useRef(new Animated.Value(reduced?1:0)).current
   useEffect(()=>{
     if(reduced){animation.setValue(1);return}
-    const motion=Animated.timing(animation,{toValue:1,duration:320,easing:Easing.out(Easing.cubic),useNativeDriver:Platform.OS!=='web'})
+    const motion=Animated.timing(animation,{toValue:1,duration:240,easing:Easing.out(Easing.cubic),useNativeDriver:Platform.OS!=='web',isInteraction:false})
     motion.start()
     return ()=>motion.stop()
   },[animation,reduced])
-  return <Animated.View style={[style,{opacity:animation,transform:[{translateY:animation.interpolate({inputRange:[0,1],outputRange:[10,0]})}]}]}>{children}</Animated.View>
+  const offset=animation.interpolate({inputRange:[0,1],outputRange:[distance,0]})
+  return <Animated.View style={[style,{opacity:animation,transform:[axis==='x'?{translateX:offset}:{translateY:offset}]}]}>{children}</Animated.View>
 }
 function Intro({step,onNext,onBack,onSkip,reduced,desktop}:{step:number;onNext:()=>void;onBack:()=>void;onSkip:()=>void;reduced:boolean;desktop:boolean}){
   const slide=slides[step]
@@ -62,7 +64,7 @@ function Intro({step,onNext,onBack,onSkip,reduced,desktop}:{step:number;onNext:(
         <Logo variant="inverse" size={desktop?48:40}/>
         <Pressable onPress={onSkip} accessibilityRole="button" style={{minHeight:44,justifyContent:'center',paddingHorizontal:16,borderRadius:14,backgroundColor:'#FFFFFF16'}}><Copy color="#fff" weight={800}>Skip</Copy></Pressable>
       </View>
-      <Motion key={step} reduced={reduced} style={{flexGrow:desktop?1:0,flexShrink:0,flexDirection:desktop?'row-reverse':'column',alignItems:desktop?'center':'stretch',justifyContent:'center',gap:desktop?48:16,paddingTop:desktop?12:0}}>
+      <Motion key={step} reduced={reduced} axis="x" distance={14} style={{flexGrow:desktop?1:0,flexShrink:0,flexDirection:desktop?'row-reverse':'column',alignItems:desktop?'center':'stretch',justifyContent:'center',gap:desktop?48:16,paddingTop:desktop?12:0}}>
         <View style={{flex:desktop?1:undefined,minHeight:desktop?330:216,justifyContent:'center',alignItems:'center'}}>
           <View style={{width:'92%',maxWidth:desktop?325:257,backgroundColor:'#fff',borderRadius:22,padding:desktop?22:16,gap:14,transform:[{rotate:slide.tilt}],boxShadow:'0 18px 48px #210A7655'}}>
             <IconTile name={illustration} background="#EEE8FC" color="#4F25D6" size={desktop?45:36}/>
@@ -136,7 +138,7 @@ function Auth({base,demo,busy,error,submit,onGoogle,onCancelGoogle,googlePending
 }
 function StoryRow({onStory,onCreate,seen,own}:{onStory:(p:Person)=>void;onCreate:()=>void;seen:Set<string>;own:Person|null}){
   const {theme}=useDesign()
-  return <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{...row,gap:10,paddingVertical:1}}>
+  return <ScrollView horizontal directionalLockEnabled showsHorizontalScrollIndicator={false} contentContainerStyle={{...row,gap:10,paddingVertical:1}}>
     <Pressable accessibilityRole="button" accessibilityLabel="Your story" onPress={onCreate} style={{width:52,alignItems:'center',gap:7}}>
       {own?<Avatar person={own} size={44} ring seen={seen.has(own.id)}/>:<View style={{width:52,height:52,borderRadius:26,borderWidth:1,borderStyle:'dashed',borderColor:theme.purple,backgroundColor:theme.chip,alignItems:'center',justifyContent:'center'}}><Icon name="plus" color={theme.ink}/></View>}
       <Copy size={10} weight={800}>Your story</Copy>
@@ -256,7 +258,7 @@ export default function App(props:Props){
   const [posts,setPosts]=useState<Post[]>(demo?initialPosts:[])
   const [loading,setLoading]=useState(false),[feedError,setFeedError]=useState(''),[followingOnly,setFollowingOnly]=useState(false)
   const [overlay,setOverlay]=useState<Overlay|null>(null)
-  const [toast,setToast]=useState('')
+  const [toast,setToast]=useState<ToastMessage|null>(null)
   const [seen,setSeen]=useState(new Set<string>())
   const [ownStory,setOwnStory]=useState<{text:string;image?:string;videoPreview?:boolean}|null>(null)
   const [storyMode,setStoryMode]=useState('Text')
@@ -284,22 +286,22 @@ export default function App(props:Props){
   const [notifications,setNotifications]=useState(true)
   const pending=useRef(new Set<string>())
   const scroll=useRef<ScrollView>(null)
-  const toastTimer=useRef<ReturnType<typeof setTimeout>|undefined>(undefined)
+  const scrollOffsets=useRef<Partial<Record<Page,number>>>({})
+  const pendingOffset=useRef<{page:Page;y:number}|null>(null)
+  const stickToChatEnd=useRef(true)
+  const initialChatScroll=useRef(true)
   const replyTimers=useRef<ReturnType<typeof setTimeout>[]>([])
   const demoSession=useRef(0)
   const [retry,setRetry]=useState(0)
   const call=<T,>(path:string,options?:RequestInit)=>api<T>(base,path,options,token)
-  const notify=(value:string)=>{
-    setToast(value)
-    clearTimeout(toastTimer.current)
-    toastTimer.current=setTimeout(()=>setToast(''),3100)
-  }
-  const fail=(reason:unknown)=>notify(errorMessage(reason))
+  const notify=(message:string,tone:ToastMessage['tone']='success')=>setToast({id:uid(),message,tone})
+  const dismissToast=(id:string)=>setToast(current=>current?.id===id?null:current)
+  const fail=(reason:unknown)=>notify(errorMessage(reason),'error')
   useEffect(()=>{
     let alive=true
     AccessibilityInfo.isReduceMotionEnabled?.().then(value=>{if(alive)setReduced(value)})
     const sub=AccessibilityInfo.addEventListener?.('reduceMotionChanged',setReduced)
-    return ()=>{alive=false;sub?.remove();clearTimeout(toastTimer.current);replyTimers.current.forEach(clearTimeout)}
+    return ()=>{alive=false;sub?.remove();replyTimers.current.forEach(clearTimeout)}
   },[])
   useEffect(()=>{
     const timer=setTimeout(()=>setStarting(false),850)
@@ -374,10 +376,24 @@ export default function App(props:Props){
     const timer=setTimeout(()=>setOverlay(null),6500)
     return ()=>clearTimeout(timer)
   },[storyId])
+  const restorePageScroll=()=>{
+    const target=pendingOffset.current
+    if(!target||target.page!==page||page==='Home'&&loading||!scroll.current)return
+    pendingOffset.current=null
+    scroll.current.scrollTo({y:target.y,animated:false})
+  }
+  useLayoutEffect(()=>{
+    if(!pendingOffset.current)return
+    const frame=requestAnimationFrame(restorePageScroll)
+    return ()=>cancelAnimationFrame(frame)
+  },[page,loading,stage])
   const open=(next:Page)=>{
-    if(next!==page)setOrigin(page)
-    setPage(next);setFeedError('')
-    scroll.current?.scrollTo({y:0,animated:false})
+    if(next===page){
+      if(tabs.some(([tab])=>tab===next))scroll.current?.scrollTo({y:0,animated:!reduced})
+      return
+    }
+    pendingOffset.current=tabs.some(([tab])=>tab===next)?{page:next,y:scrollOffsets.current[next]??0}:null
+    setOrigin(page);setPage(next);setFeedError('')
     if(next==='Notifications')setUnread(false)
   }
   const startQuiz=()=>open('Quiz')
@@ -478,6 +494,7 @@ export default function App(props:Props){
       if(!demo){await call('/logout',{method:'POST'});await props.saveToken?.(null)}
       demoSession.current++
       replyTimers.current.forEach(clearTimeout);replyTimers.current=[]
+      scrollOffsets.current={};pendingOffset.current=null;setToast(null)
       setToken('');setUser(me);setPage('Home');setStage('auth');setError('')
       setPosts(demo?initialPosts:[]);setNotes({});setChats(demo?initialChats:{});setFollows({});setProfileStats(null)
       setRooms(demo?localRooms:[]);setRoom(null);setDraft('');setAttachment(null);setComment('');setMessage('');setSeen(new Set());setOwnStory(null);setWishes([]);setLessonComplete(false);setVoicePlaying(false);setQuietMode(false);setFollowingOnly(false)
@@ -557,6 +574,7 @@ export default function App(props:Props){
     }catch(reason){fail(reason)}finally{setBusy(false)}
   }
   function openRoom(next:Room){
+    stickToChatEnd.current=true;initialChatScroll.current=true
     setRoom(next);setMessage('');open('Chat')
   }
   async function messagePerson(person:Person){
@@ -574,12 +592,12 @@ export default function App(props:Props){
     setBusy(true)
     try{
       const item=demo?{id:uid(),author:user,body:message.trim()}:await call<Note>('/rooms/'+id+'/messages',json({body:message}))
+      stickToChatEnd.current=true
       append(item);setMessage('')
       if(demo){
         const session=demoSession.current
         replyTimers.current.push(setTimeout(()=>{if(session===demoSession.current)append({id:uid(),author:room.person,body:'Thanks for the message! See you at school.'})},950))
       }
-      requestAnimationFrame(()=>scroll.current?.scrollToEnd({animated:!reduced}))
     }catch(reason){fail(reason)}finally{setBusy(false)}
   }
   const goBack=()=>open(featureParents[page as ExtraPage]??(page==='Chat'?'Messages':page==='Quiz'?(origin==='Games'?'Games':origin==='Play'?'Play':'Learn'):page==='Settings'?'Profile':'Home'))
@@ -741,7 +759,7 @@ export default function App(props:Props){
     const call=overlay
     sheet=<Card><Copy size={23} weight={800}>Ringing</Copy><PersonName person={call.person}/><Copy>Simulated voice call</Copy><Button label={call.incoming?'Accept preview call':'Connect preview call'} onPress={()=>setOverlay({...call,ringing:false})}/><Button label={call.incoming?'Decline call':'Cancel call'} variant="secondary" onPress={modalClose}/></Card>
   }else if(overlay?.kind==='call')sheet=<CallPreview video={overlay.video} person={overlay.person} onClose={modalClose}/>
-  return <Design.Provider value={{theme,font,renderIcon:props.renderIcon}}><View style={{flex:1,backgroundColor:theme.bg,width:'100%'}}>
+  return <Design.Provider value={{theme,font,reduced,renderIcon:props.renderIcon}}><View style={{flex:1,backgroundColor:theme.bg,width:'100%'}}>
     {starting||stage==='restore'?<LoadingScreen/>:stage==='intro'?<Intro desktop={desktop} step={step} reduced={reduced} onSkip={()=>setStage('auth')} onNext={()=>step===2?setStage('auth'):setStep(step+1)} onBack={()=>setStep(step-1)}/>:stage==='auth'?<Auth base={base} demo={demo} busy={busy} error={error} submit={authenticate} onGoogle={(mode,role,username)=>void authenticateWithGoogle(mode,role,username)} onCancelGoogle={()=>googleRequest.current?.abort()} googlePending={googlePending} onDemo={()=>{setUser(me);setPage('Home');setStage('app')}} reduced={reduced}/>:
       <View style={{flex:1,flexDirection:'row',width:'100%',maxWidth:1360,alignSelf:'center'}}>
         {desktop&&<View style={{width:222,borderRightWidth:1,borderColor:theme.border,padding:18,gap:5,backgroundColor:theme.card}}>
@@ -766,7 +784,19 @@ export default function App(props:Props){
               {!desktop&&<><View><IconButton name="bell" label="Notifications" onPress={()=>open('Notifications')}/>{unread&&<View pointerEvents="none" style={{position:'absolute',right:8,top:7,width:7,height:7,borderRadius:5,backgroundColor:theme.purple}}/>}</View><IconButton name="msg" label="Messages" onPress={()=>open('Messages')}/><Pressable accessibilityRole="button" accessibilityLabel="Your profile" style={{width:44,height:44,alignItems:'center',justifyContent:'center'}} onPress={()=>showProfile(user)}><Avatar person={user} size={31}/></Pressable></>}
             </View>
           </View>
-          <ScrollView ref={scroll} style={{flex:1}} keyboardShouldPersistTaps="handled" contentContainerStyle={{padding:desktop?20:13,gap:16,width:'100%',maxWidth:640,alignSelf:'center'}}><Motion key={page} reduced={reduced} style={stack}>{content[page]??<Suspense fallback={<LoadingScreen compact/>}><FeatureScreen key={page} page={page as ExtraPage} open={open} demo={demo} user={user} startQuiz={startQuiz} completed={lessonComplete} markComplete={()=>setLessonComplete(true)} wish={()=>selectOverlay({kind:'wish'})} wishes={wishes} incomingCall={()=>selectOverlay({kind:'call',video:false,person:people[0],ringing:true,incoming:true})}/></Suspense>}</Motion></ScrollView>
+          <ScrollView key={page==='Chat'?'chat:'+room?.id:page} ref={scroll} testID="main-scroll" style={{flex:1}} keyboardShouldPersistTaps="handled" keyboardDismissMode="on-drag"
+            scrollEventThrottle={64} onScroll={({nativeEvent})=>{
+              const {contentOffset,contentSize,layoutMeasurement}=nativeEvent
+              if(tabs.some(([tab])=>tab===page)&&!pendingOffset.current)scrollOffsets.current[page]=Math.max(0,contentOffset.y)
+              if(page==='Chat'&&!initialChatScroll.current)stickToChatEnd.current=contentSize.height-layoutMeasurement.height-contentOffset.y<80
+            }} onContentSizeChange={()=>{
+              if(page==='Chat'&&stickToChatEnd.current){
+                scroll.current?.scrollToEnd({animated:!initialChatScroll.current&&!reduced})
+                if(room&&(chats[room.id]?.length??0)>0)initialChatScroll.current=false
+              }else restorePageScroll()
+            }}
+            contentContainerStyle={{padding:desktop?20:13,gap:16,width:'100%',maxWidth:640,alignSelf:'center'}}>
+            <Motion key={page} reduced={reduced} style={stack}>{content[page]??<Suspense fallback={<LoadingScreen compact/>}><FeatureScreen key={page} page={page as ExtraPage} open={open} demo={demo} user={user} startQuiz={startQuiz} completed={lessonComplete} markComplete={()=>setLessonComplete(true)} wish={()=>selectOverlay({kind:'wish'})} wishes={wishes} incomingCall={()=>selectOverlay({kind:'call',video:false,person:people[0],ringing:true,incoming:true})}/></Suspense>}</Motion></ScrollView>
           {page==='Chat'&&<View style={{...row,padding:10,borderTopWidth:1,borderColor:theme.border,backgroundColor:theme.card}}><View style={{flex:1}}><Field label="Message" placeholder="Write a message" value={message} onChangeText={setMessage} onSubmitEditing={()=>void send()} maxLength={800}/></View><View style={{alignSelf:'flex-end'}}><Button label="Send" trailing="send" disabled={busy||!message.trim()} onPress={()=>void send()}/></View></View>}
           {!desktop&&tabs.some(([name])=>name===page)&&<View style={{...row,gap:0,justifyContent:'space-around',minHeight:64,paddingHorizontal:6,borderTopWidth:1,borderColor:theme.border,backgroundColor:theme.card}}>{tabs.slice(0,2).map(([name,glyph])=>navButton(name,glyph))}<View style={{width:61,alignItems:'center',marginTop:-13}}><IconButton name="plus" label="Create post" size={26} solid onPress={compose}/></View>{tabs.slice(2).map(([name,glyph])=>navButton(name,glyph))}</View>}
         </View>
@@ -787,14 +817,15 @@ export default function App(props:Props){
           </>}
         </ScrollView>}
       </View>}
-    {!!toast&&<View accessibilityRole="alert" pointerEvents="none" style={{position:'absolute',alignSelf:'center',bottom:76,zIndex:5,backgroundColor:theme.text,borderRadius:999,paddingHorizontal:16,paddingVertical:9,maxWidth:'90%'}}><Copy color={theme.bg} size={13} weight={800}>{toast}</Copy></View>}
+    {toast&&!overlay&&<Toast key={toast.id} item={toast} reduced={reduced} onDismiss={dismissToast} bottom={desktop?24:76}/>}
     <Modal transparent visible={overlay!==null} animationType={reduced?'none':'fade'} onRequestClose={modalClose}>
       <View style={{flex:1,justifyContent:desktop?'center':'flex-end',alignItems:'center',backgroundColor:'#0A0714AA'}}>
         <Pressable accessibilityLabel="Dismiss overlay" onPress={modalClose} style={{position:'absolute',top:0,left:0,right:0,bottom:0}}/>
-        <View style={{width:'100%',maxWidth:desktop?460:phone?390:560,maxHeight:'94%',borderTopLeftRadius:28,borderTopRightRadius:28,borderBottomLeftRadius:desktop?28:0,borderBottomRightRadius:desktop?28:0,backgroundColor:theme.card,padding:17,gap:8}}>
+        <Motion reduced={reduced} distance={desktop?9:24} style={{width:'100%',maxWidth:desktop?460:phone?390:560,maxHeight:'94%',borderTopLeftRadius:28,borderTopRightRadius:28,borderBottomLeftRadius:desktop?28:0,borderBottomRightRadius:desktop?28:0,backgroundColor:theme.card,padding:17,gap:8}}>
           <View style={{...spread}}><View style={{width:40,height:5,borderRadius:5,backgroundColor:theme.border}}/><IconButton name="close" label="Close" onPress={modalClose}/></View>
           <ScrollView keyboardShouldPersistTaps="handled" contentContainerStyle={{gap:12,paddingBottom:8}}>{sheet}</ScrollView>
-        </View>
+        </Motion>
+        {toast&&overlay&&<Toast key={toast.id} item={toast} reduced={reduced} onDismiss={dismissToast} bottom={18}/>}
       </View>
     </Modal>
   </View></Design.Provider>

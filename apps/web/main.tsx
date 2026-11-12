@@ -4,6 +4,7 @@ import {createRoot} from 'react-dom/client'
 import App from '@dameeland/core/app'
 import '@fontsource-variable/plus-jakarta-sans'
 import './shell.css'
+import './interactions.css'
 
 const params=new URLSearchParams(location.search)
 const offline=location.protocol==='file:'||document.documentElement.dataset.preview==='true'

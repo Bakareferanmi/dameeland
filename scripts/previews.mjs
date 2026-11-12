@@ -44,6 +44,7 @@ const fonts=await Promise.all([['500','Medium'],['700','Bold'],['800','ExtraBold
   const bytes=await readFile(`node_modules/@expo-google-fonts/plus-jakarta-sans/${weight}${name}/${family}.ttf`)
   return `@font-face{font-family:${family};src:url(data:font/ttf;base64,${bytes.toString('base64')}) format("truetype");font-display:swap}`
 }))
-const style='<style>'+fonts.join('')+'html,body{height:100%;height:100dvh;margin:0;background:#171027}body{display:grid;place-items:center}#root{width:min(390px,100vw);height:min(844px,100dvh);overflow:hidden;box-shadow:0 24px 90px #08051391}@media(min-width:440px) and (min-height:875px){#root{border-radius:30px}}</style>'
+const interactions=await readFile('apps/web/interactions.css','utf8')
+const style='<style>'+interactions+fonts.join('')+'html,body{height:100%;height:100dvh;margin:0;background:#171027}body{display:grid;place-items:center}#root{width:min(390px,100vw);height:min(844px,100dvh);overflow:hidden;box-shadow:0 24px 90px #08051391}@media(min-width:440px) and (min-height:875px){#root{border-radius:30px}}</style>'
 const mobile=expo.replace('<html lang="en">',licenseComment+'<html lang="en" data-preview="true">').replace('</head>',style+'</head>').replace(script[0],()=>'<script>'+bundle.replace(/<\/script/gi,'<\\/script')+'</script>'+offlineChunks)
 await writeFile(resolve(output,'dameeland-mobile-preview.html'),mobile)
