@@ -19,6 +19,21 @@ const openDemo=async()=>{
   await button('Explore demo').click()
   await visible(text('Finally cracked quadratic equations! Made a one-page cheat sheet for the class.'))
 }
+const checkSystemBack=async()=>{
+  const dialog=page.getByRole('dialog')
+  await button('Comments').first().click()
+  await visible(dialog.getByText('Comments',{exact:true}))
+  await page.goBack()
+  await dialog.waitFor({state:'hidden',timeout:6000})
+
+  await button('Open post details').first().click()
+  await button('Read comments').click()
+  await page.goBack()
+  await visible(dialog.getByText('Post detail',{exact:true}))
+  await page.goBack()
+  await dialog.waitFor({state:'hidden',timeout:6000})
+  await visible(button('Open post details').first())
+}
 const checkModalNavigation=async()=>{
   await button('Open post details').first().click()
   const detail=page.getByRole('dialog')
@@ -57,6 +72,7 @@ try{
   await visible(button('Create account'))
   await button('Explore demo').click()
   await visible(text('Finally cracked quadratic equations! Made a one-page cheat sheet for the class.'))
+  await checkSystemBack()
   await checkModalNavigation()
   await button('Like post').first().click()
   await visible(button('Unlike post'))
@@ -102,6 +118,7 @@ try{
   await page.setViewportSize({width:1280,height:800})
   await button('Home').click()
   await visible(text('Study room'))
+  await checkSystemBack()
   await checkModalNavigation()
   assert.deepEqual(errors,[])
 

@@ -6,6 +6,7 @@ import type {ExtraPage} from './FeatureScreens'
 import {LoadingScreen} from './LoadingScreen'
 import {GoogleButton} from './GoogleButton'
 import AccountRecovery from './AccountRecovery'
+import {useBrowserModalBack} from './useBrowserModalBack'
 import {Toast,type ToastMessage} from './Toast'
 import {Comments,type GifRenderer} from './Comments'
 import type {AdminAccount,AdminOverview,CommentAttachment,Viewer} from './index'
@@ -696,7 +697,15 @@ export default function App(props:Props){
   const displayedPosts=demo&&followingOnly?posts.filter(p=>p.author.id===user.id||follows[p.author.id]):posts
   const displayedPeople=demo?people.map(person=>demoAccounts.find(account=>account.person.id===person.id)?.person??person).filter(p=>(p.name+' '+p.detail).toLowerCase().includes(query.trim().toLowerCase())):results
   const canShare=Boolean(props.share)
-  const modalClose=()=>{setOverlay(overlayHistory.current.pop()??null);clearComment()}
+  const overlayDepth=overlay?overlayHistory.current.length+1:0
+  const closeToDepth=(depth:number)=>{
+    const previous=depth>0?overlayHistory.current[depth-1]:null
+    overlayHistory.current=overlayHistory.current.slice(0,Math.max(0,depth-1))
+    setOverlay(previous??null)
+    clearComment()
+  }
+  const modalClose=()=>closeToDepth(overlayDepth-1)
+  useBrowserModalBack(overlayDepth,closeToDepth)
   const compose=()=>selectOverlay({kind:'create'})
   const section=(title:string)=> <Copy size={19} weight={800}>{title}</Copy>
   const failure=<Empty title="Couldn’t connect" detail={feedError} action="Try again" onPress={()=>setRetry(n=>n+1)}/>
