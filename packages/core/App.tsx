@@ -775,14 +775,6 @@ export default function App(props:Props){
       <Field label={storyMode==='Text'?'What’s your story?':'Caption'} value={comment} onChangeText={setComment} multiline maxLength={240}/>
       <Button label="Share story" disabled={!valid} onPress={()=>{setOwnStory({text:comment.trim(),image:storyMode==='Photo'?storyImage:undefined,videoPreview:storyMode==='Video'});modalClose();notify('Story shared in the preview')}}/>
     </>
-  }else if(overlay?.kind==='story'){
-    const personal=overlay.person.id===user.id?ownStory:null
-    sheet=<View style={{backgroundColor:'#4F25D6',minHeight:275,borderRadius:24,padding:20,gap:14,justifyContent:'space-between'}}>
-      <View style={{height:3,backgroundColor:lime,borderRadius:3}}/><View style={row}><Avatar person={overlay.person} size={40}/><Copy color="#fff" weight={800}>{overlay.person.name}</Copy></View>
-      {personal?.image&&<Image source={{uri:personal.image}} style={{width:'100%',height:170,borderRadius:12}}/>}
-      {personal?.videoPreview&&<View style={row}><IconTile name="vid"/><Copy color="#fff">Video story preview</Copy></View>}
-      <Copy color="#fff" weight={800} size={24}>{personal?.text??(overlay.person.id==='ada'?'Study session after school. Bring your notes!':overlay.person.id==='code'?'Code Club meets on Friday!':'See you at quiz night!')}</Copy>
-    </View>
   }else if(overlay?.kind==='share'){
     sheet=<><Copy size={23} weight={800}>Share post</Copy><Copy>{overlay.post.body||'Image post'}</Copy>{canShare&&<Button label="Share post text" onPress={()=>{void props.share?.(overlay.post.body).then(()=>{modalClose();notify('Post text ready to share')}).catch(fail)}}/>}</>
   }else if(overlay?.kind==='wish'){
@@ -791,6 +783,9 @@ export default function App(props:Props){
     const call=overlay
     sheet=<Card><Copy size={23} weight={800}>Ringing</Copy><PersonName person={call.person}/><Copy>Simulated voice call</Copy><Button label={call.incoming?'Accept preview call':'Connect preview call'} onPress={()=>setOverlay({...call,ringing:false})}/><Button label={call.incoming?'Decline call':'Cancel call'} variant="secondary" onPress={modalClose}/></Card>
   }else if(overlay?.kind==='call')sheet=<CallPreview video={overlay.video} person={overlay.person} onClose={modalClose}/>
+  const story=overlay?.kind==='story'?overlay.person:null
+  const personalStory=story?.id===user.id?ownStory:null
+  const storyText=personalStory?.text??(story?.id==='ada'?'Study session after school. Bring your notes!':story?.id==='code'?'Code Club meets on Friday!':'See you at quiz night!')
   return <Design.Provider value={{theme,font,reduced,renderIcon:props.renderIcon}}><View style={{flex:1,backgroundColor:theme.bg,width:'100%'}}>
     {starting||stage==='restore'?<LoadingScreen/>:stage==='intro'?<Intro desktop={desktop} step={step} reduced={reduced} onSkip={()=>setStage('auth')} onNext={()=>step===2?setStage('auth'):setStep(step+1)} onBack={()=>setStep(step-1)}/>:stage==='auth'?<Auth base={base} demo={demo} busy={busy} error={error} submit={authenticate} onGoogle={(mode,role,username)=>void authenticateWithGoogle(mode,role,username)} onCancelGoogle={()=>googleRequest.current?.abort()} googlePending={googlePending} onDemo={()=>{setUser(me);setPage('Home');setStage('app')}} reduced={reduced}/>:
       <View style={{flex:1,flexDirection:'row',width:'100%',maxWidth:1360,alignSelf:'center'}}>
@@ -851,14 +846,27 @@ export default function App(props:Props){
       </View>}
     {toast&&!overlay&&<Toast key={toast.id} item={toast} reduced={reduced} onDismiss={dismissToast} bottom={desktop?24:76}/>}
     <Modal transparent visible={overlay!==null} animationType={reduced?'none':'fade'} onRequestClose={modalClose}>
-      <View style={{flex:1,justifyContent:desktop?'center':'flex-end',alignItems:'center',backgroundColor:'#0A0714AA'}}>
+      {story?<View accessibilityViewIsModal style={{flex:1,backgroundColor:personalStory?.image?'#120D1F':'#4F25D6',padding:18}}>
+        <View style={{width:'100%',maxWidth:640,alignSelf:'center',flex:1,gap:14}}>
+          <View style={{height:3,backgroundColor:lime,borderRadius:3}}/>
+          <View style={spread}>
+            <View style={{...row,flex:1}}><Avatar person={story} size={40}/><Copy color="#fff" weight={800}>{story.name}</Copy></View>
+            <IconButton name="close" label="Close story" tint="#fff" onPress={modalClose}/>
+          </View>
+          <View style={{flex:1,minHeight:0,justifyContent:'center',gap:16,paddingBottom:16}}>
+            {personalStory?.image&&<Image accessibilityLabel="Story photo" source={{uri:personalStory.image}} resizeMode="contain" style={{width:'100%',flex:1,minHeight:0}}/>}
+            {personalStory?.videoPreview&&<View style={{...row,justifyContent:'center'}}><IconTile name="vid"/><Copy color="#fff">Video story preview</Copy></View>}
+            {!!storyText&&<Copy center color="#fff" weight={800} size={personalStory?.image?18:28}>{storyText}</Copy>}
+          </View>
+        </View>
+      </View>:<View style={{flex:1,justifyContent:desktop?'center':'flex-end',alignItems:'center',backgroundColor:'#0A0714AA'}}>
         <Pressable accessibilityLabel="Dismiss overlay" onPress={modalClose} style={{position:'absolute',top:0,left:0,right:0,bottom:0}}/>
         <Motion reduced={reduced} distance={desktop?9:24} style={{width:'100%',maxWidth:desktop?460:phone?390:560,maxHeight:'94%',borderTopLeftRadius:28,borderTopRightRadius:28,borderBottomLeftRadius:desktop?28:0,borderBottomRightRadius:desktop?28:0,backgroundColor:theme.card,padding:17,gap:8}}>
           <View style={{...spread}}><View style={{width:40,height:5,borderRadius:5,backgroundColor:theme.border}}/><IconButton name="close" label="Close" onPress={modalClose}/></View>
           <ScrollView keyboardShouldPersistTaps="handled" contentContainerStyle={{gap:12,paddingBottom:8}}>{sheet}</ScrollView>
         </Motion>
         {toast&&overlay&&<Toast key={toast.id} item={toast} reduced={reduced} onDismiss={dismissToast} bottom={18}/>}
-      </View>
+      </View>}
     </Modal>
   </View></Design.Provider>
 }
