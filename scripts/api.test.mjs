@@ -160,6 +160,22 @@ test('local Worker persists accounts, social activity, media, and private realti
   assert.deepEqual(Buffer.from(await commentImage.arrayBuffer()),file)
   assert.equal((await request('/feed',{token:tobi.token})).find(item=>item.id===post.id).comments,4)
 
+  if(process.env.TEST_ADMIN_TOKEN){
+    const token=process.env.TEST_ADMIN_TOKEN
+    const current=await request('/admin/overview',{token})
+    const monthly=await request('/admin/overview?days=30',{token})
+    assert.equal(current.series.length,7)
+    assert.equal(monthly.series.length,30)
+    assert.equal(current.series.at(-1).day,new Date(current.updatedAt).toISOString().slice(0,10))
+    assert.ok(current.series.reduce((sum,day)=>sum+day.likes,0)>=1)
+    assert.ok(current.series.reduce((sum,day)=>sum+day.reposts,0)>=1)
+    assert.ok(current.series.reduce((sum,day)=>sum+day.comments,0)>=4)
+    await request(postPath+'/like',{token:tobi.token,method:'PUT',body:{active:false}})
+    const refreshed=await request('/admin/overview',{token})
+    assert.equal(refreshed.likes,current.likes-1)
+    assert.equal(refreshed.series.reduce((sum,day)=>sum+day.likes,0),current.series.reduce((sum,day)=>sum+day.likes,0)-1)
+  }
+
   const room=await request('/rooms',{token:ada.token,method:'POST',body:{target:tobi.user.id}})
   assert.equal((await request('/rooms',{token:tobi.token,method:'POST',body:{target:ada.user.id}})).id,room.id)
   const roomPath='/rooms/'+room.id

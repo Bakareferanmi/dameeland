@@ -750,6 +750,7 @@ export default function App(props:Props){
     <Button label="Log out" variant="danger" onPress={()=>void logout()}/>
   </>
   const demoOverview:AdminOverview={
+    series:[],updatedAt:0,
     users:demoAccounts.length,newUsers:0,activeUsers:new Set(posts.map(post=>post.author.id)).size,
     techUsers:demoAccounts.filter(account=>account.person.role==='tech').length,
     verifiedUsers:demoAccounts.filter(account=>account.person.verified).length,

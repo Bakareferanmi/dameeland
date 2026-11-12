@@ -14,7 +14,9 @@ export type Person = {id:string; name:string; initials:string; role:Role; color:
 export type Viewer = Person & {isAdmin?:boolean}
 export type AdminAccount = {person:Person;email:string;created:number|null;independentlyVerified:boolean}
 export type AdminActivity = {id:string;name:string;kind:'signup'|'post'|'comment';created:number;excerpt?:string}
+export type AdminDay = {day:string;signups:number;posts:number;comments:number;likes:number;reposts:number;messages:number}
 export type AdminOverview = {
+  series:AdminDay[];updatedAt:number;
   users:number;newUsers:number;activeUsers:number;techUsers:number;verifiedUsers:number;
   posts:number;comments:number;likes:number;reposts:number;follows:number;messages:number;
   activity:AdminActivity[];

@@ -3,7 +3,7 @@ import {cors} from 'hono/cors'
 import {bodyLimit} from 'hono/body-limit'
 import {HTTPException} from 'hono/http-exception'
 import {DurableObject} from 'cloudflare:workers'
-import {commentGifs,commentStickers,capitalizeName,initials,normalizeUsername,usernameHint,validUsername,type AdminAccount,type AdminActivity,type AdminOverview,type CommentAttachment,type FollowPage,type FollowStats,type Person,type Role} from '@dameeland/core'
+import {commentGifs,commentStickers,capitalizeName,initials,normalizeUsername,usernameHint,validUsername,type AdminAccount,type AdminActivity,type AdminDay,type AdminOverview,type CommentAttachment,type FollowPage,type FollowStats,type Person,type Role} from '@dameeland/core'
 
 interface Env {DB:D1Database;MEDIA:R2Bucket;ROOMS:DurableObjectNamespace<ChatRoom>;ALLOWED_ORIGIN:string;GOOGLE_CLIENT_ID?:string;GOOGLE_CLIENT_SECRET?:string;GOOGLE_REDIRECT_URI?:string;ADMIN_USER_IDS?:string}
 type Account={id:string;email:string;name:string;role:Role;salt:string;password_hash:string;username?:string|null;verified?:number}
@@ -209,15 +209,21 @@ const adminAccount=(r:AdminUserRow,url:string):AdminAccount=>({
   person:person(r,url),email:r.email,created:r.created,independentlyVerified:Boolean(r.verified),
 })
 app.get('/api/admin/overview',async c=>{
-  const week=now()-7*86400000
+  const updatedAt=now()
+  const dayMs=86400000
+  const days=c.req.query('days')==='30'?30:7
+  const start=Math.floor(updatedAt/dayMs)*dayMs-(days-1)*dayMs
+  const week=updatedAt-7*dayMs
   const db=c.env.DB
-  const [metrics,activity]=await db.batch<AdminActivity|Omit<AdminOverview,'activity'>>([
+  type Metrics=Omit<AdminOverview,'activity'|'series'|'updatedAt'>
+  const [metrics,activity,trend]=await db.batch<AdminActivity|AdminDay|Metrics>([
     db.prepare(`SELECT
       (SELECT COUNT(*) FROM users) users,
       (SELECT COUNT(*) FROM users WHERE created>=?1) newUsers,
       (SELECT COUNT(*) FROM (
         SELECT id FROM users WHERE created>=?1 UNION SELECT author FROM posts WHERE created>=?1
         UNION SELECT author FROM comments WHERE created>=?1 UNION SELECT author FROM messages WHERE created>=?1
+        UNION SELECT user_id FROM reactions WHERE created>=?1
       )) activeUsers,
       (SELECT COUNT(*) FROM users WHERE role='tech') techUsers,
       (SELECT COUNT(*) FROM users WHERE verified=1 OR role='tech') verifiedUsers,
@@ -234,8 +240,23 @@ app.get('/api/admin/overview',async c=>{
         UNION ALL SELECT id,author,'comment',created,substr(body,1,120) FROM comments
       ) activity JOIN users u ON u.id=activity.author
       ORDER BY activity.created DESC,activity.id DESC LIMIT 20`),
+    db.prepare(`SELECT strftime('%Y-%m-%d',created/1000,'unixepoch') day,
+      SUM(kind='signup') signups,SUM(kind='post') posts,SUM(kind='comment') comments,
+      SUM(kind='like') likes,SUM(kind='repost') reposts,SUM(kind='message') messages
+      FROM (
+        SELECT created,'signup' kind FROM users WHERE created>=?1
+        UNION ALL SELECT created,'post' FROM posts WHERE created>=?1
+        UNION ALL SELECT created,'comment' FROM comments WHERE created>=?1
+        UNION ALL SELECT created,kind FROM reactions WHERE created>=?1
+        UNION ALL SELECT created,'message' FROM messages WHERE created>=?1
+      ) GROUP BY day`).bind(start),
   ])
-  return c.json({...metrics.results[0] as Omit<AdminOverview,'activity'>,activity:activity.results as AdminActivity[]})
+  const byDay=new Map((trend.results as AdminDay[]).map(point=>[point.day,point]))
+  const series=Array.from({length:days},(_,index)=>{
+    const day=time(start+index*dayMs).slice(0,10)
+    return byDay.get(day)??{day,signups:0,posts:0,comments:0,likes:0,reposts:0,messages:0}
+  })
+  return c.json({...metrics.results[0] as Metrics,activity:activity.results as AdminActivity[],series,updatedAt})
 })
 app.get('/api/admin/accounts',async c=>{
   const q=clean(c.req.query('q'),100).toLowerCase().replace(/^@/,'')
@@ -338,7 +359,11 @@ app.put('/api/posts/:id/:kind',async c=>{
   if(typeof body?.active!=='boolean') return c.json({error:'Choose a reaction state.'},400)
   const db=c.env.DB
   if(!(await db.prepare('SELECT id FROM posts WHERE id=?').bind(id).first())) return c.json({error:'Post unavailable.'},404)
-  await db.prepare(body.active?'INSERT INTO reactions VALUES (?,?,?) ON CONFLICT DO NOTHING':'DELETE FROM reactions WHERE post_id=? AND user_id=? AND kind=?').bind(id,c.get('user').id,kind).run()
+  const user=c.get('user').id
+  const statement=body.active
+    ?db.prepare('INSERT INTO reactions(post_id,user_id,kind,created) VALUES (?,?,?,?) ON CONFLICT DO NOTHING').bind(id,user,kind,now())
+    :db.prepare('DELETE FROM reactions WHERE post_id=? AND user_id=? AND kind=?').bind(id,user,kind)
+  await statement.run()
   return c.json({ok:true})
 })
 type NoteRow=PublicAccount&{note_id:string;body:string}

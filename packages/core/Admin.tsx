@@ -1,6 +1,7 @@
 import React,{useEffect,useState} from 'react'
-import {ActivityIndicator,View} from 'react-native'
+import {ActivityIndicator,AppState,View} from 'react-native'
 import {api,type AdminAccount,type AdminAccounts,type AdminOverview,type Role} from './index'
+import AdminChart,{sampleAdminSeries} from './AdminChart'
 import {Avatar,Button,Card,Copy,Field,PersonName,Segmented,row,useDesign} from './ui'
 
 const metrics=[
@@ -13,6 +14,9 @@ const message=(error:unknown)=>error instanceof Error?error.message:'Try again i
 
 export default function Admin({base,token,sample,onSampleChange}:{base:string;token:string;sample?:{overview:AdminOverview;accounts:AdminAccount[]};onSampleChange:(id:string,role:Role,verified:boolean)=>void}){
   const {theme}=useDesign()
+  const [days,setDays]=useState(7)
+  const [refreshing,setRefreshing]=useState(false)
+  const [refreshError,setRefreshError]=useState('')
   const [tab,setTab]=useState('Overview')
   const [query,setQuery]=useState(''),[revision,refresh]=useState(0)
   const [overview,setOverview]=useState<AdminOverview>()
@@ -21,16 +25,34 @@ export default function Admin({base,token,sample,onSampleChange}:{base:string;to
   const [error,setError]=useState(''),[saveError,setSaveError]=useState('')
   const [cursor,setCursor]=useState('')
   useEffect(()=>{
-    if(sample)return
+    if(sample||tab!=='Accounts')return
     const controller=new AbortController()
     setLoading(true);setError('')
-    const options={signal:controller.signal}
-    const request=tab==='Overview'
-      ?api<AdminOverview>(base,'/admin/overview',options,token).then(value=>{if(!controller.signal.aborted)setOverview(value)})
-      :api<AdminAccounts>(base,'/admin/accounts?q='+encodeURIComponent(query)+'&cursor='+encodeURIComponent(cursor),options,token).then(value=>{if(!controller.signal.aborted)setDirectory(value)})
-    request.catch(reason=>{if(!controller.signal.aborted)setError(message(reason))}).finally(()=>{if(!controller.signal.aborted)setLoading(false)})
+    api<AdminAccounts>(base,'/admin/accounts?q='+encodeURIComponent(query)+'&cursor='+encodeURIComponent(cursor),{signal:controller.signal},token)
+      .then(value=>{if(!controller.signal.aborted)setDirectory(value)})
+      .catch(reason=>{if(!controller.signal.aborted)setError(message(reason))})
+      .finally(()=>{if(!controller.signal.aborted)setLoading(false)})
     return ()=>controller.abort()
   },[base,cursor,query,revision,sample,tab,token])
+  useEffect(()=>{
+    if(sample||tab!=='Overview')return
+    const controller=new AbortController()
+    let pending=false
+    const load=async()=>{
+      if(pending||controller.signal.aborted)return
+      pending=true
+      setRefreshing(true)
+      try{
+        const value=await api<AdminOverview>(base,'/admin/overview?days='+days,{signal:controller.signal},token)
+        if(!controller.signal.aborted){setOverview(value);setRefreshError('')}
+      }catch(reason){if(!controller.signal.aborted)setRefreshError(message(reason))}
+      finally{pending=false;if(!controller.signal.aborted)setRefreshing(false)}
+    }
+    void load()
+    const timer=setInterval(()=>{if(AppState.currentState==='active'||AppState.currentState===null)void load()},30000)
+    const subscription=AppState.addEventListener('change',state=>{if(state==='active')void load()})
+    return ()=>{controller.abort();clearInterval(timer);subscription.remove()}
+  },[base,days,revision,sample,tab,token])
 
   const data=sample?.overview??overview
   const search=query.trim().toLowerCase().replace(/^@/,'')
@@ -52,9 +74,17 @@ export default function Admin({base,token,sample,onSampleChange}:{base:string;to
     <Segmented options={['Overview','Accounts']} selected={tab} onSelect={value=>{setTab(value);setSaveError('')}}/>
     {tab==='Accounts'&&<Field label="Search accounts" glyph="search" value={query} maxLength={100} onChangeText={value=>{setCursor('');setQuery(value)}}/>}
     {!!saveError&&<View accessibilityRole="alert"><Copy>{saveError}</Copy></View>}
-    {error?<Card><Copy weight={800}>Couldn’t load the dashboard</Copy><Copy color={theme.muted}>{error}</Copy><Button label="Try again" onPress={()=>refresh(value=>value+1)}/></Card>
-      :loading&&!sample?<ActivityIndicator accessibilityLabel="Loading admin data" color={theme.purple}/>
-      :tab==='Overview'&&data?<>
+    {tab==='Accounts'&&error?<Card><Copy weight={800}>Couldn’t load the dashboard</Copy><Copy color={theme.muted}>{error}</Copy><Button label="Try again" onPress={()=>refresh(value=>value+1)}/></Card>
+      :tab==='Accounts'&&loading&&!sample?<ActivityIndicator accessibilityLabel="Loading admin data" color={theme.purple}/>
+      :tab==='Overview'?<>
+        {!sample&&<View style={{...row,justifyContent:'space-between',flexWrap:'wrap'}}>
+          <Copy size={12} color={theme.muted}>{refreshError?(data?'Refresh failed. Showing the last available data.':'Couldn’t load live analytics.'):data?'Updated '+new Date(data.updatedAt).toLocaleTimeString()+' · Refreshes every 30 sec':'Loading live analytics…'}</Copy>
+          <Button label={refreshing?'Refreshing…':'Refresh now'} variant="secondary" disabled={refreshing} onPress={()=>refresh(value=>value+1)}/>
+        </View>}
+        {!!refreshError&&<Copy size={13} color={theme.muted}>{refreshError}</Copy>}
+        {data&&<>
+        <AdminChart series={sample?sampleAdminSeries(data,days):data.series?.length===days?data.series:[]} days={days} onRange={setDays}/>
+
         <View style={{...row,flexWrap:'wrap',alignItems:'stretch'}}>
           {metrics.map(([key,label])=><Card key={key} style={{flexBasis:'44%',flexGrow:1,gap:4,padding:12}}>
             <Copy size={25} weight={800}>{data[key].toLocaleString()}</Copy><Copy size={12} color={theme.muted}>{label}</Copy>
@@ -68,6 +98,7 @@ export default function Admin({base,token,sample,onSampleChange}:{base:string;to
             <Copy size={12} color={theme.muted}>{new Date(item.created).toLocaleString()}</Copy>
           </View>):<Copy color={theme.muted}>No activity yet.</Copy>}
         </Card>
+        </>}
       </>:tab==='Accounts'&&<>
         {accounts?.length?accounts.map(account=><Card key={account.person.id}>
           <View style={row}><Avatar person={account.person}/><View style={{flex:1}}><PersonName person={account.person}/>

@@ -51,6 +51,8 @@ Create a regular account, get its immutable user ID from the authenticated `GET 
 
 Apply D1 migration `0007_admin_accounts.sql` before running the updated API. It returns previously self-selected tech accounts to student status. Admins can reassign the tech role, which grants a verified badge and a rounded-square avatar. Regular accounts can receive an independent badge. The dashboard shows activity totals and recent signups, posts, and comments. It displays only aggregate counts for private messages. Existing accounts without a recorded signup date are included in total users.
 
+Apply migration `0008_reaction_analytics.sql` to enable 7- and 30-day analytics. The overview refreshes every 30 seconds while open. Charts group activity by UTC day. Like and repost charts count currently active reactions by the date they were added. Earlier reactions without timestamps still count in the lifetime totals.
+
 ## Implemented flows
 
 - Three onboarding slides with one post card per slide, signup and login, light/dark/system themes, responsive navigation, profiles, feed, Explore, Messages, Learn, Play and Settings.
