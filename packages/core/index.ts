@@ -11,6 +11,15 @@ export const normalizeUsername = (value:string) => value.trim().toLowerCase()
 export const validUsername = (value:string) => /^[a-z0-9_]{3,24}$/.test(value)
 export const capitalizeName = (value:string) => value.replace(/^(\s*)(\p{L})/u,(_,space:string,letter:string)=>space+letter.toUpperCase())
 export type Person = {id:string; name:string; initials:string; role:Role; color:string; detail:string; verified?:boolean; group?:boolean; avatar?:string; cover?:string; username?:string}
+export type Viewer = Person & {isAdmin?:boolean}
+export type AdminAccount = {person:Person;email:string;created:number|null;independentlyVerified:boolean}
+export type AdminActivity = {id:string;name:string;kind:'signup'|'post'|'comment';created:number;excerpt?:string}
+export type AdminOverview = {
+  users:number;newUsers:number;activeUsers:number;techUsers:number;verifiedUsers:number;
+  posts:number;comments:number;likes:number;reposts:number;follows:number;messages:number;
+  activity:AdminActivity[];
+}
+export type AdminAccounts = {accounts:AdminAccount[];nextCursor:string|null}
 export type FollowListKind = 'followers'|'following'
 export type FollowPage = {people:Person[]; nextCursor:string|null}
 export type FollowStats = {followers:number; following:number; followedByViewer:boolean}

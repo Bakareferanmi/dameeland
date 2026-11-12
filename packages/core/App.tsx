@@ -7,17 +7,18 @@ import {LoadingScreen} from './LoadingScreen'
 import {GoogleButton} from './GoogleButton'
 import {Toast,type ToastMessage} from './Toast'
 import {Comments,type GifRenderer} from './Comments'
-import type {CommentAttachment} from './index'
+import type {AdminAccount,AdminOverview,CommentAttachment,Viewer} from './index'
 
+const Admin=lazy(()=>import('./Admin'))
 const FeatureScreen=lazy(()=>import('./FeatureScreens'))
 
 const sampleFollows:Record<string,string[]>={ada:['tobi','zee'],tobi:['ada','code'],zee:['ada','bello'],bello:['ada'],code:['tobi'],maths:['bello'],squad:['code']}
 
-type Page=ExtraPage|'Home'|'Learn'|'Explore'|'Play'|'Messages'|'Chat'|'Notifications'|'Profile'|'Settings'|'Quiz'
+type Page=ExtraPage|'Home'|'Learn'|'Explore'|'Play'|'Messages'|'Chat'|'Notifications'|'Profile'|'Settings'|'Quiz'|'Admin'
 type Room={id:string;person:Person}
-type Session={token:string;user:Person}
+type Session={token:string;user:Viewer}
 type AuthMode='signup'|'login'
-type Credentials={firstName:string;lastName:string;username:string;email:string;password:string;role:Role}
+type Credentials={firstName:string;lastName:string;username:string;email:string;password:string}
 type GoogleStart={url:string;state:string;exchange:string}
 type GoogleWindow={close:()=>void}
 type Media={name:string;uri:string;data:Blob|{uri:string;name:string;type:string}}
@@ -90,9 +91,8 @@ function Intro({step,onNext,onBack,onSkip,reduced,desktop}:{step:number;onNext:(
     </View>
   </ScrollView>
 }
-function Auth({base,demo,busy,error,submit,onGoogle,onCancelGoogle,googlePending,onDemo,reduced}:{base:string;demo:boolean;busy:boolean;error:string;submit:(mode:'signup'|'login',values:Credentials)=>void;onGoogle:(mode:AuthMode,role:Role,username:string)=>void;onCancelGoogle:()=>void;googlePending:boolean;onDemo:()=>void;reduced:boolean}){
+function Auth({base,demo,busy,error,submit,onGoogle,onCancelGoogle,googlePending,onDemo,reduced}:{base:string;demo:boolean;busy:boolean;error:string;submit:(mode:'signup'|'login',values:Credentials)=>void;onGoogle:(mode:AuthMode,username:string)=>void;onCancelGoogle:()=>void;googlePending:boolean;onDemo:()=>void;reduced:boolean}){
   const [mode,setMode]=useState<'signup'|'login'>('signup')
-  const [role,setRole]=useState<Role>('student')
   const [firstName,setFirstName]=useState(''),[lastName,setLastName]=useState('')
   const [username,setUsername]=useState('')
   const handle=normalizeUsername(username)
@@ -115,7 +115,6 @@ function Auth({base,demo,busy,error,submit,onGoogle,onCancelGoogle,googlePending
     <Motion reduced={reduced} style={{...stack,width:'100%',maxWidth:448,alignSelf:'center'}}>
       <Logo size={40}/>
       <Segmented options={['Sign up','Log in']} selected={mode==='signup'?'Sign up':'Log in'} onSelect={value=>setMode(value==='Sign up'?'signup':'login')}/>
-      {mode==='signup'&&<View style={row}>{(['student','tech'] as const).map(value=><Pressable key={value} accessibilityRole="radio" accessibilityState={{checked:role===value}} onPress={()=>setRole(value)} style={{flex:1,borderWidth:1,borderColor:role===value?theme.purple:theme.border,borderRadius:15,padding:12,gap:8,backgroundColor:role===value?theme.chip:theme.card}}><Avatar size={32} person={{...me,role:value,initials:value==='student'?'ST':'TC',color:value==='student'?'#FFD9B8':'#CFE8FF'}}/><Copy size={12} weight={800}>{value==='student'?'Student':'Tech creator'}</Copy></Pressable>)}</View>}
       {mode==='signup'&&<View style={{...row,alignItems:'flex-start'}}>
         <View style={{flex:1,minWidth:0}}><Field label="First name" value={firstName} onChangeText={value=>setFirstName(capitalizeName(value))} autoCapitalize="words" maxLength={60} autoComplete="given-name"/></View>
         <View style={{flex:1,minWidth:0}}><Field label="Last name" value={lastName} onChangeText={value=>setLastName(capitalizeName(value))} autoCapitalize="words" maxLength={60} autoComplete="family-name"/></View>
@@ -131,8 +130,8 @@ function Auth({base,demo,busy,error,submit,onGoogle,onCancelGoogle,googlePending
       <Field label="Email" placeholder="you@example.com" value={email} onChangeText={setEmail} keyboardType="email-address" autoCapitalize="none" autoComplete="email" maxLength={254}/>
       <Field label="Password" placeholder="At least 8 characters" value={password} onChangeText={setPassword} secureTextEntry={!show} autoCapitalize="none" maxLength={128} action={show?'eyeOff':'eye'} actionLabel={show?'Hide password':'Show password'} onAction={()=>setShow(!show)}/>
       {!!error&&<View accessibilityRole="alert"><Copy color={theme.ink}>{error}</Copy></View>}
-      <Button label={busy?'Please wait…':mode==='signup'?'Create account':'Log in to dameeland'} disabled={busy||mode==='signup'&&usernameStatus==='taken'} onPress={()=>submit(mode,{firstName,lastName,username:handle,email,password,role})}/>
-      <GoogleButton signup={mode==='signup'} disabled={busy||mode==='signup'&&usernameStatus==='taken'} onPress={()=>onGoogle(mode,mode==='signup'?role:'student',handle)}/>
+      <Button label={busy?'Please wait…':mode==='signup'?'Create account':'Log in to dameeland'} disabled={busy||mode==='signup'&&usernameStatus==='taken'} onPress={()=>submit(mode,{firstName,lastName,username:handle,email,password})}/>
+      <GoogleButton signup={mode==='signup'} disabled={busy||mode==='signup'&&usernameStatus==='taken'} onPress={()=>onGoogle(mode,handle)}/>
       {googlePending&&<Button label="Cancel Google sign-in" variant="plain" onPress={onCancelGoogle}/>}
       {demo&&<><Button label="Explore demo" variant="secondary" onPress={onDemo}/><Copy color={theme.muted} center size={12}>Preview accounts reset when you reload.</Copy></>}
     </Motion>
@@ -252,7 +251,7 @@ export default function App(props:Props){
   const [starting,setStarting]=useState(true)
   const [stage,setStage]=useState<'intro'|'auth'|'app'|'restore'>(props.loadToken&&!demo?'restore':'intro')
   const [step,setStep]=useState(0)
-  const [user,setUser]=useState(me),[token,setToken]=useState('')
+  const [user,setUser]=useState<Viewer>(me),[token,setToken]=useState('')
   const [page,setPage]=useState<Page>('Home'),[origin,setOrigin]=useState<Page>('Home')
   const googleRequest=useRef<AbortController|null>(null)
   const [googlePending,setGooglePending]=useState(false)
@@ -262,6 +261,7 @@ export default function App(props:Props){
   const [overlay,setOverlay]=useState<Overlay|null>(null)
   const [toast,setToast]=useState<ToastMessage|null>(null)
   const [seen,setSeen]=useState(new Set<string>())
+  const [demoAccounts,setDemoAccounts]=useState<AdminAccount[]>(()=>people.filter(person=>!person.group).map(person=>({person,email:'',created:null,independentlyVerified:person.role!=='tech'&&!!person.verified})))
   const [ownStory,setOwnStory]=useState<{text:string;image?:string;videoPreview?:boolean}|null>(null)
   const [storyMode,setStoryMode]=useState('Text')
   const [storyImage,setStoryImage]=useState<string>()
@@ -319,7 +319,7 @@ export default function App(props:Props){
       try{
         const stored=await props.loadToken?.()
         if(!stored){if(alive)setStage('intro');return}
-        const account=await api<Person>(base,'/me',{},stored)
+        const account=await api<Viewer>(base,'/me',{},stored)
         if(alive){setToken(stored);setUser(account);setStage('app')}
       }catch{if(alive)setStage('intro')}
     }
@@ -378,7 +378,12 @@ export default function App(props:Props){
   const storyId=overlay?.kind==='story'?overlay.person.id:null
   useEffect(()=>{
     if(!storyId)return
-    const timer=setTimeout(()=>setOverlay(null),6500)
+    const index=storyPeople.findIndex(person=>person.id===storyId)
+    const next=storyPeople[index+1]
+    const timer=setTimeout(()=>{
+      if(next)setSeen(previous=>new Set(previous).add(next.id))
+      setOverlay(current=>current?.kind==='story'&&current.person.id===storyId?(next?{kind:'story',person:next}:null):current)
+    },6500)
     return ()=>clearTimeout(timer)
   },[storyId])
   const restorePageScroll=()=>{
@@ -421,7 +426,7 @@ export default function App(props:Props){
     const timer=setTimeout(()=>setVoicePlaying(false),8000)
     return ()=>clearTimeout(timer)
   },[voicePlaying])
-  const showProfile=(person:Person)=>{setProfile(person);open('Profile')}
+  const showProfile=(person:Person)=>{setProfile(demo?demoAccounts.find(account=>account.person.id===person.id)?.person??person:person);open('Profile')}
   const selectOverlay=(value:Overlay)=>{
     if(value.kind==='newStory'){setStoryMode('Text');setStoryImage(undefined)}
     setOverlay(value)
@@ -449,7 +454,7 @@ export default function App(props:Props){
         if(mode==='login'&&(!saved||saved.password!==values.password))throw new Error('Email or password is incorrect.')
         if(mode==='signup'&&saved)throw new Error('An account already uses this email.')
         if(mode==='signup'&&demoUsernameTaken(username))throw new Error('That username is taken.')
-        const account=saved?.user??{...me,name,username,initials:initials(name),role:values.role,detail:values.role==='tech'?'Tech creator':'Student'}
+        const account=saved?.user??{...me,name,username,initials:initials(name)}
         if(mode==='signup')welcomeAccounts.set(email,{user:account,password:values.password})
         setUser(account)
       }else{
@@ -461,7 +466,7 @@ export default function App(props:Props){
     }catch(reason){setError(errorMessage(reason))}
     finally{setBusy(false)}
   }
-  async function authenticateWithGoogle(mode:AuthMode,role:Role,username:string){
+  async function authenticateWithGoogle(mode:AuthMode,username:string){
     if(busy)return
     setError('')
     if(demo||!props.openGoogle){setError('Google sign-in is available in the connected app. Use Explore demo to continue here.');return}
@@ -474,7 +479,7 @@ export default function App(props:Props){
     try{
       let attempt:GoogleStart|undefined
       googleWindow=await props.openGoogle(async()=>{
-        attempt=await api<GoogleStart>(base,'/google/start',{...json({mode,role,username}),signal:controller.signal})
+        attempt=await api<GoogleStart>(base,'/google/start',{...json({mode,username}),signal:controller.signal})
         return attempt.url
       })
       if(!attempt)throw new Error('Google sign-in could not start.')
@@ -632,9 +637,9 @@ export default function App(props:Props){
       }
     }catch(reason){fail(reason)}finally{setBusy(false)}
   }
-  const goBack=()=>open(featureParents[page as ExtraPage]??(page==='Chat'?'Messages':page==='Quiz'?(origin==='Games'?'Games':origin==='Play'?'Play':'Learn'):page==='Settings'?'Profile':'Home'))
+  const goBack=()=>open(featureParents[page as ExtraPage]??(page==='Chat'?'Messages':page==='Quiz'?(origin==='Games'?'Games':origin==='Play'?'Play':'Learn'):page==='Admin'?'Settings':page==='Settings'?'Profile':'Home'))
   const displayedPosts=demo&&followingOnly?posts.filter(p=>p.author.id===user.id||follows[p.author.id]):posts
-  const displayedPeople=demo?people.filter(p=>(p.name+' '+p.detail).toLowerCase().includes(query.trim().toLowerCase())):results
+  const displayedPeople=demo?people.map(person=>demoAccounts.find(account=>account.person.id===person.id)?.person??person).filter(p=>(p.name+' '+p.detail).toLowerCase().includes(query.trim().toLowerCase())):results
   const canShare=Boolean(props.share)
   const modalClose=()=>{setOverlay(null);clearComment()}
   const compose=()=>selectOverlay({kind:'create'})
@@ -731,7 +736,7 @@ export default function App(props:Props){
         </View>
       </View>
     </Card>
-    {demo&&profile.role==='tech'&&<Card><View style={row}><IconTile name="code"/><View style={{flex:1}}><Copy weight={800}>Tech creator</Copy><Copy size={12} color={theme.muted}>Code Club member</Copy></View></View></Card>}
+    {profile.role==='tech'&&<Card><View style={row}><IconTile name="code"/><View style={{flex:1}}><Copy weight={800}>Tech creator</Copy></View></View></Card>}
     {section('Posts')}
     {posts.filter(p=>p.author.id===profile.id).map(post=><PostCard key={post.id} post={post} onReact={react} onOverlay={selectOverlay} onProfile={showProfile}/>)}
     {!posts.some(p=>p.author.id===profile.id)&&<Empty title="No posts to show" detail="Posts from this profile will appear here."/>}
@@ -741,11 +746,30 @@ export default function App(props:Props){
     <Card>{section('Notifications')}<Button label={notifications?'In-app notifications on':'In-app notifications off'} variant="secondary" onPress={()=>{setNotifications(!notifications);setUnread(!notifications&&demo)}}/></Card>
     {demo&&<Card>{section('Privacy and safety')}<Copy color={theme.muted}>Try the activity status control in this preview.</Copy><Button label={quietMode?'Show my activity status':'Hide my activity status'} variant="secondary" onPress={()=>setQuietMode(!quietMode)}/></Card>}
     {demo&&<ScreenLinks items={ [['Screen states','settings'],['Design system','image'],['Logo board','image']] } open={open}/>}
+    {(demo||user.isAdmin)&&<Button label="Admin dashboard" leading="settings" variant="secondary" onPress={()=>open('Admin')}/>}
     <Button label="Log out" variant="danger" onPress={()=>void logout()}/>
   </>
+  const demoOverview:AdminOverview={
+    users:demoAccounts.length,newUsers:0,activeUsers:new Set(posts.map(post=>post.author.id)).size,
+    techUsers:demoAccounts.filter(account=>account.person.role==='tech').length,
+    verifiedUsers:demoAccounts.filter(account=>account.person.verified).length,
+    posts:posts.length,comments:posts.reduce((sum,post)=>sum+post.comments,0),
+    likes:posts.reduce((sum,post)=>sum+post.likes,0),reposts:posts.reduce((sum,post)=>sum+post.reposts,0),
+    follows:Object.values(follows).filter(Boolean).length,messages:Object.values(chats).reduce((sum,room)=>sum+room.length,0),
+    activity:posts.slice(0,8).map((post,index)=>({id:post.id,name:post.author.name,kind:'post',created:Date.now()-index*3600000,excerpt:post.body})),
+  }
+  function changeDemoAccount(id:string,role:Role,verified:boolean){
+    const existing=demoAccounts.find(account=>account.person.id===id)
+    if(!existing)return
+    const person={...existing.person,role,verified:role==='tech'||verified,detail:role==='tech'?'Tech creator':'Student'}
+    setDemoAccounts(previous=>previous.map(account=>account.person.id===id?{...account,person,independentlyVerified:verified}:account))
+    setPosts(previous=>previous.map(post=>post.author.id===id?{...post,author:person}:post))
+  }
   const content:Partial<Record<Page,React.ReactNode>>={
     Home:home,Explore:explore,Learn:learning,Play:play,Messages:inbox,Chat:chat,Profile:profileContent,Settings:settings,
     Quiz:<Quiz onBack={goBack}/>,
+    Admin:(demo||user.isAdmin)&&<Suspense fallback={<Loading/>}><Admin base={base} token={token}
+      sample={demo?{overview:demoOverview,accounts:demoAccounts}:undefined} onSampleChange={changeDemoAccount}/></Suspense>,
     Notifications:demo&&notifications?<Card><View style={row}><Avatar person={people[1]}/><View style={{flex:1}}><Copy weight={800}>Tobi A. liked your post</Copy><Copy color={theme.muted} size={12}>Today</Copy></View></View><View style={row}><Avatar person={people[4]}/><View style={{flex:1}}><Copy weight={800}>Code Club shared a new post</Copy><Copy color={theme.muted} size={12}>Yesterday</Copy></View></View></Card>:<Empty title="You’re all caught up" detail="New activity will appear here."/>,
   }
   let sheet:React.ReactNode
@@ -783,11 +807,11 @@ export default function App(props:Props){
     const call=overlay
     sheet=<Card><Copy size={23} weight={800}>Ringing</Copy><PersonName person={call.person}/><Copy>Simulated voice call</Copy><Button label={call.incoming?'Accept preview call':'Connect preview call'} onPress={()=>setOverlay({...call,ringing:false})}/><Button label={call.incoming?'Decline call':'Cancel call'} variant="secondary" onPress={modalClose}/></Card>
   }else if(overlay?.kind==='call')sheet=<CallPreview video={overlay.video} person={overlay.person} onClose={modalClose}/>
-  const story=overlay?.kind==='story'?overlay.person:null
+  const story=overlay?.kind==='story'?(demoAccounts.find(account=>account.person.id===overlay.person.id)?.person??overlay.person):null
   const personalStory=story?.id===user.id?ownStory:null
   const storyText=personalStory?.text??(story?.id==='ada'?'Study session after school. Bring your notes!':story?.id==='code'?'Code Club meets on Friday!':'See you at quiz night!')
   return <Design.Provider value={{theme,font,reduced,renderIcon:props.renderIcon}}><View style={{flex:1,backgroundColor:theme.bg,width:'100%'}}>
-    {starting||stage==='restore'?<LoadingScreen/>:stage==='intro'?<Intro desktop={desktop} step={step} reduced={reduced} onSkip={()=>setStage('auth')} onNext={()=>step===2?setStage('auth'):setStep(step+1)} onBack={()=>setStep(step-1)}/>:stage==='auth'?<Auth base={base} demo={demo} busy={busy} error={error} submit={authenticate} onGoogle={(mode,role,username)=>void authenticateWithGoogle(mode,role,username)} onCancelGoogle={()=>googleRequest.current?.abort()} googlePending={googlePending} onDemo={()=>{setUser(me);setPage('Home');setStage('app')}} reduced={reduced}/>:
+    {starting||stage==='restore'?<LoadingScreen/>:stage==='intro'?<Intro desktop={desktop} step={step} reduced={reduced} onSkip={()=>setStage('auth')} onNext={()=>step===2?setStage('auth'):setStep(step+1)} onBack={()=>setStep(step-1)}/>:stage==='auth'?<Auth base={base} demo={demo} busy={busy} error={error} submit={authenticate} onGoogle={(mode,username)=>void authenticateWithGoogle(mode,username)} onCancelGoogle={()=>googleRequest.current?.abort()} googlePending={googlePending} onDemo={()=>{setUser(me);setPage('Home');setStage('app')}} reduced={reduced}/>:
       <View style={{flex:1,flexDirection:'row',width:'100%',maxWidth:1360,alignSelf:'center'}}>
         {desktop&&<View style={{width:222,borderRightWidth:1,borderColor:theme.border,padding:18,gap:5,backgroundColor:theme.card}}>
           <View style={{minHeight:64,justifyContent:'center',marginBottom:14}}><Logo size={40}/></View>

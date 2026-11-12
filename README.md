@@ -45,6 +45,12 @@ Scan the Metro QR code using Expo Go for SDK 58 on a phone connected to the same
 
 Expo starts in demo mode by default. To connect a simulator or physical device to the local API, set `EXPO_PUBLIC_API_URL` in `apps/mobile/.env.local`. Use `http://localhost:8787` for iOS Simulator or `http://10.0.2.2:8787` for the standard Android emulator. For a physical device, use the development machine's LAN address and start Wrangler with `npm -w @dameeland/api run dev -- --ip 0.0.0.0` on a trusted local network.
 
+## Admin access
+
+Create a regular account, get its immutable user ID from the authenticated `GET /api/me` response, then set `ADMIN_USER_IDS` on the Worker to that ID. Separate multiple IDs with commas. For local development, set it in `apps/api/.dev.vars`. Reopen the app after changing the allowlist and go to **Profile → Settings → Admin dashboard**.
+
+Apply D1 migration `0007_admin_accounts.sql` before running the updated API. It returns previously self-selected tech accounts to student status. Admins can reassign the tech role, which grants a verified badge and a rounded-square avatar. Regular accounts can receive an independent badge. The dashboard shows activity totals and recent signups, posts, and comments. It displays only aggregate counts for private messages. Existing accounts without a recorded signup date are included in total users.
+
 ## Implemented flows
 
 - Three onboarding slides with one post card per slide, signup and login, light/dark/system themes, responsive navigation, profiles, feed, Explore, Messages, Learn, Play and Settings.

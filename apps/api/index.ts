@@ -3,11 +3,11 @@ import {cors} from 'hono/cors'
 import {bodyLimit} from 'hono/body-limit'
 import {HTTPException} from 'hono/http-exception'
 import {DurableObject} from 'cloudflare:workers'
-import {commentGifs,commentStickers,capitalizeName,initials,normalizeUsername,usernameHint,validUsername,type CommentAttachment,type FollowPage,type FollowStats,type Person,type Role} from '@dameeland/core'
+import {commentGifs,commentStickers,capitalizeName,initials,normalizeUsername,usernameHint,validUsername,type AdminAccount,type AdminActivity,type AdminOverview,type CommentAttachment,type FollowPage,type FollowStats,type Person,type Role} from '@dameeland/core'
 
-interface Env {DB:D1Database;MEDIA:R2Bucket;ROOMS:DurableObjectNamespace<ChatRoom>;ALLOWED_ORIGIN:string;GOOGLE_CLIENT_ID?:string;GOOGLE_CLIENT_SECRET?:string;GOOGLE_REDIRECT_URI?:string}
-type Account={id:string;email:string;name:string;role:Role;salt:string;password_hash:string;username?:string|null}
-type PublicAccount=Pick<Account,'id'|'name'|'role'|'username'> & {avatar_media?:string|null;cover_media?:string|null}
+interface Env {DB:D1Database;MEDIA:R2Bucket;ROOMS:DurableObjectNamespace<ChatRoom>;ALLOWED_ORIGIN:string;GOOGLE_CLIENT_ID?:string;GOOGLE_CLIENT_SECRET?:string;GOOGLE_REDIRECT_URI?:string;ADMIN_USER_IDS?:string}
+type Account={id:string;email:string;name:string;role:Role;salt:string;password_hash:string;username?:string|null;verified?:number}
+type PublicAccount=Pick<Account,'id'|'name'|'role'|'username'|'verified'> & {avatar_media?:string|null;cover_media?:string|null}
 type App={Bindings:Env;Variables:{user:PublicAccount;tokenHash:string}}
 const app=new Hono<App>()
 const encoder=new TextEncoder()
@@ -16,15 +16,17 @@ const hash=async(value:string)=>hex(await crypto.subtle.digest('SHA-256',encoder
 const random=(size:number)=>hex(crypto.getRandomValues(new Uint8Array(size)))
 const clean=(value:unknown,max:number)=>typeof value==='string'?value.trim().slice(0,max):''
 const mediaUrl=(key:string,url:string)=>new URL('/api/media/'+key,url).href
-const person=(user:PublicAccount,url:string):Person=>({id:user.id,name:user.name,username:user.username??undefined,initials:initials(user.name),role:user.role,color:user.role==='tech'?'#CFE8FF':'#FFD9B8',detail:user.role==='tech'?'Tech creator':'Student',avatar:user.avatar_media?mediaUrl(user.avatar_media,url):undefined,cover:user.cover_media?mediaUrl(user.cover_media,url):undefined})
+const person=(user:PublicAccount,url:string):Person=>({id:user.id,name:user.name,username:user.username??undefined,initials:initials(user.name),role:user.role,color:user.role==='tech'?'#CFE8FF':'#FFD9B8',detail:user.role==='tech'?'Tech creator':'Student',verified:user.role==='tech'||Boolean(user.verified),avatar:user.avatar_media?mediaUrl(user.avatar_media,url):undefined,cover:user.cover_media?mediaUrl(user.cover_media,url):undefined})
 const readBody=async(request:Request)=>request.json<Record<string,unknown>>().catch(()=>null)
 const time=(date:number)=>new Date(date).toISOString()
 const now=()=>Date.now()
 const base64Url=(bytes:ArrayBuffer)=>btoa(String.fromCharCode(...new Uint8Array(bytes))).replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,'')
-async function session(db:D1Database,account:PublicAccount,url:string){
+const isAdmin=(env:Env,id:string)=>env.ADMIN_USER_IDS?.split(',').some(value=>value.trim()===id)??false
+const viewer=(env:Env,account:PublicAccount,url:string)=>({...person(account,url),isAdmin:isAdmin(env,account.id)})
+async function session(env:Env,account:PublicAccount,url:string){
   const token=random(32)
-  await db.prepare('INSERT INTO sessions VALUES (?,?,?)').bind(await hash(token),account.id,now()+7*86400000).run()
-  return {token,user:person(account,url)}
+  await env.DB.prepare('INSERT INTO sessions VALUES (?,?,?)').bind(await hash(token),account.id,now()+7*86400000).run()
+  return {token,user:viewer(env,account,url)}
 }
 
 async function passwordHash(password:string,salt:string){
@@ -77,7 +79,7 @@ app.post('/api/auth/:action',async c=>{
   if(action==='signup'){
     if(account) return c.json({error:'An account already uses this email.'},409)
     const salt=random(16)
-    const role:Role=body?.role==='tech'?'tech':'student'
+    const role='student' as const
     account={id:crypto.randomUUID(),email,name,role,salt,username,password_hash:await passwordHash(password,salt)}
     const write=await db.prepare('INSERT INTO users(id,email,name,role,salt,password_hash,first_name,last_name,username) VALUES (?,?,?,?,?,?,?,?,?) ON CONFLICT DO NOTHING').bind(account.id,email,name,role,salt,account.password_hash,firstName,lastName,username).run()
     if(!write.meta.changes){
@@ -88,10 +90,10 @@ app.post('/api/auth/:action',async c=>{
     const candidate=await passwordHash(password,account?.salt??'8d039d76714da531')
     if(!account||!equal(candidate,account.password_hash)) return c.json({error:'Email or password is incorrect.'},401)
   }
-  return c.json(await session(db,account,c.req.url),action==='signup'?201:200)
+  return c.json(await session(c.env,account,c.req.url),action==='signup'?201:200)
 })
 
-type GoogleAttempt={username:string|null;verifier:string;role:Role;status:string;user_id:string|null;error:string|null}
+type GoogleAttempt={username:string|null;verifier:string;status:string;user_id:string|null;error:string|null}
 app.post('/api/google/start',async c=>{
   const {DB,GOOGLE_CLIENT_ID,GOOGLE_CLIENT_SECRET,GOOGLE_REDIRECT_URI}=c.env
   if(!GOOGLE_CLIENT_ID||!GOOGLE_CLIENT_SECRET||!GOOGLE_REDIRECT_URI)return c.json({error:'Google sign-in is not configured.'},503)
@@ -100,13 +102,12 @@ app.post('/api/google/start',async c=>{
   const username=body?.mode==='signup'?usernameOf(body.username):null
   if(username!==null&&!validUsername(username))return c.json({error:usernameHint},400)
   if(username&&await usernameTaken(DB,username))return c.json({error:'That username is taken.'},409)
-  const role=body?.role==='tech'?'tech':'student'
   const state=random(24),exchange=random(32),verifier=random(48)
   const challenge=base64Url(await crypto.subtle.digest('SHA-256',encoder.encode(verifier)))
   await DB.batch([
     DB.prepare('DELETE FROM google_attempts WHERE expires<=?').bind(now()),
     DB.prepare('DELETE FROM auth_limits WHERE expires<?').bind(now()),
-    DB.prepare('INSERT INTO google_attempts(state,exchange_hash,verifier,role,expires,username) VALUES (?,?,?,?,?,?)').bind(state,await hash(exchange),verifier,role,now()+180000,username),
+    DB.prepare('INSERT INTO google_attempts(state,exchange_hash,verifier,role,expires,username) VALUES (?,?,?,?,?,?)').bind(state,await hash(exchange),verifier,'student',now()+180000,username),
   ])
   const url=new URL('https://accounts.google.com/o/oauth2/v2/auth')
   url.search=new URLSearchParams({client_id:GOOGLE_CLIENT_ID,redirect_uri:GOOGLE_REDIRECT_URI,response_type:'code',scope:'openid email profile',state,code_challenge:challenge,code_challenge_method:'S256',prompt:'select_account'}).toString()
@@ -122,7 +123,7 @@ app.get('/api/google/callback',async c=>{
     ?'<title>dameeland</title><p>Google sign-in completed. Return to dameeland to continue.</p>'
     :'<title>dameeland</title><p>Google sign-in did not complete. Return to dameeland for details.</p>',ok?200:400)
   if(!/^[a-f0-9]{48}$/.test(state)||!GOOGLE_CLIENT_ID||!GOOGLE_CLIENT_SECRET||!GOOGLE_REDIRECT_URI)return complete(false)
-  const attempt=await DB.prepare("UPDATE google_attempts SET status='processing' WHERE state=? AND status='pending' AND expires>? RETURNING verifier,role,username").bind(state,now()).first<GoogleAttempt>()
+  const attempt=await DB.prepare("UPDATE google_attempts SET status='processing' WHERE state=? AND status='pending' AND expires>? RETURNING verifier,username").bind(state,now()).first<GoogleAttempt>()
   if(!attempt)return complete(false)
   const fail=async(error:string)=>{
     await DB.prepare("UPDATE google_attempts SET status='error',error=? WHERE state=?").bind(error,state).run()
@@ -148,7 +149,7 @@ app.get('/api/google/callback',async c=>{
       const first=capitalizeName(clean(info.given_name,60)),last=capitalizeName(clean(info.family_name,60))
       if(!first||!last)return fail('Add a first and last name to your Google profile or sign up with email.')
       await DB.prepare('INSERT INTO users(id,email,name,role,salt,password_hash,first_name,last_name,google_sub,username) VALUES (?,?,?,?,?,?,?,?,?,?) ON CONFLICT DO NOTHING')
-        .bind(crypto.randomUUID(),email,first+' '+last,attempt.role,random(16),random(32),first,last,sub,attempt.username).run()
+        .bind(crypto.randomUUID(),email,first+' '+last,'student',random(16),random(32),first,last,sub,attempt.username).run()
       account=await DB.prepare('SELECT id FROM users WHERE google_sub=?').bind(sub).first<{id:string}>()
       if(!account){
         if(await usernameTaken(DB,attempt.username))return fail('That username is taken. Choose another and try again.')
@@ -172,9 +173,9 @@ app.post('/api/google/exchange',async c=>{
   if(attempt.status!=='complete')return c.json({pending:true},202)
   const claimed=await DB.prepare("DELETE FROM google_attempts WHERE state=? AND exchange_hash=? AND status='complete' AND expires>? RETURNING user_id").bind(state,key,now()).first<{user_id:string}>()
   if(!claimed)return c.json({error:'Google sign-in expired. Please try again.'},410)
-  const account=await DB.prepare('SELECT id,name,role,username,avatar_media,cover_media FROM users WHERE id=?').bind(claimed.user_id).first<PublicAccount>()
+  const account=await DB.prepare('SELECT id,name,role,username,verified,avatar_media,cover_media FROM users WHERE id=?').bind(claimed.user_id).first<PublicAccount>()
   if(!account)return c.json({error:'Account unavailable.'},404)
-  return c.json(await session(DB,account,c.req.url))
+  return c.json(await session(c.env,account,c.req.url))
 })
 app.get('/api/media/:id',async c=>{
   const id=c.req.param('id')
@@ -192,12 +193,70 @@ app.use('/api/*',async(c,next)=>{
   const token=header?.match(/^Bearer ([a-f0-9]{64})$/)?.[1]??ticket
   if(!token||!/^[a-f0-9]{64}$/.test(token)) return c.json({error:'Log in to continue.'},401)
   const tokenHash=await hash(token)
-  const user=await c.env.DB.prepare('SELECT u.id,u.name,u.role,u.username,u.avatar_media,u.cover_media FROM users u JOIN sessions s ON s.user_id=u.id WHERE s.token_hash=? AND s.expires>?').bind(tokenHash,now()).first<PublicAccount>()
+  const user=await c.env.DB.prepare('SELECT u.id,u.name,u.role,u.username,u.verified,u.avatar_media,u.cover_media FROM users u JOIN sessions s ON s.user_id=u.id WHERE s.token_hash=? AND s.expires>?').bind(tokenHash,now()).first<PublicAccount>()
   if(!user) return c.json({error:'Your session has expired. Log in again.'},401)
   c.set('user',user);c.set('tokenHash',tokenHash)
   await next()
 })
-app.get('/api/me',c=>c.json(person(c.get('user'),c.req.url)))
+app.get('/api/me',c=>c.json(viewer(c.env,c.get('user'),c.req.url)))
+app.use('/api/admin/*',async(c,next)=>{
+  if(!isAdmin(c.env,c.get('user').id))return c.json({error:'Admin access is required.'},403)
+  c.header('Cache-Control','no-store')
+  await next()
+})
+type AdminUserRow=PublicAccount&{email:string;created:number|null}
+const adminAccount=(r:AdminUserRow,url:string):AdminAccount=>({
+  person:person(r,url),email:r.email,created:r.created,independentlyVerified:Boolean(r.verified),
+})
+app.get('/api/admin/overview',async c=>{
+  const week=now()-7*86400000
+  const db=c.env.DB
+  const [metrics,activity]=await db.batch<AdminActivity|Omit<AdminOverview,'activity'>>([
+    db.prepare(`SELECT
+      (SELECT COUNT(*) FROM users) users,
+      (SELECT COUNT(*) FROM users WHERE created>=?1) newUsers,
+      (SELECT COUNT(*) FROM (
+        SELECT id FROM users WHERE created>=?1 UNION SELECT author FROM posts WHERE created>=?1
+        UNION SELECT author FROM comments WHERE created>=?1 UNION SELECT author FROM messages WHERE created>=?1
+      )) activeUsers,
+      (SELECT COUNT(*) FROM users WHERE role='tech') techUsers,
+      (SELECT COUNT(*) FROM users WHERE verified=1 OR role='tech') verifiedUsers,
+      (SELECT COUNT(*) FROM posts) posts,
+      (SELECT COUNT(*) FROM comments) comments,
+      (SELECT COUNT(*) FROM reactions WHERE kind='like') likes,
+      (SELECT COUNT(*) FROM reactions WHERE kind='repost') reposts,
+      (SELECT COUNT(*) FROM follows) follows,
+      (SELECT COUNT(*) FROM messages) messages`).bind(week),
+    db.prepare(`SELECT activity.id,u.name,activity.kind,activity.created,activity.excerpt
+      FROM (
+        SELECT id,id author,'signup' kind,created,NULL excerpt FROM users WHERE created IS NOT NULL
+        UNION ALL SELECT id,author,'post',created,substr(body,1,120) FROM posts
+        UNION ALL SELECT id,author,'comment',created,substr(body,1,120) FROM comments
+      ) activity JOIN users u ON u.id=activity.author
+      ORDER BY activity.created DESC,activity.id DESC LIMIT 20`),
+  ])
+  return c.json({...metrics.results[0] as Omit<AdminOverview,'activity'>,activity:activity.results as AdminActivity[]})
+})
+app.get('/api/admin/accounts',async c=>{
+  const q=clean(c.req.query('q'),100).toLowerCase().replace(/^@/,'')
+  const cursor=clean(c.req.query('cursor'),64)
+  const {results}=await c.env.DB.prepare(`
+    SELECT id,name,email,role,username,verified,avatar_media,cover_media,created FROM users
+    WHERE id>? AND (instr(lower(name),?)>0 OR instr(username,?)>0 OR instr(email,?)>0)
+    ORDER BY id LIMIT 26
+  `).bind(cursor,q,q,q).all<AdminUserRow>()
+  return c.json({accounts:results.slice(0,25).map(r=>adminAccount(r,c.req.url)),nextCursor:results.length>25?results[24].id:null})
+})
+app.put('/api/admin/accounts/:id',async c=>{
+  const payload=await readBody(c.req.raw)
+  if(payload?.role!=='student'&&payload?.role!=='tech'||typeof payload?.verified!=='boolean')return c.json({error:'Choose a valid role and verification status.'},400)
+  const account=await c.env.DB.prepare(`
+    UPDATE users SET role=?,verified=? WHERE id=?
+    RETURNING id,name,email,role,username,verified,avatar_media,cover_media,created
+  `).bind(payload.role,Number(payload.verified),c.req.param('id')).first<AdminUserRow>()
+  if(!account)return c.json({error:'Account unavailable.'},404)
+  return c.json(adminAccount(account,c.req.url))
+})
 async function imageType(file:File){
   if(!file.size||file.size>5*1024*1024)return null
   const head=new Uint8Array(await file.slice(0,12).arrayBuffer())
@@ -220,13 +279,13 @@ app.put('/api/me/photos/:kind',async c=>{
   try{
     const [previous,updated]=await DB.batch<PublicAccount>([
       DB.prepare('SELECT avatar_media,cover_media FROM users WHERE id=?').bind(user.id),
-      DB.prepare(`UPDATE users SET ${column}=? WHERE id=? RETURNING id,name,role,username,avatar_media,cover_media`).bind(key,user.id),
+      DB.prepare(`UPDATE users SET ${column}=? WHERE id=? RETURNING id,name,role,username,verified,avatar_media,cover_media`).bind(key,user.id),
     ])
     const account=updated.results[0]
     if(!account)throw new Error('Profile unavailable.')
     const old=previous.results[0]?.[column]
     if(old)c.executionCtx.waitUntil(MEDIA.delete(old).catch(()=>{}))
-    return c.json(person(account,c.req.url))
+    return c.json(viewer(c.env,account,c.req.url))
   }catch(error){await MEDIA.delete(key);throw error}
 })
 app.post('/api/logout',async c=>{
@@ -238,7 +297,7 @@ app.get('/api/feed',async c=>{
   const id=c.get('user').id
   const following=c.req.query('following')==='1'
   const {results}=await c.env.DB.prepare(`
-    SELECT u.id,u.name,u.role,u.username,u.avatar_media,u.cover_media,p.id post_id,p.body,p.created,p.media,
+    SELECT u.id,u.name,u.role,u.username,u.verified,u.avatar_media,u.cover_media,p.id post_id,p.body,p.created,p.media,
     (SELECT COUNT(*) FROM reactions r WHERE r.post_id=p.id AND kind='like') likes,
     EXISTS(SELECT 1 FROM reactions r WHERE r.post_id=p.id AND r.user_id=? AND kind='like') liked,
     (SELECT COUNT(*) FROM comments x WHERE x.post_id=p.id) comments,
@@ -292,7 +351,7 @@ function commentAttachment(row:Pick<CommentRow,'media'|'gif'|'sticker'>,url:stri
 }
 app.get('/api/posts/:id/comments',async c=>{
   const {results}=await c.env.DB.prepare(`
-    SELECT u.id,u.name,u.role,u.username,u.avatar_media,u.cover_media,x.id note_id,x.body,x.media,x.gif,x.sticker
+    SELECT u.id,u.name,u.role,u.username,u.verified,u.avatar_media,u.cover_media,x.id note_id,x.body,x.media,x.gif,x.sticker
     FROM comments x JOIN users u ON u.id=x.author WHERE post_id=? ORDER BY x.created LIMIT 100
   `).bind(c.req.param('id')).all<CommentRow>()
   return c.json(results.map(r=>({...note(r,c.req.url),attachment:commentAttachment(r,c.req.url)})))
@@ -333,7 +392,7 @@ app.post('/api/posts/:id/comments',async c=>{
 app.get('/api/people',async c=>{
   const user=c.get('user').id
   const q=clean(c.req.query('q'),60).toLowerCase()
-  const {results}=await c.env.DB.prepare('SELECT id,name,role,username,avatar_media,cover_media,EXISTS(SELECT 1 FROM follows WHERE follower=? AND target=u.id) following FROM users u WHERE id!=? AND (instr(lower(name),?)>0 OR instr(username,?)>0) ORDER BY name LIMIT 30').bind(user,user,q,q.replace(/^@/,'')||q).all<PublicAccount&{following:number}>()
+  const {results}=await c.env.DB.prepare('SELECT id,name,role,username,verified,avatar_media,cover_media,EXISTS(SELECT 1 FROM follows WHERE follower=? AND target=u.id) following FROM users u WHERE id!=? AND (instr(lower(name),?)>0 OR instr(username,?)>0) ORDER BY name LIMIT 30').bind(user,user,q,q.replace(/^@/,'')||q).all<PublicAccount&{following:number}>()
   return c.json(results.map(r=>({...person(r,c.req.url),following:Boolean(r.following)})))
 })
 app.get('/api/people/:id/follow-stats',async c=>{
@@ -356,7 +415,7 @@ app.get('/api/people/:id/connections/:kind',async c=>{
   const source=kind==='followers'?'target':'follower'
   const destination=kind==='followers'?'follower':'target'
   const {results}=await db.prepare(`
-    SELECT u.id,u.name,u.role,u.username,u.avatar_media,u.cover_media FROM follows f
+    SELECT u.id,u.name,u.role,u.username,u.verified,u.avatar_media,u.cover_media FROM follows f
     JOIN users u ON u.id=f.${destination}
     WHERE f.${source}=? AND f.${destination}>? ORDER BY f.${destination} LIMIT 31
   `).bind(id,cursor).all<PublicAccount>()
@@ -376,7 +435,7 @@ app.put('/api/people/:id/follow',async c=>{
 const member=(db:D1Database,room:string,user:string)=>db.prepare('SELECT id FROM rooms WHERE id=? AND (first_user=? OR second_user=?)').bind(room,user,user).first()
 app.get('/api/rooms',async c=>{
   const user=c.get('user').id
-  const {results}=await c.env.DB.prepare('SELECT r.id room,u.id,u.name,u.role,u.username,u.avatar_media,u.cover_media FROM rooms r JOIN users u ON u.id=CASE WHEN first_user=? THEN second_user ELSE first_user END WHERE first_user=? OR second_user=? LIMIT 60').bind(user,user,user).all<PublicAccount&{room:string}>()
+  const {results}=await c.env.DB.prepare('SELECT r.id room,u.id,u.name,u.role,u.username,u.verified,u.avatar_media,u.cover_media FROM rooms r JOIN users u ON u.id=CASE WHEN first_user=? THEN second_user ELSE first_user END WHERE first_user=? OR second_user=? LIMIT 60').bind(user,user,user).all<PublicAccount&{room:string}>()
   return c.json(results.map(r=>({id:r.room,person:person(r,c.req.url)})))
 })
 app.post('/api/rooms',async c=>{
@@ -392,7 +451,7 @@ app.post('/api/rooms',async c=>{
 app.get('/api/rooms/:id/messages',async c=>{
   const room=c.req.param('id')
   if(!await member(c.env.DB,room,c.get('user').id)) return c.json({error:'Conversation unavailable.'},404)
-  const {results}=await c.env.DB.prepare('SELECT u.id,u.name,u.role,u.username,u.avatar_media,u.cover_media,m.id note_id,m.body FROM messages m JOIN users u ON u.id=m.author WHERE room=? ORDER BY m.created DESC LIMIT 100').bind(room).all<NoteRow>()
+  const {results}=await c.env.DB.prepare('SELECT u.id,u.name,u.role,u.username,u.verified,u.avatar_media,u.cover_media,m.id note_id,m.body FROM messages m JOIN users u ON u.id=m.author WHERE room=? ORDER BY m.created DESC LIMIT 100').bind(room).all<NoteRow>()
   return c.json(results.reverse().map(r=>note(r,c.req.url)))
 })
 app.post('/api/rooms/:id/messages',async c=>{
