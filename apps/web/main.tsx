@@ -14,6 +14,14 @@ const font=(weight:number)=>({fontFamily:'Plus Jakarta Sans Variable, sans-serif
 const storageKey='dameeland-session'
 const loadToken=async()=>sessionStorage.getItem(storageKey)
 const saveToken=async(value:string|null)=>{if(value)sessionStorage.setItem(storageKey,value);else sessionStorage.removeItem(storageKey)}
+const openGoogle=async(getUrl:()=>Promise<string>)=>{
+  const popup=window.open('about:blank','_blank','popup,width=500,height=650')
+  if(!popup)throw new Error('Allow pop-ups to continue with Google.')
+  popup.opener=null
+  try{popup.location.href=await getUrl()}
+  catch(error){popup.close();throw error}
+  return {close:()=>popup.close()}
+}
 const pickMedia=()=>{
   const input=document.createElement('input')
   input.type='file'
@@ -38,4 +46,4 @@ const share=async(text:string)=>{
   window.prompt('Copy this post text',text)
 }
 if(phone)document.body.classList.add('phone-preview')
-createRoot(document.getElementById('root')!).render(<App demo={demo} phone={phone} base={import.meta.env.VITE_API_URL??''} renderIcon={HugeiconsIcon} initialTheme={initialTheme} font={font} loadToken={loadToken} saveToken={saveToken} pickMedia={pickMedia} share={share}/>)
+createRoot(document.getElementById('root')!).render(<App demo={demo} phone={phone} base={import.meta.env.VITE_API_URL??''} renderIcon={HugeiconsIcon} initialTheme={initialTheme} font={font} loadToken={loadToken} saveToken={saveToken} openGoogle={openGoogle} pickMedia={pickMedia} share={share}/>)

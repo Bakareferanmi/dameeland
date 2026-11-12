@@ -4,6 +4,7 @@ import {api,initialChats,initialComments,initialPosts,initials,lime,me,people,qu
 import {Avatar,Button,Card,Copy,Design,Field,Icon,IconButton,IconTile,Logo,PersonName,ScreenLinks,Segmented,row,spread,stack,useDesign,type Glyph,type IconRendererProps} from './ui'
 import type {ExtraPage} from './FeatureScreens'
 import {LoadingScreen} from './LoadingScreen'
+import {GoogleButton} from './GoogleButton'
 
 const FeatureScreen=lazy(()=>import('./FeatureScreens'))
 
@@ -12,10 +13,14 @@ const sampleFollows:Record<string,string[]>={ada:['tobi','zee'],tobi:['ada','cod
 type Page=ExtraPage|'Home'|'Learn'|'Explore'|'Play'|'Messages'|'Chat'|'Notifications'|'Profile'|'Settings'|'Quiz'
 type Room={id:string;person:Person}
 type Session={token:string;user:Person}
+type Credentials={firstName:string;lastName:string;email:string;password:string;role:Role}
+type GoogleStart={url:string;state:string;exchange:string}
+type GoogleWindow={close:()=>void}
 type Media={name:string;uri:string;data:Blob|{uri:string;name:string;type:string}}
 type Props={
   demo:boolean; base:string; phone?:boolean; initialTheme:Theme; font:(weight:number)=>object; renderIcon:React.ComponentType<IconRendererProps>;
   loadToken?:()=>Promise<string|null>; saveToken?:(token:string|null)=>Promise<void>;
+  openGoogle?:(getUrl:()=>Promise<string>)=>Promise<GoogleWindow>;
   pickMedia?:()=>Promise<Media|null>; share?:(text:string)=>Promise<void>;
 }
 type Overlay={kind:'connections';list:FollowListKind;person:Person}|{kind:'comments'|'share'|'post';post:Post}|{kind:'story';person:Person}|{kind:'create'|'wish'|'newStory'}|{kind:'call';video:boolean;person:Person;ringing?:boolean;incoming?:boolean}
@@ -79,10 +84,11 @@ function Intro({step,onNext,onBack,onSkip,reduced,desktop}:{step:number;onNext:(
     </View>
   </ScrollView>
 }
-function Auth({demo,busy,error,submit,onDemo,reduced}:{demo:boolean;busy:boolean;error:string;submit:(mode:'signup'|'login',values:{name:string;email:string;password:string;role:Role})=>void;onDemo:()=>void;reduced:boolean}){
+function Auth({demo,busy,error,submit,onGoogle,onCancelGoogle,googlePending,onDemo,reduced}:{demo:boolean;busy:boolean;error:string;submit:(mode:'signup'|'login',values:Credentials)=>void;onGoogle:(role:Role)=>void;onCancelGoogle:()=>void;googlePending:boolean;onDemo:()=>void;reduced:boolean}){
   const [mode,setMode]=useState<'signup'|'login'>('signup')
   const [role,setRole]=useState<Role>('student')
-  const [name,setName]=useState(''),[email,setEmail]=useState(''),[password,setPassword]=useState('')
+  const [firstName,setFirstName]=useState(''),[lastName,setLastName]=useState('')
+  const [email,setEmail]=useState(''),[password,setPassword]=useState('')
   const [show,setShow]=useState(false)
   const {theme}=useDesign()
   return <ScrollView keyboardShouldPersistTaps="handled" contentContainerStyle={{flexGrow:1,justifyContent:'center',padding:20}}>
@@ -90,11 +96,16 @@ function Auth({demo,busy,error,submit,onDemo,reduced}:{demo:boolean;busy:boolean
       <Logo size={40}/>
       <Segmented options={['Sign up','Log in']} selected={mode==='signup'?'Sign up':'Log in'} onSelect={value=>setMode(value==='Sign up'?'signup':'login')}/>
       {mode==='signup'&&<View style={row}>{(['student','tech'] as const).map(value=><Pressable key={value} accessibilityRole="radio" accessibilityState={{checked:role===value}} onPress={()=>setRole(value)} style={{flex:1,borderWidth:1,borderColor:role===value?theme.purple:theme.border,borderRadius:15,padding:12,gap:8,backgroundColor:role===value?theme.chip:theme.card}}><Avatar size={32} person={{...me,role:value,initials:value==='student'?'ST':'TC',color:value==='student'?'#FFD9B8':'#CFE8FF'}}/><Copy size={12} weight={800}>{value==='student'?'Student':'Tech creator'}</Copy></Pressable>)}</View>}
-      {mode==='signup'&&<Field label="Display name" placeholder="Ada O." value={name} onChangeText={setName} maxLength={60} autoComplete="name"/>}
+      {mode==='signup'&&<View style={{...row,alignItems:'flex-start'}}>
+        <View style={{flex:1,minWidth:0}}><Field label="First name" value={firstName} onChangeText={setFirstName} maxLength={60} autoComplete="given-name"/></View>
+        <View style={{flex:1,minWidth:0}}><Field label="Last name" value={lastName} onChangeText={setLastName} maxLength={60} autoComplete="family-name"/></View>
+      </View>}
       <Field label="Email" placeholder="you@example.com" value={email} onChangeText={setEmail} keyboardType="email-address" autoCapitalize="none" autoComplete="email" maxLength={254}/>
       <Field label="Password" placeholder="At least 8 characters" value={password} onChangeText={setPassword} secureTextEntry={!show} autoCapitalize="none" maxLength={128} action={show?'eyeOff':'eye'} actionLabel={show?'Hide password':'Show password'} onAction={()=>setShow(!show)}/>
       {!!error&&<View accessibilityRole="alert"><Copy color={theme.ink}>{error}</Copy></View>}
-      <Button label={busy?'Please wait…':mode==='signup'?'Create account':'Log in to dameeland'} disabled={busy} onPress={()=>submit(mode,{name,email,password,role})}/>
+      <Button label={busy?'Please wait…':mode==='signup'?'Create account':'Log in to dameeland'} disabled={busy} onPress={()=>submit(mode,{firstName,lastName,email,password,role})}/>
+      <GoogleButton signup={mode==='signup'} disabled={busy} onPress={()=>onGoogle(mode==='signup'?role:'student')}/>
+      {googlePending&&<Button label="Cancel Google sign-in" variant="plain" onPress={onCancelGoogle}/>}
       {demo&&<><Button label="Explore demo" variant="secondary" onPress={onDemo}/><Copy color={theme.muted} center size={12}>Preview accounts reset when you reload.</Copy></>}
     </Motion>
   </ScrollView>
@@ -215,6 +226,8 @@ export default function App(props:Props){
   const [step,setStep]=useState(0)
   const [user,setUser]=useState(me),[token,setToken]=useState('')
   const [page,setPage]=useState<Page>('Home'),[origin,setOrigin]=useState<Page>('Home')
+  const googleRequest=useRef<AbortController|null>(null)
+  const [googlePending,setGooglePending]=useState(false)
   const [busy,setBusy]=useState(false),[error,setError]=useState('')
   const [posts,setPosts]=useState<Post[]>(demo?initialPosts:[])
   const [loading,setLoading]=useState(false),[feedError,setFeedError]=useState(''),[followingOnly,setFollowingOnly]=useState(false)
@@ -373,10 +386,13 @@ export default function App(props:Props){
       call<Note[]>('/posts/'+id+'/comments').then(data=>setNotes(previous=>({...previous,[id]:[...data,...(previous[id]??[]).filter(item=>!data.some(match=>match.id===item.id))]}))).catch(fail)
     }
   }
-  async function authenticate(mode:'signup'|'login',values:{name:string;email:string;password:string;role:Role}){
+  async function authenticate(mode:'signup'|'login',values:Credentials){
     if(busy)return
     const email=values.email.trim().toLowerCase()
-    if(!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)||values.password.length<8||(mode==='signup'&&!values.name.trim())){
+    const firstName=values.firstName.trim(),lastName=values.lastName.trim()
+    if(mode==='signup'&&(!firstName||!lastName)){setError('Enter your first and last name.');return}
+    const name=[firstName,lastName].join(' ')
+    if(!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)||values.password.length<8){
       setError('Enter your details and a password with at least 8 characters.');return
     }
     setBusy(true);setError('')
@@ -385,17 +401,49 @@ export default function App(props:Props){
         const saved=welcomeAccounts.get(email)
         if(mode==='login'&&(!saved||saved.password!==values.password))throw new Error('Email or password is incorrect.')
         if(mode==='signup'&&saved)throw new Error('An account already uses this email.')
-        const account=saved?.user??{...me,name:values.name.trim(),initials:initials(values.name),role:values.role,detail:values.role==='tech'?'Tech creator':'Student'}
+        const account=saved?.user??{...me,name,initials:initials(name),role:values.role,detail:values.role==='tech'?'Tech creator':'Student'}
         if(mode==='signup')welcomeAccounts.set(email,{user:account,password:values.password})
         setUser(account)
       }else{
-        const result=await api<Session>(base,'/auth/'+mode,json({...values,email}))
+        const result=await api<Session>(base,'/auth/'+mode,json({...values,email,firstName,lastName}))
         setToken(result.token);setUser(result.user)
         try{await props.saveToken?.(result.token)}catch{notify('You’re signed in for this session.')}
       }
       setPage('Home');setStage('app')
     }catch(reason){setError(errorMessage(reason))}
     finally{setBusy(false)}
+  }
+  async function authenticateWithGoogle(role:Role){
+    if(busy)return
+    setError('')
+    if(demo||!props.openGoogle){setError('Google sign-in is available in the connected app. Use Explore demo to continue here.');return}
+    setBusy(true)
+    const controller=new AbortController()
+    googleRequest.current=controller
+    setGooglePending(true)
+    let googleWindow:GoogleWindow|undefined
+    try{
+      let attempt:GoogleStart|undefined
+      googleWindow=await props.openGoogle(async()=>{
+        attempt=await api<GoogleStart>(base,'/google/start',{...json({role}),signal:controller.signal})
+        return attempt.url
+      })
+      if(!attempt)throw new Error('Google sign-in could not start.')
+      const {state,exchange}=attempt
+      const deadline=Date.now()+180000
+      while(!controller.signal.aborted&&Date.now()<deadline){
+        const result=await api<Session|{pending:true}>(base,'/google/exchange',{...json({state,exchange}),signal:controller.signal})
+        if('token' in result){
+          setToken(result.token);setUser(result.user)
+          try{await props.saveToken?.(result.token)}catch{notify('You’re signed in for this session.')}
+          setPage('Home');setStage('app')
+          return
+        }
+        await new Promise(resolve=>setTimeout(resolve,2000))
+      }
+      throw new Error('Google sign-in timed out. Please try again.')
+    }catch(reason){if(!controller.signal.aborted)setError(errorMessage(reason))}
+    finally{googleWindow?.close();googleRequest.current=null;setGooglePending(false);setBusy(false)}
   }
   async function logout(){
     try{
@@ -666,7 +714,7 @@ export default function App(props:Props){
     sheet=<Card><Copy size={23} weight={800}>Ringing</Copy><PersonName person={call.person}/><Copy>Simulated voice call</Copy><Button label={call.incoming?'Accept preview call':'Connect preview call'} onPress={()=>setOverlay({...call,ringing:false})}/><Button label={call.incoming?'Decline call':'Cancel call'} variant="secondary" onPress={modalClose}/></Card>
   }else if(overlay?.kind==='call')sheet=<CallPreview video={overlay.video} person={overlay.person} onClose={modalClose}/>
   return <Design.Provider value={{theme,font,renderIcon:props.renderIcon}}><View style={{flex:1,backgroundColor:theme.bg,width:'100%'}}>
-    {starting||stage==='restore'?<LoadingScreen/>:stage==='intro'?<Intro desktop={desktop} step={step} reduced={reduced} onSkip={()=>setStage('auth')} onNext={()=>step===2?setStage('auth'):setStep(step+1)} onBack={()=>setStep(step-1)}/>:stage==='auth'?<Auth demo={demo} busy={busy} error={error} submit={authenticate} onDemo={()=>{setUser(me);setPage('Home');setStage('app')}} reduced={reduced}/>:
+    {starting||stage==='restore'?<LoadingScreen/>:stage==='intro'?<Intro desktop={desktop} step={step} reduced={reduced} onSkip={()=>setStage('auth')} onNext={()=>step===2?setStage('auth'):setStep(step+1)} onBack={()=>setStep(step-1)}/>:stage==='auth'?<Auth demo={demo} busy={busy} error={error} submit={authenticate} onGoogle={role=>void authenticateWithGoogle(role)} onCancelGoogle={()=>googleRequest.current?.abort()} googlePending={googlePending} onDemo={()=>{setUser(me);setPage('Home');setStage('app')}} reduced={reduced}/>:
       <View style={{flex:1,flexDirection:'row',width:'100%',maxWidth:1360,alignSelf:'center'}}>
         {desktop&&<View style={{width:222,borderRightWidth:1,borderColor:theme.border,padding:18,gap:5,backgroundColor:theme.card}}>
           <View style={{minHeight:64,justifyContent:'center',marginBottom:14}}><Logo size={40}/></View>

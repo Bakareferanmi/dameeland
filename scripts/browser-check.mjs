@@ -78,7 +78,8 @@ try{
 
   await page.goto(base+'/')
   await button('Skip').click()
-  await page.getByLabel('Display name',{exact:true}).fill('Browser QA')
+  await page.getByLabel('First name',{exact:true}).fill('Browser')
+  await page.getByLabel('Last name',{exact:true}).fill('QA')
   const runId=Date.now()
   const email='browser-'+runId+'@example.test'
   const postBody='Persisted browser post '+runId

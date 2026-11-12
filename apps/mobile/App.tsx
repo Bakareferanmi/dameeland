@@ -1,6 +1,6 @@
 import React from 'react'
 import {HugeiconsIcon} from '@hugeicons/react-native'
-import {Platform,Share,useColorScheme} from 'react-native'
+import {Linking,Platform,Share,useColorScheme} from 'react-native'
 import {SafeAreaProvider,SafeAreaView} from 'react-native-safe-area-context'
 import {useFonts} from 'expo-font'
 import {PlusJakartaSans_500Medium} from '@expo-google-fonts/plus-jakarta-sans/500Medium'
@@ -16,6 +16,18 @@ const tokenKey='dameeland-session'
 const loadToken=()=>SecureStore.getItemAsync(tokenKey)
 const saveToken=(value:string|null)=>value?SecureStore.setItemAsync(tokenKey,value):SecureStore.deleteItemAsync(tokenKey)
 const share=async(message:string)=>{await Share.share({message})}
+async function openGoogle(getUrl:()=>Promise<string>){
+  if(Platform.OS==='web'){
+    const popup=window.open('about:blank','_blank','popup,width=500,height=650')
+    if(!popup)throw new Error('Allow pop-ups to continue with Google.')
+    popup.opener=null
+    try{popup.location.href=await getUrl()}
+    catch(error){popup.close();throw error}
+    return {close:()=>popup.close()}
+  }
+  await Linking.openURL(await getUrl())
+  return {close:()=>{}}
+}
 async function pickMedia(){
   const ImagePicker=await import('expo-image-picker')
   const result=await ImagePicker.launchImageLibraryAsync({mediaTypes:['images'],quality:.8})
@@ -33,5 +45,5 @@ export default function App(){
   const configuredBase=process.env.EXPO_PUBLIC_API_URL
   const base=configuredBase??(Platform.OS==='android'?'http://10.0.2.2:8787':'http://localhost:8787')
   const demo=offline||process.env.EXPO_PUBLIC_DEMO==='1'||!configuredBase
-  return <SafeAreaProvider><SafeAreaView style={{flex:1,backgroundColor:theme==='dark'?'#120D1F':'#FAF8FF'}}>{loaded||error?<Dameeland phone={offline} demo={demo} base={base} renderIcon={HugeiconsIcon} initialTheme={theme} font={error?()=>({}):font} loadToken={loadToken} saveToken={saveToken} pickMedia={pickMedia} share={share}/>:<LoadingScreen/>}</SafeAreaView></SafeAreaProvider>
+  return <SafeAreaProvider><SafeAreaView style={{flex:1,backgroundColor:theme==='dark'?'#120D1F':'#FAF8FF'}}>{loaded||error?<Dameeland phone={offline} demo={demo} base={base} renderIcon={HugeiconsIcon} initialTheme={theme} font={error?()=>({}):font} loadToken={loadToken} saveToken={saveToken} openGoogle={openGoogle} pickMedia={pickMedia} share={share}/>:<LoadingScreen/>}</SafeAreaView></SafeAreaProvider>
 }

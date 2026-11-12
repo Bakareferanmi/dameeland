@@ -59,6 +59,12 @@ The web and Expo apps share an animated logo loader during startup and session r
 
 The normal Vite build emits a separate secondary-screen chunk. Use `npm run build:previews` to make self-contained offline HTML files with the modules embedded and evaluated when needed.
 
+## Google sign-in
+
+Create a Google OAuth client of type **Web application**. Set `GOOGLE_CLIENT_ID` and `GOOGLE_REDIRECT_URI` on the API Worker and set `GOOGLE_CLIENT_SECRET` as a Worker secret. Register the exact Worker callback URL, such as `https://api.example.com/api/google/callback`, as an authorized redirect URI on that client. Apply the D1 migrations before deploying the Worker.
+
+Web uses a pop-up. On a phone, complete the Google flow in the system browser and return to the app. The offline previews show the Google buttons and support email-based demo accounts. Existing password accounts keep their existing login method if their email matches a new Google sign-in attempt.
+
 ## Checks and builds
 
 With the local Worker running, `npm test` tests signup, login, logout, feed, image round trips through R2, follow filtering, reactions, comments, private room access and a Durable Object WebSocket broadcast.

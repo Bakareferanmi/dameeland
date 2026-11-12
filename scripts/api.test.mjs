@@ -16,7 +16,8 @@ async function request(path,{token,method='GET',body,form,status=200}={}){
 const create=async(name,role='student')=>{
   const email=randomUUID()+'@example.test'
   const password='example-passphrase-42'
-  const result=await request('/auth/signup',{method:'POST',body:{name,email,password,role},status:201})
+  const [firstName,lastName]=name.split(' ')
+  const result=await request('/auth/signup',{method:'POST',body:{firstName,lastName,email,password,role},status:201})
   return {...result,email,password}
 }
 const oneMessage=socket=>new Promise((resolve,reject)=>{
@@ -32,11 +33,27 @@ const openSocket=(path,token)=>new Promise((resolve,reject)=>{
 test('local Worker persists accounts, social activity, media, and private realtime chat',async()=>{
   await request('/health')
   await request('/feed',{status:401})
+  await request('/auth/signup',{method:'POST',body:{firstName:'Ada',email:'incomplete@example.test',password:'example-passphrase-42'},status:400})
+  if(process.env.TEST_GOOGLE_START==='1'){
+    const start=await request('/google/start',{method:'POST',body:{role:'tech'}})
+    const url=new URL(start.url)
+    assert.equal(url.origin,'https://accounts.google.com')
+    assert.equal(url.searchParams.get('state'),start.state)
+    assert.equal(url.searchParams.get('code_challenge_method'),'S256')
+    const payload={state:start.state,exchange:start.exchange}
+    assert.deepEqual(await request('/google/exchange',{method:'POST',body:payload,status:202}),{pending:true})
+    await request('/google/exchange',{method:'POST',body:{...payload,exchange:'0'.repeat(64)},status:410})
+    const cancelled=await fetch(base+'/api/google/callback?error=access_denied&state='+start.state)
+    assert.equal(cancelled.status,400)
+    await request('/google/exchange',{method:'POST',body:payload,status:400})
+  }else{
+    await request('/google/start',{method:'POST',body:{role:'student'},status:503})
+  }
   const ada=await create('Ada QA')
   const tobi=await create('Tobi QA','tech')
   const outsider=await create('Outside QA')
   assert.equal(tobi.user.role,'tech')
-  await request('/auth/signup',{method:'POST',body:{...ada,name:ada.user.name},status:409})
+  await request('/auth/signup',{method:'POST',body:{...ada,firstName:'Ada',lastName:'QA'},status:409})
   await request('/auth/login',{method:'POST',body:{email:ada.email,password:'incorrect passphrase'},status:401})
   const login=await request('/auth/login',{method:'POST',body:ada})
   assert.equal((await request('/me',{token:login.token})).id,ada.user.id)
