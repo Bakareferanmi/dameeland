@@ -102,3 +102,14 @@ npm run build:previews
 ```
 
 Expo exports iOS and Android bundles as well as the browser build. Open the mobile HTML for interactive browser review or run Expo on a compatible device to exercise native integrations.
+
+## Testing real calls
+
+Calls use the authenticated chat room WebSocket for signaling and direct WebRTC with Cloudflare STUN for media. TURN is disabled. During this pilot both users must keep the same one-to-one chat open in the foreground. The hosted demo still shows the simulated calls.
+
+1. Run `npm ci`, apply the local D1 migrations with `npm run db:local`, then start the API and Vite in separate terminals with `npm run dev:api` and `npm run dev:web`.
+2. Open `http://localhost:5173` in two separate browser profiles. Create two test accounts, find the other account from Explore, open the same chat on both sides and tap **Voice call** or **Video call**.
+3. For physical Android, install Android Studio's SDK and platform tools, enable USB debugging, and connect the phone. Run `adb reverse tcp:8787 tcp:8787`, set `EXPO_PUBLIC_API_URL=http://127.0.0.1:8787` for the Android development session, and run `npm exec --workspace @dameeland/mobile -- expo run:android --device`. For an Android emulator use `http://10.0.2.2:8787`. Use the development build with native WebRTC included.
+4. Verify ringing, answer and decline, two-way audio and video, mute, camera toggle, and hang-up from either side. Cross-network testing requires both devices to reach the same HTTPS backend. If direct WebRTC cannot connect on a particular network, the pilot times out without using a paid relay.
+
+To use a deployed backend, set `VITE_API_URL` for web and `EXPO_PUBLIC_API_URL` for Android to the same HTTPS API origin. Set `ALLOWED_ORIGIN` on the Worker to the exact web app origin and deploy the updated Worker so it can relay call signals.

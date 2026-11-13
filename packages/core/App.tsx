@@ -1,3 +1,5 @@
+import {browserCallMedia,RoomCall,useRoomCall,type CallMedia} from './calls'
+import {readCallSignal,type CallSignal} from './callSignal'
 import React,{lazy,Suspense,useCallback,useEffect,useLayoutEffect,useRef,useState} from 'react'
 import {AccessibilityInfo,Animated,BackHandler,Easing,Image,Modal,PanResponder,Platform,Pressable,ScrollView,View,useWindowDimensions,type ViewStyle} from 'react-native'
 import {api,capitalizeName,normalizeUsername,usernameHint,validUsername,initialChats,initialComments,initialPosts,initials,lime,me,people,questions,slides,themes,type FollowListKind,type FollowPage,type FollowStats,type Note,type Person,type Post,type Role,type Theme} from './index'
@@ -28,6 +30,7 @@ type Props={
   demo:boolean; base:string; phone?:boolean; initialTheme:Theme; font:(weight:number)=>object; renderIcon:React.ComponentType<IconRendererProps>;
   loadToken?:()=>Promise<string|null>; saveToken?:(token:string|null)=>Promise<void>;
   openGoogle?:(getUrl:()=>Promise<string>)=>Promise<GoogleWindow>;
+  callMedia?:CallMedia;
   modalViewport?:React.ComponentType<{color:string;children:React.ReactNode}>;
   pickMedia?:()=>Promise<Media|null>; renderGif?:GifRenderer; share?:(text:string)=>Promise<void>;
 }
@@ -366,6 +369,18 @@ export default function App(props:Props){
     return ()=>{alive=false}
   },[base,demo,token,page,retry])
   const roomId=room?.id
+  const chatSocket=useRef<WebSocket|null>(null)
+  const [chatConnected,setChatConnected]=useState(false)
+  const webCallMedia=React.useMemo(browserCallMedia,[])
+  const callMedia=props.callMedia??webCallMedia
+  const sendCall=(signal:CallSignal)=>{
+    const socket=chatSocket.current
+    if(socket?.readyState!==WebSocket.OPEN)return false
+    try{socket.send(JSON.stringify({type:'call',signal}));return true}catch{return false}
+  }
+  const roomCall=useRoomCall(callMedia,page==='Chat'?roomId:undefined,sendCall,message=>notify(message))
+  const receiveCall=useRef(roomCall.receive)
+  receiveCall.current=roomCall.receive
   useEffect(()=>{
     if(demo||!token||page!=='Chat'||!roomId)return
     let active=true
@@ -375,15 +390,24 @@ export default function App(props:Props){
       .then(data=>{if(active){setChats(previous=>({...previous,[roomId]:[...data,...(previous[roomId]??[]).filter(m=>!data.some(n=>n.id===m.id))].slice(-100)}));setFeedError('')}})
       .catch(reason=>{if(active)setFeedError(errorMessage(reason))})
     const socket=new WebSocket(url,['dameeland','ticket.'+token])
-    socket.onopen=refresh
+    chatSocket.current=socket
+    socket.onopen=()=>{if(active){setChatConnected(true);void refresh()}}
+    socket.onclose=()=>{if(active)setChatConnected(false)}
     socket.onmessage=event=>{
       if(!active)return
-      const item=JSON.parse(String(event.data)) as Note
+      let data
+      try{data=JSON.parse(String(event.data))}catch{return}
+      if(data?.type==='call'){
+        const signal=readCallSignal(data.signal)
+        if(signal)void receiveCall.current(signal)
+        return
+      }
+      const item=data as Note
       setChats(previous=>({...previous,[roomId]:[...(previous[roomId]??[]).filter(m=>m.id!==item.id),item]}))
     }
     void refresh()
     const poll=setInterval(()=>{if(socket.readyState!==WebSocket.OPEN)void refresh()},3500)
-    return ()=>{active=false;clearInterval(poll);socket.close()}
+    return ()=>{active=false;setChatConnected(false);clearInterval(poll);if(chatSocket.current===socket)chatSocket.current=null;socket.close()}
   },[base,demo,token,page,roomId])
   const storyId=overlay?.kind==='story'?overlay.person.id:null
   const moveStory=useCallback((direction:1|-1)=>{
@@ -416,6 +440,7 @@ export default function App(props:Props){
     return ()=>cancelAnimationFrame(frame)
   },[page,profile.id,room?.id,loading,stage])
   function changePage(next:Page,scrollY=0){
+    if(page==='Chat')roomCall.end()
     pendingOffset.current={page:next,y:scrollY}
     pageScroll.current=scrollY
     setPage(next);setFeedError('')
@@ -543,7 +568,7 @@ export default function App(props:Props){
       demoSession.current++
       replyTimers.current.forEach(clearTimeout);replyTimers.current=[]
       scrollOffsets.current={};pendingOffset.current=null;setToast(null)
-      pageHistory.current=[];dismissOverlays();setToken('');setUser(me);setPage('Home');setStage('auth');setError('')
+      roomCall.end();pageHistory.current=[];dismissOverlays();setToken('');setUser(me);setPage('Home');setStage('auth');setError('')
       setPosts(demo?initialPosts:[]);setNotes({});setChats(demo?initialChats:{});setFollows({});setProfileStats(null)
       setRooms(demo?localRooms:[]);setRoom(null);setDraft('');setAttachment(null);clearComment();setMessage('');setSeen(new Set());setOwnStory(null);setWishes([]);setLessonComplete(false);setVoicePlaying(false);setQuietMode(false);setFollowingOnly(false)
     }catch(reason){fail(reason)}
@@ -690,7 +715,7 @@ export default function App(props:Props){
   }
   useEffect(()=>{
     if(Platform.OS!=='android'||stage!=='app'||overlay||(!pageHistory.current.length&&page==='Home'))return
-    const subscription=BackHandler.addEventListener('hardwareBackPress',()=>{goBack();return true})
+    const subscription=BackHandler.addEventListener('hardwareBackPress',()=>{if(roomCall.call)roomCall.end();else goBack();return true})
     return ()=>subscription.remove()
   })
 
@@ -757,6 +782,14 @@ export default function App(props:Props){
   </>
   const chat=room&&<>
     <Card style={spread}><View style={{...row,flex:1}}><Avatar person={room.person}/><View style={{flex:1}}><PersonName person={room.person}/><Copy color={theme.muted} size={12}>{demo?'Active now':'Direct message'}</Copy></View></View>{demo&&<View style={{...row,gap:0}}><IconButton name="ph" label="Voice call" onPress={()=>selectOverlay({kind:'call',video:false,person:room.person})}/><IconButton name="vid" label="Video call" onPress={()=>selectOverlay({kind:'call',video:true,person:room.person})}/></View>}</Card>
+    {!demo&&callMedia&&<View style={{...row,flexWrap:'wrap'}}>
+      <Button label="Voice call" leading="ph" variant="secondary" disabled={!chatConnected||!!roomCall.call} onPress={()=>roomCall.start(false)}/>
+      <Button label="Video call" leading="vid" variant="secondary" disabled={!chatConnected||!!roomCall.call} onPress={()=>roomCall.start(true)}/>
+      {!chatConnected&&<Copy size={12}>Waiting for chat connection…</Copy>}
+    </View>}
+    {!demo&&callMedia&&roomCall.call&&<Card>
+      <RoomCall key={roomCall.call.id} person={room.person} media={callMedia} call={roomCall.call} accept={roomCall.accept} end={()=>roomCall.end()}/>
+    </Card>}
     {demo&&room.person.group&&<Card><Copy weight={800}>Pinned message</Copy><Copy>Bring one practice question to the next study session.</Copy><Button label="Join group voice call" leading="ph" variant="secondary" onPress={()=>selectOverlay({kind:'call',video:false,person:room.person,ringing:true})}/></Card>}
     {demo&&room.id==='ada'&&<Card><Copy size={12} color={theme.muted}>Call log · Voice call · 2 min</Copy><Button label={voicePlaying?'Stop voice note preview':'Preview voice note · 0:08'} leading="play" variant="secondary" onPress={()=>setVoicePlaying(!voicePlaying)}/>{voicePlaying&&<Copy>Transcript: Can we revise quadratic equations after school?</Copy>}</Card>}
     {!!feedError&&<Empty title="Reconnecting" detail={feedError}/>}

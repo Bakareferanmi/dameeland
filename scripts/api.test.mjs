@@ -205,6 +205,22 @@ test('local Worker persists accounts, social activity, media, and private realti
     assert.equal((await event).id,message.id)
     assert.equal((await request(roomPath+'/messages',{token:tobi.token}))[0].body,'Ready for the quiz?')
   }finally{socket.close()}
+  const caller=await openSocket(roomPath+'/socket',ada.token)
+  const callee=await openSocket(roomPath+'/socket',tobi.token)
+  try{
+    const id='testcall123456'
+    const offer={kind:'offer',id,video:true,sdp:'v=0\r\n'}
+    const incoming=oneMessage(callee)
+    caller.send(JSON.stringify({type:'call',signal:offer}))
+    assert.deepEqual(await incoming,{type:'call',signal:offer})
+    const answer={kind:'answer',id,sdp:'v=0\r\n'}
+    const accepted=oneMessage(caller)
+    callee.send(JSON.stringify({type:'call',signal:answer}))
+    assert.deepEqual(await accepted,{type:'call',signal:answer})
+    const ended=oneMessage(callee)
+    caller.send(JSON.stringify({type:'call',signal:{kind:'end',id}}))
+    assert.deepEqual(await ended,{type:'call',signal:{kind:'end',id}})
+  }finally{caller.close();callee.close()}
   await request('/logout',{token:login.token,method:'POST'})
   await request('/me',{token:login.token,status:401})
 })

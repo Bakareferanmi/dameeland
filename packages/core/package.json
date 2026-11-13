@@ -6,7 +6,9 @@
     ".": "./index.ts",
     "./app": "./App.tsx",
     "./ui": "./ui.tsx",
-    "./loading": "./LoadingScreen.tsx"
+    "./loading": "./LoadingScreen.tsx",
+    "./call-signal": "./callSignal.ts",
+    "./calls": "./calls.tsx"
   },
   "scripts": {
     "typecheck": "tsc --noEmit"

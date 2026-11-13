@@ -1,6 +1,7 @@
-import React from 'react'
+import type {CallMedia} from '@dameeland/core/calls'
+import React,{useEffect,useState} from 'react'
 import {HugeiconsIcon} from '@hugeicons/react-native'
-import {Linking,Platform,Share,useColorScheme} from 'react-native'
+import {Linking,NativeModules,Platform,Share,useColorScheme} from 'react-native'
 import {SafeAreaProvider,SafeAreaView} from 'react-native-safe-area-context'
 import {useFonts} from 'expo-font'
 import {Image as ExpoImage} from 'expo-image'
@@ -48,11 +49,18 @@ function NativeModalViewport({color,children}:{color:string;children:React.React
   return <SafeAreaProvider style={style}><SafeAreaView style={style}>{children}</SafeAreaView></SafeAreaProvider>
 }
 export default function App(){
+  const [callMedia,setCallMedia]=useState<CallMedia>()
+  useEffect(()=>{
+    if(Platform.OS!=='android'||!NativeModules.WebRTCModule)return
+    let active=true
+    void import('./nativeCalls').then(module=>{if(active)setCallMedia(module.nativeCalls)}).catch(()=>{})
+    return ()=>{active=false}
+  },[])
   const theme=useColorScheme()==='dark'?'dark':'light'
   const offline=Platform.OS==='web'&&document.documentElement.dataset.preview==='true'
   const [loaded,error]=useFonts(offline?{}:{PlusJakartaSans_500Medium,PlusJakartaSans_700Bold,PlusJakartaSans_800ExtraBold})
   const configuredBase=process.env.EXPO_PUBLIC_API_URL
   const base=configuredBase??(Platform.OS==='android'?'http://10.0.2.2:8787':'http://localhost:8787')
   const demo=offline||process.env.EXPO_PUBLIC_DEMO==='1'||!configuredBase
-  return <SafeAreaProvider><SafeAreaView style={{flex:1,backgroundColor:theme==='dark'?'#120D1F':'#FAF8FF'}}>{loaded||error?<Dameeland phone={offline} demo={demo} base={base} renderIcon={HugeiconsIcon} initialTheme={theme} font={error?()=>({}):font} loadToken={loadToken} saveToken={saveToken} openGoogle={openGoogle} modalViewport={Platform.OS==='web'?undefined:NativeModalViewport} pickMedia={pickMedia} renderGif={CommentGif} share={share}/>:<LoadingScreen/>}</SafeAreaView></SafeAreaProvider>
+  return <SafeAreaProvider><SafeAreaView style={{flex:1,backgroundColor:theme==='dark'?'#120D1F':'#FAF8FF'}}>{loaded||error?<Dameeland phone={offline} demo={demo} base={base} callMedia={callMedia} renderIcon={HugeiconsIcon} initialTheme={theme} font={error?()=>({}):font} loadToken={loadToken} saveToken={saveToken} openGoogle={openGoogle} modalViewport={Platform.OS==='web'?undefined:NativeModalViewport} pickMedia={pickMedia} renderGif={CommentGif} share={share}/>:<LoadingScreen/>}</SafeAreaView></SafeAreaProvider>
 }

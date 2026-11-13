@@ -1,3 +1,4 @@
+import {readCallSignal} from '@dameeland/core/call-signal'
 import {Hono} from 'hono'
 import {cors} from 'hono/cors'
 import {bodyLimit} from 'hono/body-limit'
@@ -553,7 +554,7 @@ app.get('/api/rooms/:id/socket',async c=>{
   if(!await member(c.env.DB,room,c.get('user').id)) return c.json({error:'Conversation unavailable.'},404)
   if(c.req.header('Upgrade')?.toLowerCase()!=='websocket') return c.json({error:'WebSocket required.'},426)
   if(c.req.header('Origin')&&!new Set([c.env.ALLOWED_ORIGIN,'http://127.0.0.1:5173']).has(c.req.header('Origin')!)) return c.json({error:'Origin unavailable.'},403)
-  return c.env.ROOMS.getByName(room).fetch('https://room.internal/socket',{headers:{Upgrade:'websocket'}})
+  return c.env.ROOMS.getByName(room).fetch('https://room.internal/socket',{headers:{Upgrade:'websocket','X-Room-User':c.get('user').id}})
 })
 app.onError((error,c)=>{
   if(error instanceof HTTPException)return c.json({error:error.message||'The request could not be completed.'},error.status)
@@ -567,9 +568,28 @@ export class ChatRoom extends DurableObject<Env>{
       for(const peer of this.ctx.getWebSockets()) if(peer.readyState===WebSocket.OPEN) peer.send(message)
       return new Response(null,{status:204})
     }
+    const user=request.headers.get('X-Room-User')
+    if(!user||new URL(request.url).pathname!=='/socket')return new Response(null,{status:404})
     const pair=new WebSocketPair()
-    this.ctx.acceptWebSocket(pair[1])
+    this.ctx.acceptWebSocket(pair[1],[user])
     return new Response(null,{status:101,webSocket:pair[0],headers:{'Sec-WebSocket-Protocol':'dameeland'}})
   }
+  webSocketMessage(sender:WebSocket,message:string|ArrayBuffer){
+    if(typeof message!=='string'||message.length>40000)return
+    const [user]=this.ctx.getTags(sender)
+    if(!user)return
+    let envelope
+    try{envelope=JSON.parse(message)}catch{return}
+    if(envelope?.type!=='call')return
+    const signal=readCallSignal(envelope.signal)
+    if(!signal||signal.kind==='unavailable')return
+    const peers=this.ctx.getWebSockets().filter(peer=>peer.readyState===WebSocket.OPEN&&this.ctx.getTags(peer).some(tag=>tag!==user))
+    const payload=JSON.stringify({type:'call',signal})
+    for(const peer of peers){
+      try{peer.send(payload)}catch{/* A peer can disconnect during delivery. */}
+    }
+    if(!peers.length&&signal.kind==='offer')sender.send(JSON.stringify({type:'call',signal:{kind:'unavailable',id:signal.id}}))
+  }
+
 }
 export default app
