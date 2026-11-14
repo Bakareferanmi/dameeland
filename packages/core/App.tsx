@@ -2,7 +2,7 @@ import {browserCallMedia,RoomCall,useRoomCall,type CallMedia} from './calls'
 import {readCallSignal,type CallSignal} from './callSignal'
 import React,{lazy,Suspense,useCallback,useEffect,useLayoutEffect,useRef,useState} from 'react'
 import {AccessibilityInfo,Animated,BackHandler,Easing,Image,Modal,PanResponder,Platform,Pressable,ScrollView,View,useWindowDimensions,type ViewStyle} from 'react-native'
-import {api,storyLifetime,capitalizeName,normalizeUsername,usernameHint,validUsername,initialChats,initialComments,initialPosts,initials,lime,me,people,questions,slides,themes,type FollowListKind,type FollowPage,type FollowStats,type Note,type Person,type Post,type Role,type StoryGroup,type Theme} from './index'
+import {api,birthdayToday,validBirthDate,storyLifetime,capitalizeName,normalizeUsername,usernameHint,validUsername,initialChats,initialComments,initialPosts,initials,lime,me,people,questions,slides,themes,type FollowListKind,type FollowPage,type FollowStats,type Note,type Person,type Post,type BirthdayEntry,type Role,type StoryGroup,type Theme} from './index'
 import {Avatar,Button,Card,Copy,Design,Field,Icon,IconButton,IconTile,Logo,PersonName,ScreenLinks,Segmented,VerifiedBadge,row,spread,stack,useDesign,type Glyph,type IconRendererProps} from './ui'
 import type {ExtraPage} from './FeatureScreens'
 import {LoadingScreen} from './LoadingScreen'
@@ -22,7 +22,27 @@ type Page=ExtraPage|'Home'|'Learn'|'Explore'|'Play'|'Messages'|'Chat'|'Notificat
 type Room={id:string;person:Person}
 type Session={token:string;user:Viewer}
 type AuthMode='signup'|'login'
-type Credentials={firstName:string;lastName:string;username:string;email:string;password:string}
+type Credentials={firstName:string;lastName:string;username:string;email:string;password:string;dob:string}
+type BirthDraft={day:string;month:string;year:string}
+const emptyBirth:BirthDraft={day:'',month:'',year:''}
+const digits=(value:string,max:number)=>value.replace(/\D/g,'').slice(0,max)
+/** YYYY-MM-DD from the three fields, or '' while any part is missing or the date is not real. */
+const birthIso=(draft:BirthDraft)=>{
+  if(!draft.day||!draft.month||draft.year.length!==4)return ''
+  const value=draft.year+'-'+draft.month.padStart(2,'0')+'-'+draft.day.padStart(2,'0')
+  return validBirthDate(value)?value:''
+}
+function BirthdayFields({value,onChange,note}:{value:BirthDraft;onChange:(next:BirthDraft)=>void;note?:string}){
+  const {theme}=useDesign()
+  return <View style={{gap:5}}>
+    <View style={{...row,alignItems:'flex-start'}}>
+      <View style={{flex:1,minWidth:0}}><Field label="Day" placeholder="DD" value={value.day} onChangeText={text=>onChange({...value,day:digits(text,2)})} keyboardType="number-pad" maxLength={2} autoComplete="birthdate-day"/></View>
+      <View style={{flex:1,minWidth:0}}><Field label="Month" placeholder="MM" value={value.month} onChangeText={text=>onChange({...value,month:digits(text,2)})} keyboardType="number-pad" maxLength={2} autoComplete="birthdate-month"/></View>
+      <View style={{flex:1.4,minWidth:0}}><Field label="Year" placeholder="YYYY" value={value.year} onChangeText={text=>onChange({...value,year:digits(text,4)})} keyboardType="number-pad" maxLength={4} autoComplete="birthdate-year"/></View>
+    </View>
+    {!!note&&<Copy size={12} color={theme.muted}>{note}</Copy>}
+  </View>
+}
 type GoogleStart={url:string;state:string;exchange:string}
 type GoogleWindow={close:()=>void}
 type Media={name:string;uri:string;data:Blob|{uri:string;name:string;type:string}}
@@ -101,7 +121,7 @@ function Intro({step,onNext,onBack,onSkip,reduced,desktop}:{step:number;onNext:(
     </View>
   </ScrollView>
 }
-function Auth({base,demo,busy,error,submit,onGoogle,onCancelGoogle,googlePending,onDemo,reduced}:{base:string;demo:boolean;busy:boolean;error:string;submit:(mode:'signup'|'login',values:Credentials)=>void;onGoogle:(mode:AuthMode,username:string)=>void;onCancelGoogle:()=>void;googlePending:boolean;onDemo:()=>void;reduced:boolean}){
+function Auth({base,demo,busy,error,submit,onGoogle,onCancelGoogle,googlePending,onDemo,reduced}:{base:string;demo:boolean;busy:boolean;error:string;submit:(mode:'signup'|'login',values:Credentials)=>void;onGoogle:(mode:AuthMode,username:string,dob:string)=>void;onCancelGoogle:()=>void;googlePending:boolean;onDemo:()=>void;reduced:boolean}){
   const [mode,setMode]=useState<'signup'|'login'>('signup')
   const [firstName,setFirstName]=useState(''),[lastName,setLastName]=useState('')
   const [username,setUsername]=useState('')
@@ -119,6 +139,7 @@ function Auth({base,demo,busy,error,submit,onGoogle,onCancelGoogle,googlePending
     return ()=>{clearTimeout(timer);controller.abort()}
   },[base,demo,handle,mode])
   const [email,setEmail]=useState(''),[password,setPassword]=useState('')
+  const [birth,setBirth]=useState<BirthDraft>(emptyBirth)
   const [show,setShow]=useState(false)
   const [recovering,setRecovering]=useState(false)
   const {theme}=useDesign()
@@ -140,14 +161,15 @@ function Auth({base,demo,busy,error,submit,onGoogle,onCancelGoogle,googlePending
           </Copy>
         </View>
       </View>}
+      {mode==='signup'&&<BirthdayFields value={birth} onChange={setBirth} note="Your date of birth lets friends wish you a happy birthday. Only the day and month are shown to others."/>}
       <Field label={mode==='signup'?'Email':'Email or username'} placeholder={mode==='signup'?'you@example.com':'Email address or @username'} value={email} onChangeText={setEmail} keyboardType={mode==='signup'?'email-address':'default'} autoCapitalize="none" autoCorrect={false} autoComplete={mode==='signup'?'email':'username'} maxLength={254}/>
       <Field label="Password" placeholder="At least 8 characters" value={password} onChangeText={setPassword} secureTextEntry={!show} autoCapitalize="none" maxLength={128} action={show?'eyeOff':'eye'} actionLabel={show?'Hide password':'Show password'} onAction={()=>setShow(!show)}/>
       {!!error&&<View accessibilityRole="alert"><Copy color={theme.ink}>{error}</Copy></View>}
-      <Button label={busy?'Please wait…':mode==='signup'?'Create account':'Log in to dameeland'} disabled={busy||mode==='signup'&&usernameStatus==='taken'} onPress={()=>submit(mode,{firstName,lastName,username:handle,email,password})}/>
+      <Button label={busy?'Please wait…':mode==='signup'?'Sign up':'Log in'} disabled={busy||mode==='signup'&&usernameStatus==='taken'} onPress={()=>submit(mode,{firstName,lastName,username:handle,email,password,dob:birthIso(birth)})}/>
       {mode==='login'&&<Button label="Forgot password or username?" variant="plain" disabled={busy} onPress={()=>setRecovering(true)}/>}
-      <GoogleButton signup={mode==='signup'} disabled={busy||mode==='signup'&&usernameStatus==='taken'} onPress={()=>onGoogle(mode,handle)}/>
+      <GoogleButton signup={mode==='signup'} disabled={busy||mode==='signup'&&usernameStatus==='taken'} onPress={()=>onGoogle(mode,handle,birthIso(birth))}/>
       {googlePending&&<Button label="Cancel Google sign-in" variant="plain" onPress={onCancelGoogle}/>}
-      {demo&&<><Button label="Explore demo" variant="secondary" onPress={onDemo}/><Copy color={theme.muted} center size={12}>Preview accounts reset when you reload.</Copy></>}
+      <Button label="Explore demo" variant="secondary" onPress={onDemo}/><Copy color={theme.muted} center size={12}>Look around with sample data. Nothing is saved.</Copy>
       </>}
     </Motion>
   </ScrollView>
@@ -254,7 +276,10 @@ function CallPreview({video,person,onClose}:{video:boolean;person:Person;onClose
   return <View style={{backgroundColor:'#120D1F',borderRadius:24,padding:24,alignItems:'center',gap:18}}><Copy color="#C9B8FF" weight={800}>{video?'Video call preview':'Voice call preview'}</Copy><Avatar person={person} size={90} ring/><Copy color="#fff" size={24} weight={800}>{person.name}</Copy><Copy color="#C9B8FF">{Math.floor(seconds/60)}:{String(seconds%60).padStart(2,'0')} · Simulated call</Copy><View style={row}><Button label={muted?'Unmute':'Mute'} onPress={()=>setMuted(!muted)} variant="secondary"/><Button label="End call" onPress={onClose} variant="danger"/></View></View>
 }
 export default function App(props:Props){
-  const {demo,base,font,phone}=props
+  const {base,font,phone}=props
+  const [demoEntered,setDemoEntered]=useState(false)
+  // `props.demo` means the build has no backend; `demoEntered` is someone choosing Explore demo on a live build.
+  const demo=props.demo||demoEntered
   const {width}=useWindowDimensions()
   const desktop=width>=900&&!phone
   const rail=width>=1100&&!phone
@@ -282,6 +307,9 @@ export default function App(props:Props){
   const [ownStory,setOwnStory]=useState<{text:string;image?:string;videoPreview?:boolean;posted:number}|null>(null)
   const [storyMode,setStoryMode]=useState('Text')
   const [storyImage,setStoryImage]=useState<string>()
+  const [birthdays,setBirthdays]=useState<BirthdayEntry[]>([])
+  const [wishedBirthdays,setWishedBirthdays]=useState<Set<string>>(()=>new Set())
+  const [birthDraft,setBirthDraft]=useState<BirthDraft>(emptyBirth)
   const [storyMedia,setStoryMedia]=useState<Media|null>(null)
   const [liveStories,setLiveStories]=useState<StoryGroup[]>([])
   const [storyIndex,setStoryIndex]=useState(0)
@@ -432,6 +460,12 @@ export default function App(props:Props){
   },[])
   const demoStories=React.useMemo(()=>storyPeople.filter(person=>clock-demoPosted[person.id]<storyLifetime),[clock])
   const demoOwn=React.useMemo(()=>ownStory&&clock-ownStory.posted<storyLifetime?ownStory:null,[ownStory,clock])
+  useEffect(()=>{
+    if(demo||!token||page!=='Home')return
+    let alive=true
+    api<BirthdayEntry[]>(base,'/birthdays',{},token).then(data=>{if(alive)setBirthdays(data)}).catch(()=>{})
+    return ()=>{alive=false}
+  },[base,demo,token,page])
   // Stories vanish 12 hours after posting: hide them on the client as soon as they expire, not only on the next refresh.
   const activeStories=React.useMemo(()=>liveStories.map(group=>({...group,stories:group.stories.filter(item=>Date.parse(item.expires)>clock)})).filter(group=>group.stories.length),[liveStories,clock])
   const storyId=overlay?.kind==='story'?overlay.person.id:null
@@ -534,6 +568,7 @@ export default function App(props:Props){
     const username=normalizeUsername(values.username)
     if(mode==='signup'&&(!firstName||!lastName)){setError('Enter your first and last name.');return}
     if(mode==='signup'&&!validUsername(username)){setError(usernameHint);return}
+    if(mode==='signup'&&!validBirthDate(values.dob)){setError('Enter a valid date of birth.');return}
     const name=[firstName,lastName].join(' ')
     const isEmail=/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)
     const loginUsername=email.replace(/^@/,'')
@@ -547,7 +582,7 @@ export default function App(props:Props){
         if(mode==='login'&&(!saved||saved.password!==values.password))throw new Error('Email, username or password is incorrect.')
         if(mode==='signup'&&saved)throw new Error('An account already uses this email.')
         if(mode==='signup'&&demoUsernameTaken(username))throw new Error('That username is taken.')
-        const account=saved?.user??{...me,name,username,initials:initials(name)}
+        const account=saved?.user??{...me,name,username,initials:initials(name),dob:values.dob,birthday:values.dob.slice(5)}
         if(mode==='signup')welcomeAccounts.set(email,{user:account,password:values.password})
         setUser(account)
       }else{
@@ -559,11 +594,12 @@ export default function App(props:Props){
     }catch(reason){setError(errorMessage(reason))}
     finally{setBusy(false)}
   }
-  async function authenticateWithGoogle(mode:AuthMode,username:string){
+  async function authenticateWithGoogle(mode:AuthMode,username:string,dob:string){
     if(busy)return
     setError('')
     if(demo||!props.openGoogle){setError('Google sign-in is available in the connected app. Use Explore demo to continue here.');return}
     if(mode==='signup'&&!validUsername(username)){setError('Choose a username to sign up with Google. '+usernameHint);return}
+    if(mode==='signup'&&!validBirthDate(dob)){setError('Enter your date of birth to sign up with Google.');return}
     setBusy(true)
     const controller=new AbortController()
     googleRequest.current=controller
@@ -572,7 +608,7 @@ export default function App(props:Props){
     try{
       let attempt:GoogleStart|undefined
       googleWindow=await props.openGoogle(async()=>{
-        attempt=await api<GoogleStart>(base,'/google/start',{...json({mode,username}),signal:controller.signal})
+        attempt=await api<GoogleStart>(base,'/google/start',{...json({mode,username,dob}),signal:controller.signal})
         return attempt.url
       })
       if(!attempt)throw new Error('Google sign-in could not start.')
@@ -599,8 +635,8 @@ export default function App(props:Props){
       replyTimers.current.forEach(clearTimeout);replyTimers.current=[]
       scrollOffsets.current={};pendingOffset.current=null;setToast(null)
       roomCall.end();pageHistory.current=[];dismissOverlays();setToken('');setUser(me);setPage('Home');setStage('auth');setError('')
-      setPosts(demo?initialPosts:[]);setNotes({});setChats(demo?initialChats:{});setFollows({});setProfileStats(null)
-      setRooms(demo?localRooms:[]);setRoom(null);setDraft('');setAttachment(null);clearComment();setMessage('');setSeen(new Set());setOwnStory(null);setLiveStories([]);setStoryIndex(0);setStoryMedia(null);setWishes([]);setLessonComplete(false);setVoicePlaying(false);setQuietMode(false);setFollowingOnly(false)
+      setPosts(props.demo?initialPosts:[]);setNotes({});setChats(props.demo?initialChats:{});setFollows({});setProfileStats(null)
+      setRooms(props.demo?localRooms:[]);setRoom(null);setDraft('');setAttachment(null);clearComment();setMessage('');setSeen(new Set());setOwnStory(null);setDemoEntered(false);setBirthdays([]);setWishedBirthdays(new Set());setLiveStories([]);setStoryIndex(0);setStoryMedia(null);setWishes([]);setLessonComplete(false);setVoicePlaying(false);setQuietMode(false);setFollowingOnly(false)
     }catch(reason){fail(reason)}
   }
   async function react(post:Post,kind:'like'|'repost'){
@@ -664,6 +700,26 @@ export default function App(props:Props){
         setRetry(n=>n+1)
       }
       setDraft('');setAttachment(null);dismissOverlays();setFollowingOnly(false);open('Home');notify('Post shared')
+    }catch(reason){fail(reason)}finally{setBusy(false)}
+  }
+  async function wishBirthday(person:Person){
+    if(busy)return
+    const first=person.name.split(' ')[0]
+    if(demo){setWishedBirthdays(previous=>new Set(previous).add(person.id));notify('Birthday wish sent to '+first+'.');return}
+    setBusy(true)
+    try{
+      await call('/people/'+encodeURIComponent(person.id)+'/birthday-wish',{method:'POST'})
+      setWishedBirthdays(previous=>new Set(previous).add(person.id))
+      notify('Your wish was sent to '+first+' as a message.')
+    }catch(reason){fail(reason)}finally{setBusy(false)}
+  }
+  async function saveBirthday(){
+    const dob=birthIso(birthDraft)
+    if(busy||!dob)return
+    setBusy(true)
+    try{
+      setUser(await call<Viewer>('/me/birthday',json({dob},'PUT')))
+      setBirthDraft(emptyBirth);notify('Birthday saved.')
     }catch(reason){fail(reason)}finally{setBusy(false)}
   }
   async function shareStory(){
@@ -803,9 +859,20 @@ export default function App(props:Props){
       {desktop&&name==='Notifications'&&unread&&<View style={{marginLeft:'auto',width:7,height:7,borderRadius:4,backgroundColor:theme.purple}}/>}
     </Pressable>
   }
+  const ownBirthday=birthdayToday(user.birthday??user.dob?.slice(5))
+  const birthdayPeople=demo?people.filter(person=>!person.group&&birthdayToday(person.birthday)):birthdays.filter(entry=>entry.person.id!==user.id&&birthdayToday(entry.person.birthday)).map(entry=>entry.person)
+  const wishedAlready=(id:string)=>wishedBirthdays.has(id)||birthdays.some(entry=>entry.person.id===id&&entry.wished)
   const hasOwnStory=demo?!!demoOwn:activeStories.some(group=>group.author.id===user.id)
   const home=<>
     {(demo||token)&&<View style={{paddingHorizontal:2}}><StoryRow onStory={person=>selectOverlay({kind:'story',person})} onCreate={()=>selectOverlay(hasOwnStory?{kind:'story',person:user}:{kind:'newStory'})} seen={seen} own={hasOwnStory?user:null} others={demo?demoStories:activeStories.map(group=>group.author).filter(author=>author.id!==user.id)}/></View>}
+    {(ownBirthday||birthdayPeople.length>0)&&<Card>
+      {ownBirthday&&<View style={{gap:4}}><Copy size={19} weight={800}>Happy birthday, {user.name.split(' ')[0]}! 🎂</Copy><Copy color={theme.muted}>Have a great day. Friends can send you a wish today.</Copy></View>}
+      {birthdayPeople.length>0&&<>{section('Birthdays today')}{birthdayPeople.map(person=><View key={person.id} style={{...row,flexWrap:'wrap'}}>
+        <Avatar person={person}/><View style={{flex:1,minWidth:120}}><PersonName person={person}/><Copy size={12} color={theme.muted}>{person.detail}</Copy></View>
+        <Button label={wishedAlready(person.id)?'Wished':'Wish happy birthday'} variant="secondary" disabled={busy||wishedAlready(person.id)} onPress={()=>void wishBirthday(person)}/>
+      </View>)}</>}
+    </Card>}
+    {!demo&&!!token&&!user.dob&&<Card>{section('Add your birthday')}<Copy color={theme.muted}>Friends can wish you a happy birthday. Only the day and month are shown to others.</Copy><BirthdayFields value={birthDraft} onChange={setBirthDraft}/><Button label="Save birthday" disabled={busy||!birthIso(birthDraft)} onPress={()=>void saveBirthday()}/></Card>}
     <Segmented options={['For you','Following']} selected={followingOnly?'Following':'For you'} onSelect={value=>setFollowingOnly(value==='Following')}/>
     {feedError?failure:loading?<Loading/>:displayedPosts.length?displayedPosts.map(post=><PostCard key={post.id} post={post} onReact={react} onOverlay={selectOverlay} onProfile={showProfile}/>):<Empty title={followingOnly?'Your following feed is empty':'Start the conversation'} detail={followingOnly?'Follow classmates to see their posts here.':'Share the first post with your classmates.'} action={followingOnly?'Find people':'Create post'} onPress={followingOnly?()=>open('Explore'):compose}/>}
     {demo&&!followingOnly&&<View style={{...row,flexWrap:'wrap'}}>
@@ -977,7 +1044,7 @@ export default function App(props:Props){
   const storyPosted=demo?(story?.id===user.id?demoOwn?.posted:story?demoPosted[story.id]:undefined):liveItem?Date.parse(liveItem.created):undefined
   const storyText=demo?personalStory?.text??(story?.id==='ada'?'Study session after school. Bring your notes!':story?.id==='bello'?'Maths test is on Friday. Revise quadratics!':story?.id==='code'?'Code Club meets on Friday!':'See you at quiz night!'):liveItem?.text??''
   return <Design.Provider value={{theme,font,reduced,renderIcon:props.renderIcon}}><View style={{flex:1,backgroundColor:theme.bg,width:'100%'}}>
-    {starting||stage==='restore'?<LoadingScreen/>:stage==='intro'?<Intro desktop={desktop} step={step} reduced={reduced} onSkip={()=>setStage('auth')} onNext={()=>step===2?setStage('auth'):setStep(step+1)} onBack={()=>setStep(step-1)}/>:stage==='auth'?<Auth base={base} demo={demo} busy={busy} error={error} submit={authenticate} onGoogle={(mode,username)=>void authenticateWithGoogle(mode,username)} onCancelGoogle={()=>googleRequest.current?.abort()} googlePending={googlePending} onDemo={()=>{setUser(me);setPage('Home');setStage('app')}} reduced={reduced}/>:
+    {starting||stage==='restore'?<LoadingScreen/>:stage==='intro'?<Intro desktop={desktop} step={step} reduced={reduced} onSkip={()=>setStage('auth')} onNext={()=>step===2?setStage('auth'):setStep(step+1)} onBack={()=>setStep(step-1)}/>:stage==='auth'?<Auth base={base} demo={demo} busy={busy} error={error} submit={authenticate} onGoogle={(mode,username,dob)=>void authenticateWithGoogle(mode,username,dob)} onCancelGoogle={()=>googleRequest.current?.abort()} googlePending={googlePending} onDemo={()=>{setDemoEntered(true);setPosts(initialPosts);setChats(initialChats);setRooms(localRooms);setUnread(true);setUser(me);setPage('Home');setStage('app')}} reduced={reduced}/>:
       <View style={{flex:1,flexDirection:'row',width:'100%',maxWidth:1360,alignSelf:'center'}}>
         {desktop&&<View style={{width:222,borderRightWidth:1,borderColor:theme.border,padding:18,gap:5,backgroundColor:theme.card}}>
           <View style={{minHeight:64,justifyContent:'center',marginBottom:14}}><Logo size={40}/></View>

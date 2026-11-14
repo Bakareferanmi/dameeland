@@ -13,12 +13,16 @@ async function request(path,{token,method='GET',body,form,status=200}={}){
   assert.equal(response.status,status,method+' '+path+' '+(response.ok?'':await response.clone().text()))
   return response.json()
 }
+const birthOn=offset=>{
+  const day=new Date(Date.now()+offset*86400000)
+  return '2008-'+String(day.getUTCMonth()+1).padStart(2,'0')+'-'+String(day.getUTCDate()).padStart(2,'0')
+}
 const create=async(name,role='student')=>{
   const email=randomUUID()+'@example.test'
   const password='example-passphrase-42'
   const [firstName,lastName]=name.toLowerCase().split(' ')
   const username='u_'+randomUUID().replaceAll('-','').slice(0,16)
-  const result=await request('/auth/signup',{method:'POST',body:{firstName,lastName,username,email,password,role},status:201})
+  const result=await request('/auth/signup',{method:'POST',body:{firstName,lastName,username,email,password,role,dob:birthOn(100)},status:201})
   return {...result,email,password,username}
 }
 const oneMessage=socket=>new Promise((resolve,reject)=>{
@@ -35,6 +39,12 @@ test('local Worker persists accounts, social activity, media, and private realti
   await request('/health')
   await request('/feed',{status:401})
   await request('/auth/signup',{method:'POST',body:{firstName:'Ada',username:'incomplete',email:'incomplete@example.test',password:'example-passphrase-42'},status:400})
+  const dobSignup={firstName:'Dob',lastName:'Check',username:'dob_'+randomUUID().replaceAll('-','').slice(0,12),email:randomUUID()+'@example.test',password:'example-passphrase-42'}
+  for(const dob of [undefined,'','2008-13-01','2008-02-30','1899-12-31','2999-01-01','15/05/2008',20080515])
+    assert.match((await request('/auth/signup',{method:'POST',body:{...dobSignup,dob},status:400})).error,/date of birth/i)
+  const dobAccount=await request('/auth/signup',{method:'POST',body:{...dobSignup,dob:'2008-05-15'},status:201})
+  assert.equal(dobAccount.user.dob,'2008-05-15')
+  assert.equal(dobAccount.user.birthday,'05-15')
   if(process.env.TEST_GOOGLE_START==='1'){
     const start=await request('/google/start',{method:'POST',body:{role:'tech'}})
     const url=new URL(start.url)
@@ -56,7 +66,7 @@ test('local Worker persists accounts, social activity, media, and private realti
   assert.deepEqual(await request('/auth/username?username='+ada.username.toUpperCase()),{available:false})
   assert.deepEqual(await request('/auth/username?username=unused_'+randomUUID().slice(0,8)),{available:true})
   await request('/auth/username?username=a!',{status:400})
-  const duplicate=await request('/auth/signup',{method:'POST',body:{firstName:'Other',lastName:'User',username:ada.username.toUpperCase(),email:randomUUID()+'@example.test',password:ada.password},status:409})
+  const duplicate=await request('/auth/signup',{method:'POST',body:{firstName:'Other',lastName:'User',username:ada.username.toUpperCase(),email:randomUUID()+'@example.test',password:ada.password,dob:birthOn(100)},status:409})
   assert.equal(duplicate.error,'That username is taken.')
   const tobi=await create('Tobi QA','tech')
   const outsider=await create('Outside QA')
@@ -93,7 +103,7 @@ test('local Worker persists accounts, social activity, media, and private realti
     assert.equal((await request('/admin/accounts/'+tobi.user.id,{token,method:'PUT',body:{role:'student',verified:false,teacher:false}})).person.teacher,false)
   }
   await request('/admin/accounts/'+tobi.user.id,{token:tobi.token,method:'PUT',body:{role:'student',verified:false,teacher:true},status:403})
-  await request('/auth/signup',{method:'POST',body:{...ada,firstName:'Ada',lastName:'QA'},status:409})
+  await request('/auth/signup',{method:'POST',body:{...ada,firstName:'Ada',lastName:'QA',dob:birthOn(100)},status:409})
   await request('/auth/login',{method:'POST',body:{email:ada.email,password:'incorrect passphrase'},status:401})
   const login=await request('/auth/login',{method:'POST',body:ada})
   assert.equal((await request('/me',{token:login.token})).id,ada.user.id)
@@ -253,4 +263,24 @@ test('local Worker persists accounts, social activity, media, and private realti
   }finally{caller.close();callee.close()}
   await request('/logout',{token:login.token,method:'POST'})
   await request('/me',{token:login.token,status:401})
+  // Birthdays: only month and day are visible to other people, and a wish is a message sent once a year.
+  assert.equal((await request('/me',{token:ada.token})).dob,birthOn(100))
+  const peopleView=await request('/people/'+ada.user.id+'/follow-stats',{token:tobi.token})
+  assert.equal(peopleView.dob,undefined)
+  await request('/me/birthday',{token:ada.token,method:'PUT',body:{dob:'2008-02-30'},status:400})
+  const today=birthOn(0)
+  assert.equal((await request('/me/birthday',{token:ada.token,method:'PUT',body:{dob:today}})).dob,today)
+  await request(followPath,{token:tobi.token,method:'PUT',body:{active:true}})
+  const listed=await request('/birthdays',{token:tobi.token})
+  const entry=listed.find(item=>item.person.id===ada.user.id)
+  assert.equal(entry.wished,false)
+  assert.equal(entry.person.birthday,today.slice(5))
+  assert.equal(entry.person.dob,undefined)
+  await request('/people/'+tobi.user.id+'/birthday-wish',{token:ada.token,method:'POST',status:400})
+  await request('/people/'+ada.user.id+'/birthday-wish',{token:ada.token,method:'POST',status:404})
+  const wish=await request('/people/'+ada.user.id+'/birthday-wish',{token:tobi.token,method:'POST',status:201})
+  await request('/people/'+ada.user.id+'/birthday-wish',{token:tobi.token,method:'POST',status:409})
+  assert.equal((await request('/birthdays',{token:tobi.token})).find(item=>item.person.id===ada.user.id).wished,true)
+  const wishMessages=await request('/rooms/'+wish.room+'/messages',{token:ada.token})
+  assert.match(wishMessages.at(-1).body,/^Happy birthday, Ada/)
 })

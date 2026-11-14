@@ -59,6 +59,14 @@ Apply D1 migration `0007_admin_accounts.sql` before running the updated API. It 
 
 Apply D1 migration `0010_teacher_badge.sql`. Admins can give or remove a gold check for any account from **Admin dashboard → Accounts** (**Give gold check** / **Remove gold check**). Only admins can change it, and the API ignores it everywhere else. It is separate from the purple verified badge and takes precedence over it, and the account's detail line shows **Teacher**. The Overview tab counts teachers.
 
+## Date of birth and birthdays
+
+Apply D1 migration `0011_birthdays.sql`. Sign-up (email and Google) asks for a date of birth. Other people only ever see the month and day, never the year. Friends you follow who have a birthday today appear in a **Birthdays today** card on Home, and **Wish happy birthday** sends them a normal chat message (one wish per person per year, enforced by the API). Accounts created before this change have no date of birth, so they see an **Add your birthday** card until they save one.
+
+## Demo
+
+**Explore demo** is on the log-in and sign-up screen of every build, web and mobile. It uses sample data only and nothing is saved. Logging out of the demo returns to the normal log-in screen.
+
 ## Stories
 
 Stories last 12 hours and are not stored in D1. Each author's active stories sit in one Workers KV key (`stories:<userId>`) that carries a 12-hour expiration, and story photos go in R2 under `stories/<userId>/<storyId>`. The API also checks every story's timestamp on every read, so nothing is served after 12 hours even if KV or R2 cleanup lags, and the app hides stories the moment they expire. Followers see a story, plus the author. Each person can have up to 10 active stories, and a feed request reads at most 40 followed authors. Authors can delete their own stories.

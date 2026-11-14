@@ -69,7 +69,7 @@ try{
   await button('Continue').click()
   await visible(text('Play and win'))
   await button('Get started').click()
-  await visible(button('Create account'))
+  await visible(button('Sign up').last())
   await button('Explore demo').click()
   await visible(text('Finally cracked quadratic equations! Made a one-page cheat sheet for the class.'))
   await checkSystemBack()
@@ -132,7 +132,10 @@ try{
   const postBody='Persisted browser post '+runId
   await page.getByLabel('Email',{exact:true}).fill(email)
   await page.getByLabel('Password',{exact:true}).fill('browser-passphrase-42')
-  await button('Create account').click()
+  await page.getByLabel('Day',{exact:true}).fill('14')
+  await page.getByLabel('Month',{exact:true}).fill('11')
+  await page.getByLabel('Year',{exact:true}).fill('2008')
+  await button('Sign up').last().click()
   await visible(button('Your profile'))
   await page.reload()
   await visible(button('Your profile'))
@@ -145,7 +148,7 @@ try{
   await button('Your profile').click()
   await button('Settings').click()
   await button('Log out').click()
-  await visible(button('Create account'))
+  await visible(button('Sign up').last())
   assert.deepEqual(errors,[])
   if(process.env.TEST_PREVIEWS_DIR){
     for(const file of ['dameeland-web-preview.html','dameeland-mobile-preview.html']){

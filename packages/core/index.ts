@@ -10,7 +10,25 @@ export const usernameHint = 'Use 3–24 letters, numbers or underscores.'
 export const normalizeUsername = (value:string) => value.trim().toLowerCase()
 export const validUsername = (value:string) => /^[a-z0-9_]{3,24}$/.test(value)
 export const capitalizeName = (value:string) => value.replace(/^(\s*)(\p{L})/u,(_,space:string,letter:string)=>space+letter.toUpperCase())
-export type Person = {id:string; name:string; initials:string; role:Role; color:string; detail:string; verified?:boolean; teacher?:boolean; group?:boolean; avatar?:string; cover?:string; username?:string}
+const pad=(value:number)=>String(value).padStart(2,'0')
+/** Month and day only (MM-DD). The birth year is never shown to other people. */
+export function monthDay(date:Date){return pad(date.getMonth()+1)+'-'+pad(date.getDate())}
+/** True for a real, past YYYY-MM-DD date from 1900 on. A day of slack covers timezones ahead of UTC. */
+export function validBirthDate(value:unknown,at=Date.now()):value is string{
+  if(typeof value!=='string'||!/^\d{4}-\d{2}-\d{2}$/.test(value))return false
+  const [year,month,day]=value.split('-').map(Number)
+  const date=new Date(Date.UTC(year,month-1,day))
+  return year>=1900&&date.getUTCFullYear()===year&&date.getUTCMonth()===month-1&&date.getUTCDate()===day&&date.getTime()<=at+86400000
+}
+/** Is it this person's birthday on the given local date? Feb 29 birthdays are celebrated on Feb 28 in non-leap years. */
+export function birthdayToday(birthday:string|undefined,at=new Date()){
+  if(!birthday)return false
+  if(birthday===monthDay(at))return true
+  const leap=(year:number)=>year%4===0&&(year%100!==0||year%400===0)
+  return birthday==='02-29'&&!leap(at.getFullYear())&&monthDay(at)==='02-28'
+}
+export type BirthdayEntry = {person:Person;wished:boolean}
+export type Person = {id:string; name:string; initials:string; role:Role; color:string; detail:string; verified?:boolean; teacher?:boolean; group?:boolean; birthday?:string; dob?:string; avatar?:string; cover?:string; username?:string}
 export type Viewer = Person & {isAdmin?:boolean}
 export type AdminAccount = {person:Person;email:string;created:number|null;independentlyVerified:boolean}
 export type AdminActivity = {id:string;name:string;kind:'signup'|'post'|'comment';created:number;excerpt?:string}
@@ -46,7 +64,7 @@ export type Note = {id:string; author:Person; body:string; attachment?:CommentAt
 export const me:Person = {id:'you',name:'You',initials:'YO',role:'student',color:lime,detail:'Student'}
 export const people:Person[] = [
   {id:'ada',name:'Ada O.',initials:'AO',role:'student',color:'#FFD9B8',detail:'SS2 · Student',verified:true},
-  {id:'tobi',name:'Tobi A.',initials:'TB',role:'tech',color:'#CFE8FF',detail:'Tech · Code Club',verified:true},
+  {id:'tobi',name:'Tobi A.',initials:'TB',role:'tech',color:'#CFE8FF',detail:'Tech · Code Club',verified:true,birthday:monthDay(new Date())},
   {id:'zee',name:'Zee K.',initials:'ZK',role:'student',color:'#FFE9A8',detail:'Student'},
   {id:'bello',name:'Mr. Bello',initials:'MB',role:'student',color:'#E9E0FF',detail:'Maths teacher',teacher:true},
   {id:'code',name:'Code Club',initials:'CC',role:'tech',color:lime,detail:'Tech · School club',verified:true,group:true},
