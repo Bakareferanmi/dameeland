@@ -100,12 +100,15 @@ export function Avatar({person,size=44,ring=false,seen=false}:{person:Person;siz
   </View>
 }
 
-export function PersonName({person}:{person:Person}){
+export function VerifiedBadge({person}:{person:Person}){
   const {theme}=useDesign()
+  if(!person.teacher&&!person.verified)return null
+  return <View accessibilityLabel={person.teacher?'Verified teacher':'Verified'} style={{backgroundColor:person.teacher?teacherGold:theme.purple,width:16,height:16,borderRadius:8,alignItems:'center',justifyContent:'center'}}><Icon name="check" size={11} color="#fff" strong/></View>
+}
+export function PersonName({person}:{person:Person}){
   return <View style={{...row,gap:5}}>
     <Copy weight={800}>{person.name}</Copy>
-    {person.teacher?<View accessibilityLabel="Verified teacher" style={{backgroundColor:teacherGold,width:16,height:16,borderRadius:8,alignItems:'center',justifyContent:'center'}}><Icon name="check" size={11} color="#fff" strong/></View>
-      :person.verified&&<View accessibilityLabel="Verified" style={{backgroundColor:theme.purple,width:16,height:16,borderRadius:8,alignItems:'center',justifyContent:'center'}}><Icon name="check" size={11} color="#fff" strong/></View>}
+    <VerifiedBadge person={person}/>
   </View>
 }
 

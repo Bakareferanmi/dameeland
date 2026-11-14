@@ -2,8 +2,8 @@ import {browserCallMedia,RoomCall,useRoomCall,type CallMedia} from './calls'
 import {readCallSignal,type CallSignal} from './callSignal'
 import React,{lazy,Suspense,useCallback,useEffect,useLayoutEffect,useRef,useState} from 'react'
 import {AccessibilityInfo,Animated,BackHandler,Easing,Image,Modal,PanResponder,Platform,Pressable,ScrollView,View,useWindowDimensions,type ViewStyle} from 'react-native'
-import {api,capitalizeName,normalizeUsername,usernameHint,validUsername,initialChats,initialComments,initialPosts,initials,lime,me,people,questions,slides,themes,type FollowListKind,type FollowPage,type FollowStats,type Note,type Person,type Post,type Role,type StoryGroup,type Theme} from './index'
-import {Avatar,Button,Card,Copy,Design,Field,Icon,IconButton,IconTile,Logo,PersonName,ScreenLinks,Segmented,row,spread,stack,useDesign,type Glyph,type IconRendererProps} from './ui'
+import {api,storyLifetime,capitalizeName,normalizeUsername,usernameHint,validUsername,initialChats,initialComments,initialPosts,initials,lime,me,people,questions,slides,themes,type FollowListKind,type FollowPage,type FollowStats,type Note,type Person,type Post,type Role,type StoryGroup,type Theme} from './index'
+import {Avatar,Button,Card,Copy,Design,Field,Icon,IconButton,IconTile,Logo,PersonName,ScreenLinks,Segmented,VerifiedBadge,row,spread,stack,useDesign,type Glyph,type IconRendererProps} from './ui'
 import type {ExtraPage} from './FeatureScreens'
 import {LoadingScreen} from './LoadingScreen'
 import {GoogleButton} from './GoogleButton'
@@ -38,7 +38,11 @@ type Overlay={kind:'connections';list:FollowListKind;person:Person}|{kind:'comme
 type PageEntry={page:Page;profile:Person;room:Room|null;overlays:Overlay[];scrollY:number}
 const tabs:[Page,Glyph][]=[['Home','home'],['Learn','book'],['Explore','search'],['Play','game']]
 const localRooms=people.filter(p=>p.id in initialChats).map(person=>({id:person.id,person}))
-const storyPeople=[people[0],people[4],people[2],people[1]]
+const storyPeople=[people[0],people[3],people[4],people[2],people[1]]
+const hour=3600000
+// Demo stories carry a posted time and disappear 12 hours later, like real ones. Zee's is about to expire.
+const demoPosted:Record<string,number>={ada:Date.now()-2*hour,bello:Date.now()-4*hour,code:Date.now()-9*hour,zee:Date.now()-storyLifetime+4*60000,tobi:Date.now()-hour}
+const storyLeft=(ms:number)=>{const minutes=Math.max(1,Math.ceil(ms/60000));return minutes>=60?Math.floor(minutes/60)+'h '+(minutes%60)+'m left':minutes+'m left'}
 const uid=()=>Date.now().toString(36)+Math.random().toString(36).slice(2)
 const json=(body:unknown,method='POST')=>({method,body:JSON.stringify(body)})
 const errorMessage=(error:unknown)=>error instanceof Error?error.message:'Something went wrong. Try again.'
@@ -275,7 +279,7 @@ export default function App(props:Props){
   const [toast,setToast]=useState<ToastMessage|null>(null)
   const [seen,setSeen]=useState(new Set<string>())
   const [demoAccounts,setDemoAccounts]=useState<AdminAccount[]>(()=>people.filter(person=>!person.group).map(person=>({person,email:'',created:null,independentlyVerified:person.role!=='tech'&&!!person.verified})))
-  const [ownStory,setOwnStory]=useState<{text:string;image?:string;videoPreview?:boolean}|null>(null)
+  const [ownStory,setOwnStory]=useState<{text:string;image?:string;videoPreview?:boolean;posted:number}|null>(null)
   const [storyMode,setStoryMode]=useState('Text')
   const [storyImage,setStoryImage]=useState<string>()
   const [storyMedia,setStoryMedia]=useState<Media|null>(null)
@@ -422,12 +426,18 @@ export default function App(props:Props){
     const timer=setInterval(()=>{setClock(Date.now());void load()},60000)
     return ()=>{alive=false;clearInterval(timer)}
   },[base,demo,token,page,storyRefresh])
+  useEffect(()=>{
+    const timer=setInterval(()=>setClock(Date.now()),30000)
+    return ()=>clearInterval(timer)
+  },[])
+  const demoStories=React.useMemo(()=>storyPeople.filter(person=>clock-demoPosted[person.id]<storyLifetime),[clock])
+  const demoOwn=React.useMemo(()=>ownStory&&clock-ownStory.posted<storyLifetime?ownStory:null,[ownStory,clock])
   // Stories vanish 12 hours after posting: hide them on the client as soon as they expire, not only on the next refresh.
   const activeStories=React.useMemo(()=>liveStories.map(group=>({...group,stories:group.stories.filter(item=>Date.parse(item.expires)>clock)})).filter(group=>group.stories.length),[liveStories,clock])
   const storyId=overlay?.kind==='story'?overlay.person.id:null
   const moveStory=useCallback((direction:1|-1)=>{
     if(!storyId)return
-    const queue=demo?(ownStory?[user,...storyPeople]:storyPeople):activeStories.map(group=>group.author)
+    const queue=demo?(demoOwn?[user,...demoStories]:demoStories):activeStories.map(group=>group.author)
     const index=queue.findIndex(person=>person.id===storyId)
     if(index<0)return
     const count=demo?1:activeStories[index].stories.length
@@ -438,7 +448,7 @@ export default function App(props:Props){
     if(next)setSeen(previous=>new Set(previous).add(next.id))
     setStoryIndex(0)
     setOverlay(current=>current?.kind==='story'&&current.person.id===storyId?(next?{kind:'story',person:next}:null):current)
-  },[storyId,storyIndex,ownStory,user,demo,activeStories])
+  },[storyId,storyIndex,demoOwn,demoStories,user,demo,activeStories])
   useEffect(()=>{
     if(!storyId)return
     const timer=setTimeout(()=>moveStory(1),6500)
@@ -793,9 +803,9 @@ export default function App(props:Props){
       {desktop&&name==='Notifications'&&unread&&<View style={{marginLeft:'auto',width:7,height:7,borderRadius:4,backgroundColor:theme.purple}}/>}
     </Pressable>
   }
-  const hasOwnStory=demo?!!ownStory:activeStories.some(group=>group.author.id===user.id)
+  const hasOwnStory=demo?!!demoOwn:activeStories.some(group=>group.author.id===user.id)
   const home=<>
-    {(demo||token)&&<View style={{paddingHorizontal:2}}><StoryRow onStory={person=>selectOverlay({kind:'story',person})} onCreate={()=>selectOverlay(hasOwnStory?{kind:'story',person:user}:{kind:'newStory'})} seen={seen} own={hasOwnStory?user:null} others={demo?storyPeople:activeStories.map(group=>group.author).filter(author=>author.id!==user.id)}/></View>}
+    {(demo||token)&&<View style={{paddingHorizontal:2}}><StoryRow onStory={person=>selectOverlay({kind:'story',person})} onCreate={()=>selectOverlay(hasOwnStory?{kind:'story',person:user}:{kind:'newStory'})} seen={seen} own={hasOwnStory?user:null} others={demo?demoStories:activeStories.map(group=>group.author).filter(author=>author.id!==user.id)}/></View>}
     <Segmented options={['For you','Following']} selected={followingOnly?'Following':'For you'} onSelect={value=>setFollowingOnly(value==='Following')}/>
     {feedError?failure:loading?<Loading/>:displayedPosts.length?displayedPosts.map(post=><PostCard key={post.id} post={post} onReact={react} onOverlay={selectOverlay} onProfile={showProfile}/>):<Empty title={followingOnly?'Your following feed is empty':'Start the conversation'} detail={followingOnly?'Follow classmates to see their posts here.':'Share the first post with your classmates.'} action={followingOnly?'Find people':'Create post'} onPress={followingOnly?()=>open('Explore'):compose}/>}
     {demo&&!followingOnly&&<View style={{...row,flexWrap:'wrap'}}>
@@ -944,8 +954,8 @@ export default function App(props:Props){
       {storyMode==='Photo'&&<>{storyImage&&<Image source={{uri:storyImage}} style={{width:'100%',height:140,borderRadius:12}}/>}{props.pickMedia&&<Button label={storyImage?'Replace photo':'Choose photo'} leading="image" variant="secondary" onPress={()=>{void props.pickMedia?.().then(value=>{if(value){setStoryImage(value.uri);setStoryMedia(value)}}).catch(fail)}}/>}</>}
       {storyMode==='Video'&&<Card><IconTile name="vid"/><Copy>Try the video story layout with a sample preview.</Copy></Card>}
       <Field label={storyMode==='Text'?'What’s your story?':'Caption'} value={comment} onChangeText={setComment} multiline maxLength={240}/>
-      {!demo&&<Copy size={12} color={theme.muted}>Stories disappear 12 hours after you share them.</Copy>}
-      <Button label={busy?'Sharing…':'Share story'} disabled={!valid||busy} onPress={()=>{if(!demo){void shareStory();return}setOwnStory({text:comment.trim(),image:storyMode==='Photo'?storyImage:undefined,videoPreview:storyMode==='Video'});modalClose();notify('Story shared in the preview')}}/>
+      <Copy size={12} color={theme.muted}>Stories disappear 12 hours after you share them.</Copy>
+      <Button label={busy?'Sharing…':'Share story'} disabled={!valid||busy} onPress={()=>{if(!demo){void shareStory();return}setOwnStory({text:comment.trim(),image:storyMode==='Photo'?storyImage:undefined,videoPreview:storyMode==='Video',posted:Date.now()});modalClose();notify('Story shared in the preview. It disappears after 12 hours.')}}/>
     </>
   }else if(overlay?.kind==='share'){
     sheet=<><Copy>{overlay.post.body||'Image post'}</Copy>{canShare&&<Button label="Share post text" onPress={()=>{void props.share?.(overlay.post.body).then(()=>{modalClose();notify('Post text ready to share')}).catch(fail)}}/>}</>
@@ -963,8 +973,9 @@ export default function App(props:Props){
   const liveGroup=story&&!demo?activeStories.find(group=>group.author.id===story.id):undefined
   const activeIndex=liveGroup?Math.min(storyIndex,liveGroup.stories.length-1):0
   const liveItem=liveGroup?.stories[activeIndex]
-  const personalStory:{text:string;image?:string;videoPreview?:boolean}|null=demo?(story?.id===user.id?ownStory:null):liveItem?{text:liveItem.text,image:liveItem.image}:null
-  const storyText=demo?personalStory?.text??(story?.id==='ada'?'Study session after school. Bring your notes!':story?.id==='code'?'Code Club meets on Friday!':'See you at quiz night!'):liveItem?.text??''
+  const personalStory:{text:string;image?:string;videoPreview?:boolean}|null=demo?(story?.id===user.id?demoOwn:null):liveItem?{text:liveItem.text,image:liveItem.image}:null
+  const storyPosted=demo?(story?.id===user.id?demoOwn?.posted:story?demoPosted[story.id]:undefined):liveItem?Date.parse(liveItem.created):undefined
+  const storyText=demo?personalStory?.text??(story?.id==='ada'?'Study session after school. Bring your notes!':story?.id==='bello'?'Maths test is on Friday. Revise quadratics!':story?.id==='code'?'Code Club meets on Friday!':'See you at quiz night!'):liveItem?.text??''
   return <Design.Provider value={{theme,font,reduced,renderIcon:props.renderIcon}}><View style={{flex:1,backgroundColor:theme.bg,width:'100%'}}>
     {starting||stage==='restore'?<LoadingScreen/>:stage==='intro'?<Intro desktop={desktop} step={step} reduced={reduced} onSkip={()=>setStage('auth')} onNext={()=>step===2?setStage('auth'):setStep(step+1)} onBack={()=>setStep(step-1)}/>:stage==='auth'?<Auth base={base} demo={demo} busy={busy} error={error} submit={authenticate} onGoogle={(mode,username)=>void authenticateWithGoogle(mode,username)} onCancelGoogle={()=>googleRequest.current?.abort()} googlePending={googlePending} onDemo={()=>{setUser(me);setPage('Home');setStage('app')}} reduced={reduced}/>:
       <View style={{flex:1,flexDirection:'row',width:'100%',maxWidth:1360,alignSelf:'center'}}>
@@ -1033,7 +1044,10 @@ export default function App(props:Props){
         <View style={{width:'100%',maxWidth:640,alignSelf:'center',flex:1,gap:14}}>
           <View style={{...row,gap:4}}>{Array.from({length:liveGroup?.stories.length??1},(_,index)=><View key={index} style={{flex:1,height:3,borderRadius:3,backgroundColor:index<=activeIndex?lime:'rgba(255,255,255,.35)'}}/>)}</View>
           <View style={spread}>
-            <View style={{...row,flex:1}}><Avatar person={story} size={40}/><Copy color="#fff" weight={800}>{story.name}</Copy></View>
+            <View style={{...row,flex:1}}><Avatar person={story} size={40}/><View style={{flex:1,gap:2}}>
+              <View style={{...row,gap:5}}><Copy color="#fff" weight={800}>{story.name}</Copy><VerifiedBadge person={story}/></View>
+              {storyPosted!==undefined&&<Copy color="#fff" size={11}>{storyLeft(storyPosted+storyLifetime-clock)} · disappears after 12 hours</Copy>}
+            </View></View>
             <IconButton name="close" label="Close story" tint="#fff" onPress={modalClose}/>
           </View>
           <View {...storySwipe.panHandlers} style={{flex:1,minHeight:0,justifyContent:'center',gap:16,paddingBottom:16}}>
