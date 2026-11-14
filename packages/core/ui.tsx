@@ -1,6 +1,6 @@
 import React,{createContext,useContext,useEffect,useRef,useState} from 'react'
 import {Animated,Image,Platform,Pressable,Text,TextInput,View,type TextInputProps,type ViewStyle} from 'react-native'
-import {danger,lime,themes,type Person} from './index'
+import {danger,lime,teacherGold,themes,type Person} from './index'
 import {art} from './art'
 import {glyphs,type Glyph,type IconRendererProps} from './icons'
 
@@ -104,7 +104,8 @@ export function PersonName({person}:{person:Person}){
   const {theme}=useDesign()
   return <View style={{...row,gap:5}}>
     <Copy weight={800}>{person.name}</Copy>
-    {person.verified&&<View accessibilityLabel="Verified" style={{backgroundColor:theme.purple,width:16,height:16,borderRadius:8,alignItems:'center',justifyContent:'center'}}><Icon name="check" size={11} color="#fff" strong/></View>}
+    {person.teacher?<View accessibilityLabel="Verified teacher" style={{backgroundColor:teacherGold,width:16,height:16,borderRadius:8,alignItems:'center',justifyContent:'center'}}><Icon name="check" size={11} color="#fff" strong/></View>
+      :person.verified&&<View accessibilityLabel="Verified" style={{backgroundColor:theme.purple,width:16,height:16,borderRadius:8,alignItems:'center',justifyContent:'center'}}><Icon name="check" size={11} color="#fff" strong/></View>}
   </View>
 }
 

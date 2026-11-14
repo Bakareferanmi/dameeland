@@ -55,6 +55,16 @@ Create a regular account, get its immutable user ID from the authenticated `GET 
 
 Apply D1 migration `0007_admin_accounts.sql` before running the updated API. It returns previously self-selected tech accounts to student status. Admins can reassign the tech role, which grants a verified badge and a rounded-square avatar. Regular accounts can receive an independent badge. The dashboard shows activity totals and recent signups, posts, and comments. It displays only aggregate counts for private messages. Existing accounts without a recorded signup date are included in total users.
 
+## Teacher gold check
+
+Apply D1 migration `0010_teacher_badge.sql`. Admins can give or remove a gold check for any account from **Admin dashboard → Accounts** (**Give gold check** / **Remove gold check**). Only admins can change it, and the API ignores it everywhere else. It is separate from the purple verified badge and takes precedence over it, and the account's detail line shows **Teacher**. The Overview tab counts teachers.
+
+## Stories
+
+Stories last 12 hours and are not stored in D1. Each author's active stories sit in one Workers KV key (`stories:<userId>`) that carries a 12-hour expiration, and story photos go in R2 under `stories/<userId>/<storyId>`. The API also checks every story's timestamp on every read, so nothing is served after 12 hours even if KV or R2 cleanup lags, and the app hides stories the moment they expire. Followers see a story, plus the author. Each person can have up to 10 active stories, and a feed request reads at most 40 followed authors. Authors can delete their own stories.
+
+Before deploying, create the namespace with `npx wrangler kv namespace create STORIES` and put its ID in `apps/api/wrangler.jsonc`. As a storage backstop, add an R2 lifecycle rule on `dameeland-media` that deletes objects with the `stories/` prefix after 1 day. Expired photos are also deleted whenever the author posts or deletes a story.
+
 Apply migration `0008_reaction_analytics.sql` to enable 7- and 30-day analytics. The overview refreshes every 30 seconds while open. Charts group activity by UTC day. Like and repost charts count currently active reactions by the date they were added. Earlier reactions without timestamps still count in the lifetime totals.
 
 ## Implemented flows

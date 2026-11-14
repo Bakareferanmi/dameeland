@@ -6,13 +6,13 @@ import {Avatar,Button,Card,Copy,Field,PersonName,Segmented,row,useDesign} from '
 
 const metrics=[
   ['users','Users'],['newUsers','New users · 7 days'],['activeUsers','Active users · 7 days'],
-  ['techUsers','Tech creators'],['verifiedUsers','Verified users'],['posts','Posts'],
+  ['techUsers','Tech creators'],['teacherUsers','Teachers'],['verifiedUsers','Verified users'],['posts','Posts'],
   ['comments','Comments'],['likes','Likes'],['reposts','Reposts'],['follows','Follows'],['messages','Messages'],
 ] as const
 const actions={signup:'joined',post:'published a post',comment:'left a comment'} as const
 const message=(error:unknown)=>error instanceof Error?error.message:'Try again in a moment.'
 
-export default function Admin({base,token,sample,onSampleChange}:{base:string;token:string;sample?:{overview:AdminOverview;accounts:AdminAccount[]};onSampleChange:(id:string,role:Role,verified:boolean)=>void}){
+export default function Admin({base,token,sample,onSampleChange}:{base:string;token:string;sample?:{overview:AdminOverview;accounts:AdminAccount[]};onSampleChange:(id:string,role:Role,verified:boolean,teacher:boolean)=>void}){
   const {theme}=useDesign()
   const [days,setDays]=useState(7)
   const [refreshing,setRefreshing]=useState(false)
@@ -57,13 +57,13 @@ export default function Admin({base,token,sample,onSampleChange}:{base:string;to
   const data=sample?.overview??overview
   const search=query.trim().toLowerCase().replace(/^@/,'')
   const accounts=sample?sample.accounts.filter(({person})=>(person.name+' '+(person.username??'')).toLowerCase().includes(search)):directory?.accounts
-  async function change(account:AdminAccount,role:Role,verified:boolean){
+  async function change(account:AdminAccount,role:Role,verified:boolean,teacher=Boolean(account.person.teacher)){
     if(saving)return
     setSaveError('')
-    if(sample){onSampleChange(account.person.id,role,verified);return}
+    if(sample){onSampleChange(account.person.id,role,verified,teacher);return}
     setSaving(account.person.id)
     try{
-      const updated=await api<AdminAccount>(base,'/admin/accounts/'+encodeURIComponent(account.person.id),{method:'PUT',body:JSON.stringify({role,verified})},token)
+      const updated=await api<AdminAccount>(base,'/admin/accounts/'+encodeURIComponent(account.person.id),{method:'PUT',body:JSON.stringify({role,verified,teacher})},token)
       setDirectory(previous=>previous&&({...previous,accounts:previous.accounts.map(value=>value.person.id===updated.person.id?updated:value)}))
     }catch(reason){setSaveError(message(reason))}
     finally{setSaving('')}
@@ -102,10 +102,12 @@ export default function Admin({base,token,sample,onSampleChange}:{base:string;to
       </>:tab==='Accounts'&&<>
         {accounts?.length?accounts.map(account=><Card key={account.person.id}>
           <View style={row}><Avatar person={account.person}/><View style={{flex:1}}><PersonName person={account.person}/>
-            <Copy size={12} color={theme.muted}>{account.person.username?'@'+account.person.username+' · ':''}{account.person.role==='tech'?'Tech creator':'Student'}</Copy>
+            <Copy size={12} color={theme.muted}>{account.person.username?'@'+account.person.username+' · ':''}{account.person.teacher?'Teacher':account.person.role==='tech'?'Tech creator':'Student'}</Copy>
             {!!account.email&&<Copy size={12} color={theme.muted}>{account.email}</Copy>}
           </View></View>
           <View style={{...row,flexWrap:'wrap'}}>
+            <Button label={account.person.teacher?'Remove gold check':'Give gold check'} variant="secondary" disabled={!!saving}
+              onPress={()=>void change(account,account.person.role,account.independentlyVerified,!account.person.teacher)}/>
             <Button label={account.person.role==='tech'?'Remove tech role':'Assign tech role'} variant="secondary" disabled={!!saving}
               onPress={()=>void change(account,account.person.role==='tech'?'student':'tech',account.independentlyVerified)}/>
             {account.person.role==='tech'?<Copy size={12} color={theme.muted}>Verified with tech role</Copy>

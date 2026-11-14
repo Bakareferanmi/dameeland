@@ -4,11 +4,11 @@ import {cors} from 'hono/cors'
 import {bodyLimit} from 'hono/body-limit'
 import {HTTPException} from 'hono/http-exception'
 import {DurableObject} from 'cloudflare:workers'
-import {commentGifs,commentStickers,capitalizeName,initials,normalizeUsername,usernameHint,validUsername,type AdminAccount,type AdminActivity,type AdminDay,type AdminOverview,type CommentAttachment,type FollowPage,type FollowStats,type Person,type Role} from '@dameeland/core'
+import {commentGifs,storyLimit,storyLifetime,type Story,type StoryGroup,commentStickers,capitalizeName,initials,normalizeUsername,usernameHint,validUsername,type AdminAccount,type AdminActivity,type AdminDay,type AdminOverview,type CommentAttachment,type FollowPage,type FollowStats,type Person,type Role} from '@dameeland/core'
 
-interface Env {DB:D1Database;MEDIA:R2Bucket;ROOMS:DurableObjectNamespace<ChatRoom>;ALLOWED_ORIGIN:string;GOOGLE_CLIENT_ID?:string;GOOGLE_CLIENT_SECRET?:string;GOOGLE_REDIRECT_URI?:string;ADMIN_USER_IDS?:string;RESEND_API_KEY?:string;RECOVERY_FROM?:string}
-type Account={id:string;email:string;name:string;role:Role;salt:string;password_hash:string;username?:string|null;verified?:number}
-type PublicAccount=Pick<Account,'id'|'name'|'role'|'username'|'verified'> & {avatar_media?:string|null;cover_media?:string|null}
+interface Env {DB:D1Database;MEDIA:R2Bucket;STORIES:KVNamespace;ROOMS:DurableObjectNamespace<ChatRoom>;ALLOWED_ORIGIN:string;GOOGLE_CLIENT_ID?:string;GOOGLE_CLIENT_SECRET?:string;GOOGLE_REDIRECT_URI?:string;ADMIN_USER_IDS?:string;RESEND_API_KEY?:string;RECOVERY_FROM?:string}
+type Account={id:string;email:string;name:string;role:Role;salt:string;password_hash:string;username?:string|null;verified?:number;teacher?:number}
+type PublicAccount=Pick<Account,'id'|'name'|'role'|'username'|'verified'|'teacher'> & {avatar_media?:string|null;cover_media?:string|null}
 type App={Bindings:Env;Variables:{user:PublicAccount;tokenHash:string}}
 const app=new Hono<App>()
 const encoder=new TextEncoder()
@@ -17,7 +17,7 @@ const hash=async(value:string)=>hex(await crypto.subtle.digest('SHA-256',encoder
 const random=(size:number)=>hex(crypto.getRandomValues(new Uint8Array(size)))
 const clean=(value:unknown,max:number)=>typeof value==='string'?value.trim().slice(0,max):''
 const mediaUrl=(key:string,url:string)=>new URL('/api/media/'+key,url).href
-const person=(user:PublicAccount,url:string):Person=>({id:user.id,name:user.name,username:user.username??undefined,initials:initials(user.name),role:user.role,color:user.role==='tech'?'#CFE8FF':'#FFD9B8',detail:user.role==='tech'?'Tech creator':'Student',verified:user.role==='tech'||Boolean(user.verified),avatar:user.avatar_media?mediaUrl(user.avatar_media,url):undefined,cover:user.cover_media?mediaUrl(user.cover_media,url):undefined})
+const person=(user:PublicAccount,url:string):Person=>({id:user.id,name:user.name,username:user.username??undefined,initials:initials(user.name),role:user.role,color:user.role==='tech'?'#CFE8FF':'#FFD9B8',detail:user.teacher?'Teacher':user.role==='tech'?'Tech creator':'Student',teacher:Boolean(user.teacher),verified:user.role==='tech'||Boolean(user.verified),avatar:user.avatar_media?mediaUrl(user.avatar_media,url):undefined,cover:user.cover_media?mediaUrl(user.cover_media,url):undefined})
 const readBody=async(request:Request)=>request.json<Record<string,unknown>>().catch(()=>null)
 const time=(date:number)=>new Date(date).toISOString()
 const now=()=>Date.now()
@@ -48,7 +48,7 @@ async function authAllowed(db:D1Database,ip:string,flow:string,maxAttempts=25){
 app.use('/api/*',async(c,next)=>cors({origin:[c.env.ALLOWED_ORIGIN,'http://127.0.0.1:5173'],allowMethods:['GET','POST','PUT','DELETE','OPTIONS'],allowHeaders:['Authorization','Content-Type']})(c,next))
 app.use('/api/*',async(c,next)=>{
   if(c.req.method!=='POST'&&c.req.method!=='PUT')return next()
-  const maxSize=c.req.path==='/api/posts'||c.req.path.startsWith('/api/me/photos/')||/^\/api\/posts\/[^/]+\/comments$/.test(c.req.path)?5300000:8192
+  const maxSize=c.req.path==='/api/posts'||c.req.path==='/api/stories'||c.req.path.startsWith('/api/me/photos/')||/^\/api\/posts\/[^/]+\/comments$/.test(c.req.path)?5300000:8192
   return bodyLimit({maxSize,onError:()=>{throw new HTTPException(413,{message:'The request is too large.'})}})(c,next)
 })
 app.get('/api/health',c=>c.json({ok:true}))
@@ -233,7 +233,7 @@ app.post('/api/google/exchange',async c=>{
   if(attempt.status!=='complete')return c.json({pending:true},202)
   const claimed=await DB.prepare("DELETE FROM google_attempts WHERE state=? AND exchange_hash=? AND status='complete' AND expires>? RETURNING user_id").bind(state,key,now()).first<{user_id:string}>()
   if(!claimed)return c.json({error:'Google sign-in expired. Please try again.'},410)
-  const account=await DB.prepare('SELECT id,name,role,username,verified,avatar_media,cover_media FROM users WHERE id=?').bind(claimed.user_id).first<PublicAccount>()
+  const account=await DB.prepare('SELECT id,name,role,username,verified,teacher,avatar_media,cover_media FROM users WHERE id=?').bind(claimed.user_id).first<PublicAccount>()
   if(!account)return c.json({error:'Account unavailable.'},404)
   return c.json(await session(c.env,account,c.req.url))
 })
@@ -247,13 +247,42 @@ app.get('/api/media/:id',async c=>{
   object.writeHttpMetadata(headers)
   return new Response(object.body,{headers})
 })
+const storyKey=(user:string)=>'stories:'+user
+type StoryRecord={id:string;text:string;media?:string;created:number}
+const storyExpiry=(story:StoryRecord)=>story.created+storyLifetime
+async function readStories(env:Env,user:string){
+  const list=await env.STORIES.get<StoryRecord[]>(storyKey(user),'json')
+  return Array.isArray(list)?list:[]
+}
+// Stories live only in KV (one key per author) and R2, never in D1. The key expires on its own and
+// every read also filters by timestamp, so a story is never served after 12 hours even if cleanup lags.
+async function writeStories(env:Env,user:string,list:StoryRecord[]){
+  if(!list.length)return env.STORIES.delete(storyKey(user))
+  const ttl=Math.max(60,Math.ceil((Math.max(...list.map(storyExpiry))-now())/1000))
+  return env.STORIES.put(storyKey(user),JSON.stringify(list),{expirationTtl:ttl})
+}
+const storyView=(user:string,story:StoryRecord,url:string):Story=>({id:story.id,text:story.text,image:story.media?new URL('/api/story-media/'+user+'/'+story.id,url).href:undefined,created:time(story.created),expires:time(storyExpiry(story))})
+const storyMediaKey=(user:string,id:string)=>'stories/'+user+'/'+id
+const uuidPattern=/^[a-f0-9-]{36}$/
+app.get('/api/story-media/:user/:id',async c=>{
+  const {user,id}=c.req.param()
+  if(!uuidPattern.test(user)||!uuidPattern.test(id))return c.json({error:'Image unavailable.'},404)
+  const story=(await readStories(c.env,user)).find(item=>item.id===id&&item.media&&storyExpiry(item)>now())
+  if(!story)return c.json({error:'Image unavailable.'},404)
+  const object=await c.env.MEDIA.get(storyMediaKey(user,id))
+  if(!object)return c.json({error:'Image unavailable.'},404)
+  const remaining=Math.max(0,Math.floor((storyExpiry(story)-now())/1000))
+  const headers=new Headers({'X-Content-Type-Options':'nosniff','Cache-Control':'public, max-age='+Math.min(300,remaining)})
+  object.writeHttpMetadata(headers)
+  return new Response(object.body,{headers})
+})
 app.use('/api/*',async(c,next)=>{
   const header=c.req.header('Authorization')
   const ticket=c.req.path.endsWith('/socket')?c.req.header('Sec-WebSocket-Protocol')?.split(',').map(s=>s.trim()).find(s=>s.startsWith('ticket.'))?.slice(7):undefined
   const token=header?.match(/^Bearer ([a-f0-9]{64})$/)?.[1]??ticket
   if(!token||!/^[a-f0-9]{64}$/.test(token)) return c.json({error:'Log in to continue.'},401)
   const tokenHash=await hash(token)
-  const user=await c.env.DB.prepare('SELECT u.id,u.name,u.role,u.username,u.verified,u.avatar_media,u.cover_media FROM users u JOIN sessions s ON s.user_id=u.id WHERE s.token_hash=? AND s.expires>?').bind(tokenHash,now()).first<PublicAccount>()
+  const user=await c.env.DB.prepare('SELECT u.id,u.name,u.role,u.username,u.verified,u.teacher,u.avatar_media,u.cover_media FROM users u JOIN sessions s ON s.user_id=u.id WHERE s.token_hash=? AND s.expires>?').bind(tokenHash,now()).first<PublicAccount>()
   if(!user) return c.json({error:'Your session has expired. Log in again.'},401)
   c.set('user',user);c.set('tokenHash',tokenHash)
   await next()
@@ -287,6 +316,7 @@ app.get('/api/admin/overview',async c=>{
       )) activeUsers,
       (SELECT COUNT(*) FROM users WHERE role='tech') techUsers,
       (SELECT COUNT(*) FROM users WHERE verified=1 OR role='tech') verifiedUsers,
+      (SELECT COUNT(*) FROM users WHERE teacher=1) teacherUsers,
       (SELECT COUNT(*) FROM posts) posts,
       (SELECT COUNT(*) FROM comments) comments,
       (SELECT COUNT(*) FROM reactions WHERE kind='like') likes,
@@ -322,7 +352,7 @@ app.get('/api/admin/accounts',async c=>{
   const q=clean(c.req.query('q'),100).toLowerCase().replace(/^@/,'')
   const cursor=clean(c.req.query('cursor'),64)
   const {results}=await c.env.DB.prepare(`
-    SELECT id,name,email,role,username,verified,avatar_media,cover_media,created FROM users
+    SELECT id,name,email,role,username,verified,teacher,avatar_media,cover_media,created FROM users
     WHERE id>? AND (instr(lower(name),?)>0 OR instr(username,?)>0 OR instr(email,?)>0)
     ORDER BY id LIMIT 26
   `).bind(cursor,q,q,q).all<AdminUserRow>()
@@ -331,10 +361,11 @@ app.get('/api/admin/accounts',async c=>{
 app.put('/api/admin/accounts/:id',async c=>{
   const payload=await readBody(c.req.raw)
   if(payload?.role!=='student'&&payload?.role!=='tech'||typeof payload?.verified!=='boolean')return c.json({error:'Choose a valid role and verification status.'},400)
+  if(payload.teacher!==undefined&&typeof payload.teacher!=='boolean')return c.json({error:'Choose a valid teacher status.'},400)
   const account=await c.env.DB.prepare(`
-    UPDATE users SET role=?,verified=? WHERE id=?
-    RETURNING id,name,email,role,username,verified,avatar_media,cover_media,created
-  `).bind(payload.role,Number(payload.verified),c.req.param('id')).first<AdminUserRow>()
+    UPDATE users SET role=?,verified=?,teacher=COALESCE(?,teacher) WHERE id=?
+    RETURNING id,name,email,role,username,verified,teacher,avatar_media,cover_media,created
+  `).bind(payload.role,Number(payload.verified),payload.teacher===undefined?null:Number(payload.teacher),c.req.param('id')).first<AdminUserRow>()
   if(!account)return c.json({error:'Account unavailable.'},404)
   return c.json(adminAccount(account,c.req.url))
 })
@@ -360,7 +391,7 @@ app.put('/api/me/photos/:kind',async c=>{
   try{
     const [previous,updated]=await DB.batch<PublicAccount>([
       DB.prepare('SELECT avatar_media,cover_media FROM users WHERE id=?').bind(user.id),
-      DB.prepare(`UPDATE users SET ${column}=? WHERE id=? RETURNING id,name,role,username,verified,avatar_media,cover_media`).bind(key,user.id),
+      DB.prepare(`UPDATE users SET ${column}=? WHERE id=? RETURNING id,name,role,username,verified,teacher,avatar_media,cover_media`).bind(key,user.id),
     ])
     const account=updated.results[0]
     if(!account)throw new Error('Profile unavailable.')
@@ -368,6 +399,55 @@ app.put('/api/me/photos/:kind',async c=>{
     if(old)c.executionCtx.waitUntil(MEDIA.delete(old).catch(()=>{}))
     return c.json(viewer(c.env,account,c.req.url))
   }catch(error){await MEDIA.delete(key);throw error}
+})
+app.get('/api/stories',async c=>{
+  const me=c.get('user')
+  const {results}=await c.env.DB.prepare(`
+    SELECT id,name,role,username,verified,teacher,avatar_media,cover_media FROM users
+    WHERE id=?1 OR id IN (SELECT target FROM follows WHERE follower=?1 LIMIT 40)
+  `).bind(me.id).all<PublicAccount>()
+  const at=now()
+  const groups=await Promise.all(results.map(async author=>({author,stories:(await readStories(c.env,author.id)).filter(story=>storyExpiry(story)>at)})))
+  c.header('Cache-Control','no-store')
+  return c.json<StoryGroup[]>(groups.filter(group=>group.stories.length)
+    .sort((a,b)=>Number(b.author.id===me.id)-Number(a.author.id===me.id)||b.stories[b.stories.length-1].created-a.stories[a.stories.length-1].created)
+    .map(group=>({author:person(group.author,c.req.url),stories:group.stories.map(story=>storyView(group.author.id,story,c.req.url))})))
+})
+app.post('/api/stories',async c=>{
+  const user=c.get('user')
+  const id=crypto.randomUUID()
+  let text='',contentType:string|null=null,file:File|null=null
+  if(c.req.header('Content-Type')?.startsWith('multipart/form-data')){
+    const form=await c.req.raw.formData().catch(()=>null)
+    text=clean(form?.get('text'),240)
+    const upload:unknown=form?.get('image')
+    if(upload instanceof File){
+      contentType=await imageType(upload)
+      if(!contentType)return c.json({error:'Choose a PNG, JPEG or WebP image under 5 MB.'},400)
+      file=upload
+    }
+  }else text=clean((await readBody(c.req.raw))?.text,240)
+  if(!text&&!file)return c.json({error:'Write a story or add a photo.'},400)
+  const at=now()
+  const all=await readStories(c.env,user.id)
+  const active=all.filter(story=>storyExpiry(story)>at)
+  if(active.length>=storyLimit)return c.json({error:'You can have up to '+storyLimit+' stories at once. Delete one or wait for it to expire.'},429)
+  const story:StoryRecord={id,text,created:at,media:file?id:undefined}
+  if(file&&contentType)await c.env.MEDIA.put(storyMediaKey(user.id,id),await file.arrayBuffer(),{httpMetadata:{contentType}})
+  try{await writeStories(c.env,user.id,[...active,story])}
+  catch(error){if(file)await c.env.MEDIA.delete(storyMediaKey(user.id,id));throw error}
+  const expired=all.filter(item=>item.media&&storyExpiry(item)<=at).map(item=>storyMediaKey(user.id,item.id))
+  if(expired.length)c.executionCtx.waitUntil(c.env.MEDIA.delete(expired).catch(()=>{}))
+  return c.json(storyView(user.id,story,c.req.url),201)
+})
+app.delete('/api/stories/:id',async c=>{
+  const user=c.get('user'),id=c.req.param('id')
+  const all=await readStories(c.env,user.id)
+  const target=all.find(story=>story.id===id)
+  if(!target)return c.json({error:'Story unavailable.'},404)
+  await writeStories(c.env,user.id,all.filter(story=>story.id!==id&&storyExpiry(story)>now()))
+  if(target.media)c.executionCtx.waitUntil(c.env.MEDIA.delete(storyMediaKey(user.id,id)).catch(()=>{}))
+  return c.json({ok:true})
 })
 app.post('/api/logout',async c=>{
   await c.env.DB.prepare('DELETE FROM sessions WHERE token_hash=?').bind(c.get('tokenHash')).run()
@@ -378,7 +458,7 @@ app.get('/api/feed',async c=>{
   const id=c.get('user').id
   const following=c.req.query('following')==='1'
   const {results}=await c.env.DB.prepare(`
-    SELECT u.id,u.name,u.role,u.username,u.verified,u.avatar_media,u.cover_media,p.id post_id,p.body,p.created,p.media,
+    SELECT u.id,u.name,u.role,u.username,u.verified,u.teacher,u.avatar_media,u.cover_media,p.id post_id,p.body,p.created,p.media,
     (SELECT COUNT(*) FROM reactions r WHERE r.post_id=p.id AND kind='like') likes,
     EXISTS(SELECT 1 FROM reactions r WHERE r.post_id=p.id AND r.user_id=? AND kind='like') liked,
     (SELECT COUNT(*) FROM comments x WHERE x.post_id=p.id) comments,
@@ -436,7 +516,7 @@ function commentAttachment(row:Pick<CommentRow,'media'|'gif'|'sticker'>,url:stri
 }
 app.get('/api/posts/:id/comments',async c=>{
   const {results}=await c.env.DB.prepare(`
-    SELECT u.id,u.name,u.role,u.username,u.verified,u.avatar_media,u.cover_media,x.id note_id,x.body,x.media,x.gif,x.sticker
+    SELECT u.id,u.name,u.role,u.username,u.verified,u.teacher,u.avatar_media,u.cover_media,x.id note_id,x.body,x.media,x.gif,x.sticker
     FROM comments x JOIN users u ON u.id=x.author WHERE post_id=? ORDER BY x.created LIMIT 100
   `).bind(c.req.param('id')).all<CommentRow>()
   return c.json(results.map(r=>({...note(r,c.req.url),attachment:commentAttachment(r,c.req.url)})))
@@ -477,7 +557,7 @@ app.post('/api/posts/:id/comments',async c=>{
 app.get('/api/people',async c=>{
   const user=c.get('user').id
   const q=clean(c.req.query('q'),60).toLowerCase()
-  const {results}=await c.env.DB.prepare('SELECT id,name,role,username,verified,avatar_media,cover_media,EXISTS(SELECT 1 FROM follows WHERE follower=? AND target=u.id) following FROM users u WHERE id!=? AND (instr(lower(name),?)>0 OR instr(username,?)>0) ORDER BY name LIMIT 30').bind(user,user,q,q.replace(/^@/,'')||q).all<PublicAccount&{following:number}>()
+  const {results}=await c.env.DB.prepare('SELECT id,name,role,username,verified,teacher,avatar_media,cover_media,EXISTS(SELECT 1 FROM follows WHERE follower=? AND target=u.id) following FROM users u WHERE id!=? AND (instr(lower(name),?)>0 OR instr(username,?)>0) ORDER BY name LIMIT 30').bind(user,user,q,q.replace(/^@/,'')||q).all<PublicAccount&{following:number}>()
   return c.json(results.map(r=>({...person(r,c.req.url),following:Boolean(r.following)})))
 })
 app.get('/api/people/:id/follow-stats',async c=>{
@@ -500,7 +580,7 @@ app.get('/api/people/:id/connections/:kind',async c=>{
   const source=kind==='followers'?'target':'follower'
   const destination=kind==='followers'?'follower':'target'
   const {results}=await db.prepare(`
-    SELECT u.id,u.name,u.role,u.username,u.verified,u.avatar_media,u.cover_media FROM follows f
+    SELECT u.id,u.name,u.role,u.username,u.verified,u.teacher,u.avatar_media,u.cover_media FROM follows f
     JOIN users u ON u.id=f.${destination}
     WHERE f.${source}=? AND f.${destination}>? ORDER BY f.${destination} LIMIT 31
   `).bind(id,cursor).all<PublicAccount>()
@@ -520,7 +600,7 @@ app.put('/api/people/:id/follow',async c=>{
 const member=(db:D1Database,room:string,user:string)=>db.prepare('SELECT id FROM rooms WHERE id=? AND (first_user=? OR second_user=?)').bind(room,user,user).first()
 app.get('/api/rooms',async c=>{
   const user=c.get('user').id
-  const {results}=await c.env.DB.prepare('SELECT r.id room,u.id,u.name,u.role,u.username,u.verified,u.avatar_media,u.cover_media FROM rooms r JOIN users u ON u.id=CASE WHEN first_user=? THEN second_user ELSE first_user END WHERE first_user=? OR second_user=? LIMIT 60').bind(user,user,user).all<PublicAccount&{room:string}>()
+  const {results}=await c.env.DB.prepare('SELECT r.id room,u.id,u.name,u.role,u.username,u.verified,u.teacher,u.avatar_media,u.cover_media FROM rooms r JOIN users u ON u.id=CASE WHEN first_user=? THEN second_user ELSE first_user END WHERE first_user=? OR second_user=? LIMIT 60').bind(user,user,user).all<PublicAccount&{room:string}>()
   return c.json(results.map(r=>({id:r.room,person:person(r,c.req.url)})))
 })
 app.post('/api/rooms',async c=>{
@@ -536,7 +616,7 @@ app.post('/api/rooms',async c=>{
 app.get('/api/rooms/:id/messages',async c=>{
   const room=c.req.param('id')
   if(!await member(c.env.DB,room,c.get('user').id)) return c.json({error:'Conversation unavailable.'},404)
-  const {results}=await c.env.DB.prepare('SELECT u.id,u.name,u.role,u.username,u.verified,u.avatar_media,u.cover_media,m.id note_id,m.body FROM messages m JOIN users u ON u.id=m.author WHERE room=? ORDER BY m.created DESC LIMIT 100').bind(room).all<NoteRow>()
+  const {results}=await c.env.DB.prepare('SELECT u.id,u.name,u.role,u.username,u.verified,u.teacher,u.avatar_media,u.cover_media,m.id note_id,m.body FROM messages m JOIN users u ON u.id=m.author WHERE room=? ORDER BY m.created DESC LIMIT 100').bind(room).all<NoteRow>()
   return c.json(results.reverse().map(r=>note(r,c.req.url)))
 })
 app.post('/api/rooms/:id/messages',async c=>{

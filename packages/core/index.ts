@@ -10,17 +10,22 @@ export const usernameHint = 'Use 3–24 letters, numbers or underscores.'
 export const normalizeUsername = (value:string) => value.trim().toLowerCase()
 export const validUsername = (value:string) => /^[a-z0-9_]{3,24}$/.test(value)
 export const capitalizeName = (value:string) => value.replace(/^(\s*)(\p{L})/u,(_,space:string,letter:string)=>space+letter.toUpperCase())
-export type Person = {id:string; name:string; initials:string; role:Role; color:string; detail:string; verified?:boolean; group?:boolean; avatar?:string; cover?:string; username?:string}
+export type Person = {id:string; name:string; initials:string; role:Role; color:string; detail:string; verified?:boolean; teacher?:boolean; group?:boolean; avatar?:string; cover?:string; username?:string}
 export type Viewer = Person & {isAdmin?:boolean}
 export type AdminAccount = {person:Person;email:string;created:number|null;independentlyVerified:boolean}
 export type AdminActivity = {id:string;name:string;kind:'signup'|'post'|'comment';created:number;excerpt?:string}
 export type AdminDay = {day:string;signups:number;posts:number;comments:number;likes:number;reposts:number;messages:number}
 export type AdminOverview = {
   series:AdminDay[];updatedAt:number;
-  users:number;newUsers:number;activeUsers:number;techUsers:number;verifiedUsers:number;
+  users:number;newUsers:number;activeUsers:number;techUsers:number;verifiedUsers:number;teacherUsers:number;
   posts:number;comments:number;likes:number;reposts:number;follows:number;messages:number;
   activity:AdminActivity[];
 }
+export const storyLifetime = 12*60*60*1000
+export const storyLimit = 10
+export const teacherGold = '#E5A100'
+export type Story = {id:string;text:string;image?:string;created:string;expires:string}
+export type StoryGroup = {author:Person;stories:Story[]}
 export type AdminAccounts = {accounts:AdminAccount[];nextCursor:string|null}
 export type FollowListKind = 'followers'|'following'
 export type FollowPage = {people:Person[]; nextCursor:string|null}
@@ -43,7 +48,7 @@ export const people:Person[] = [
   {id:'ada',name:'Ada O.',initials:'AO',role:'student',color:'#FFD9B8',detail:'SS2 · Student',verified:true},
   {id:'tobi',name:'Tobi A.',initials:'TB',role:'tech',color:'#CFE8FF',detail:'Tech · Code Club',verified:true},
   {id:'zee',name:'Zee K.',initials:'ZK',role:'student',color:'#FFE9A8',detail:'Student'},
-  {id:'bello',name:'Mr. Bello',initials:'MB',role:'student',color:'#E9E0FF',detail:'Maths teacher',verified:true},
+  {id:'bello',name:'Mr. Bello',initials:'MB',role:'student',color:'#E9E0FF',detail:'Maths teacher',teacher:true},
   {id:'code',name:'Code Club',initials:'CC',role:'tech',color:lime,detail:'Tech · School club',verified:true,group:true},
   {id:'maths',name:'SS2 Maths Club',initials:'SS',role:'tech',color:'#FFD6E8',detail:'Group · 24 members',group:true},
   {id:'squad',name:'JS Study Squad',initials:'JS',role:'tech',color:'#FFE9A8',detail:'Group · 112 members',group:true},
