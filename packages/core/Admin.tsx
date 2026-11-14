@@ -106,7 +106,7 @@ export default function Admin({base,token,sample,onSampleChange}:{base:string;to
             {!!account.email&&<Copy size={12} color={theme.muted}>{account.email}</Copy>}
           </View></View>
           <View style={{...row,flexWrap:'wrap'}}>
-            <Button label={account.person.teacher?'Remove gold check':'Give gold check'} variant="secondary" disabled={!!saving}
+            <Button label={account.person.teacher?'Remove yellow check':'Give yellow check'} variant="secondary" disabled={!!saving}
               onPress={()=>void change(account,account.person.role,account.independentlyVerified,!account.person.teacher)}/>
             <Button label={account.person.role==='tech'?'Remove tech role':'Assign tech role'} variant="secondary" disabled={!!saving}
               onPress={()=>void change(account,account.person.role==='tech'?'student':'tech',account.independentlyVerified)}/>

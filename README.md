@@ -55,9 +55,9 @@ Create a regular account, get its immutable user ID from the authenticated `GET 
 
 Apply D1 migration `0007_admin_accounts.sql` before running the updated API. It returns previously self-selected tech accounts to student status. Admins can reassign the tech role, which grants a verified badge and a rounded-square avatar. Regular accounts can receive an independent badge. The dashboard shows activity totals and recent signups, posts, and comments. It displays only aggregate counts for private messages. Existing accounts without a recorded signup date are included in total users.
 
-## Teacher gold check
+## Teacher yellow check
 
-Apply D1 migration `0010_teacher_badge.sql`. Admins can give or remove a gold check for any account from **Admin dashboard → Accounts** (**Give gold check** / **Remove gold check**). Only admins can change it, and the API ignores it everywhere else. It is separate from the purple verified badge and takes precedence over it, and the account's detail line shows **Teacher**. The Overview tab counts teachers.
+Apply D1 migration `0010_teacher_badge.sql`. Admins can give or remove a bright yellow check for any account from **Admin dashboard → Accounts** (**Give yellow check** / **Remove yellow check**). Only admins can change it, and the API ignores it everywhere else. It is separate from the purple verified badge and takes precedence over it, and the account's detail line shows **Teacher**. The Overview tab counts teachers.
 
 ## Date of birth and birthdays
 

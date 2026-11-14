@@ -41,7 +41,7 @@ export type AdminOverview = {
 }
 export const storyLifetime = 12*60*60*1000
 export const storyLimit = 10
-export const teacherGold = '#E5A100'
+export const teacherGold = '#FFE600'
 export type Story = {id:string;text:string;image?:string;created:string;expires:string}
 export type StoryGroup = {author:Person;stories:Story[]}
 export type AdminAccounts = {accounts:AdminAccount[];nextCursor:string|null}

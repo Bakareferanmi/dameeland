@@ -103,7 +103,7 @@ export function Avatar({person,size=44,ring=false,seen=false}:{person:Person;siz
 export function VerifiedBadge({person}:{person:Person}){
   const {theme}=useDesign()
   if(!person.teacher&&!person.verified)return null
-  return <View accessibilityLabel={person.teacher?'Verified teacher':'Verified'} style={{backgroundColor:person.teacher?teacherGold:theme.purple,width:16,height:16,borderRadius:8,alignItems:'center',justifyContent:'center'}}><Icon name="check" size={11} color="#fff" strong/></View>
+  return <View accessibilityLabel={person.teacher?'Verified teacher':'Verified'} style={{backgroundColor:person.teacher?teacherGold:theme.purple,width:16,height:16,borderRadius:8,alignItems:'center',justifyContent:'center'}}><Icon name="check" size={11} color={person.teacher?'#1B1233':'#fff'} strong/></View>
 }
 export function PersonName({person}:{person:Person}){
   return <View style={{...row,gap:5}}>
