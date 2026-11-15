@@ -168,7 +168,7 @@ app.post('/api/auth/:action',async c=>{
   const dob=body?.dob
   if(action==='signup'&&!validBirthDate(dob))return c.json({error:'Enter your date of birth.'},400)
   const validIdentifier=action==='signup'?emailPattern.test(email):emailPattern.test(identifier)||validUsername(loginUsername)
-  if(!validIdentifier||password.length<8||password.length>128) return c.json({error:action==='signup'?'Enter a valid email and a password with 8 to 128 characters.':'Enter your email or username and password.'},400)
+  if(!validIdentifier) return c.json({error:action==='signup'?'Enter a valid email.':'Enter your email or username and password.'},400)
   const db=c.env.DB
   if(!await authAllowed(db,c.req.header('CF-Connecting-IP')??'local','password'))return c.json({error:'Too many attempts. Try again in a few minutes.'},429)
   c.executionCtx.waitUntil(db.batch([db.prepare('DELETE FROM auth_limits WHERE expires < ?').bind(now()),db.prepare('DELETE FROM sessions WHERE expires < ?').bind(now())]))
