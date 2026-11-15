@@ -204,12 +204,16 @@ function PreviewMedia({kind}:{kind:'image'|'video'}){
     </View>
   </View>
 }
+function LazyImage({uri,alt,style}:{uri:string;alt:string;style:object}){
+  if(Platform.OS==='web')return React.createElement('img',{src:uri,alt,loading:'lazy',decoding:'async',style})
+  return <Image accessibilityLabel={alt} source={{uri}} resizeMode="cover" style={style}/>
+}
 function UploadedMedia({post}:{post:Post}){
   const {theme}=useDesign()
   if(!post.media)return null
   if(post.kind==='video'&&Platform.OS==='web')return React.createElement('video',{src:post.media,controls:true,playsInline:true,preload:'metadata',style:{width:'100%',maxHeight:360,borderRadius:14,backgroundColor:theme.chip}})
   if(post.kind==='video')return <View style={{height:210,borderRadius:14,backgroundColor:'#120D1F',alignItems:'center',justifyContent:'center',gap:10}}><IconTile name="play" size={48} color={lime} background="#FFFFFF19"/><Copy color="#fff" weight={800}>VIDEO · 0:10 MAX</Copy></View>
-  return <Image accessibilityLabel="Post attachment" source={{uri:post.media}} resizeMode="cover" style={{width:'100%',height:195,borderRadius:14,backgroundColor:theme.chip}}/>
+  return <LazyImage uri={post.media} alt="Post attachment" style={{width:'100%',height:195,borderRadius:14,backgroundColor:theme.chip,objectFit:'cover'}}/>
 }
 
 function PostCard({post,onReact,onOverlay,onProfile,detail=false}:{post:Post;detail?:boolean;onReact:(p:Post,k:'like'|'repost')=>void;onOverlay:(o:Overlay)=>void;onProfile:(p:Person)=>void}){
@@ -1131,7 +1135,7 @@ export default function App(props:Props){
             <IconButton name="close" label="Close story" tint="#fff" onPress={modalClose}/>
           </View>
           <View {...storySwipe.panHandlers} style={{flex:1,minHeight:0,justifyContent:'center',gap:16,paddingBottom:16}}>
-            {personalStory?.image&&<Image accessibilityLabel="Story photo" source={{uri:personalStory.image}} resizeMode="contain" style={{width:'100%',flex:1,minHeight:0}}/>}
+            {personalStory?.image&&<LazyImage uri={personalStory.image} alt="Story photo" style={{width:'100%',flex:1,minHeight:0,objectFit:'contain'}}/>}
             {(personalStory?.video||personalStory?.videoPreview)&&(Platform.OS==='web'&&personalStory?.video?React.createElement('video',{src:personalStory.video,controls:true,autoPlay:true,playsInline:true,style:{width:'100%',maxHeight:'70%',borderRadius:16,backgroundColor:'#000'}}):<View style={{...stack,alignItems:'center'}}><IconTile name="play" size={52} color={lime} background="#FFFFFF19"/><Copy color="#fff" weight={800}>VIDEO · 0:10 MAX</Copy></View>)}
             {!!storyText&&<Copy center color="#fff" weight={800} size={personalStory?.image?18:28}>{storyText}</Copy>}
             <View style={{position:'absolute',inset:0,flexDirection:'row'}}>

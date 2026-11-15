@@ -49,7 +49,7 @@ export default function Admin({base,token,sample,onSampleChange}:{base:string;to
       finally{pending=false;if(!controller.signal.aborted)setRefreshing(false)}
     }
     void load()
-    const timer=setInterval(()=>{if(AppState.currentState==='active'||AppState.currentState===null)void load()},30000)
+    const timer=setInterval(()=>{if(AppState.currentState==='active'||AppState.currentState===null)void load()},8*60*60*1000)
     const subscription=AppState.addEventListener('change',state=>{if(state==='active')void load()})
     return ()=>{controller.abort();clearInterval(timer);subscription.remove()}
   },[base,days,revision,sample,tab,token])
@@ -78,7 +78,7 @@ export default function Admin({base,token,sample,onSampleChange}:{base:string;to
       :tab==='Accounts'&&loading&&!sample?<ActivityIndicator accessibilityLabel="Loading admin data" color={theme.purple}/>
       :tab==='Overview'?<>
         {!sample&&<View style={{...row,justifyContent:'space-between',flexWrap:'wrap'}}>
-          <Copy size={12} color={theme.muted}>{refreshError?(data?'Refresh failed. Showing the last available data.':'Couldn’t load live analytics.'):data?'Updated '+new Date(data.updatedAt).toLocaleTimeString()+' · Refreshes every 30 sec':'Loading live analytics…'}</Copy>
+          <Copy size={12} color={theme.muted}>{refreshError?(data?'Refresh failed. Showing the last available data.':'Couldn’t load live analytics.'):data?'Updated '+new Date(data.updatedAt).toLocaleTimeString()+' · Refreshes every 8 hours':'Loading analytics…'}</Copy>
           <Button label={refreshing?'Refreshing…':'Refresh now'} variant="secondary" disabled={refreshing} onPress={()=>refresh(value=>value+1)}/>
         </View>}
         {!!refreshError&&<Copy size={13} color={theme.muted}>{refreshError}</Copy>}

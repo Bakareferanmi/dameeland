@@ -391,6 +391,7 @@ app.get('/api/admin/overview',async c=>{
     const day=time(start+index*dayMs).slice(0,10)
     return byDay.get(day)??{day,signups:0,posts:0,comments:0,likes:0,reposts:0,messages:0}
   })
+  c.header('Cache-Control','private, max-age=28800, stale-while-revalidate=600')
   return c.json({...metrics.results[0] as Metrics,activity:activity.results as AdminActivity[],series,updatedAt})
 })
 app.get('/api/admin/accounts',async c=>{
@@ -517,6 +518,7 @@ app.get('/api/feed',async c=>{
     WHERE ?=0 OR p.author=? OR EXISTS(SELECT 1 FROM follows WHERE follower=? AND target=p.author)
     ORDER BY p.created DESC LIMIT 60
   `).bind(id,id,Number(following),id,id).all<PostRow>()
+  c.header('Cache-Control','private, max-age=15, stale-while-revalidate=30')
   return c.json(results.map(r=>({id:r.post_id,author:person(r,c.req.url),body:r.body,time:time(r.created),likes:r.likes,liked:Boolean(r.liked),comments:r.comments,reposts:r.reposts,reposted:Boolean(r.reposted),kind:r.media_kind??undefined,media:r.media?new URL('/api/media/'+r.media,c.req.url).href:undefined})))
 })
 app.post('/api/posts',async c=>{
