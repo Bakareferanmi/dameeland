@@ -503,7 +503,7 @@ app.post('/api/logout',async c=>{
   await c.env.DB.prepare('DELETE FROM sessions WHERE token_hash=?').bind(c.get('tokenHash')).run()
   return c.json({ok:true})
 })
-type PostRow=PublicAccount&{post_id:string;body:string;created:number;media:string|null;media_kind:'image'|'video'|null;likes:number;liked:number;comments:number;reposts:number;reposted:number}
+type PostRow=PublicAccount&{post_id:string;body:string;created:number;media:string|null;media_kind:'image'|'video'|null;likes:number;liked:number;comments:number;reposts:number;reposted:number;rank_score:number}
 app.get('/api/feed',async c=>{
   const id=c.get('user').id
   const following=c.req.query('following')==='1'
@@ -513,11 +513,16 @@ app.get('/api/feed',async c=>{
     EXISTS(SELECT 1 FROM reactions r WHERE r.post_id=p.id AND r.user_id=? AND kind='like') liked,
     (SELECT COUNT(*) FROM comments x WHERE x.post_id=p.id) comments,
     (SELECT COUNT(*) FROM reactions r WHERE r.post_id=p.id AND kind='repost') reposts,
-    EXISTS(SELECT 1 FROM reactions r WHERE r.post_id=p.id AND r.user_id=? AND kind='repost') reposted
+    EXISTS(SELECT 1 FROM reactions r WHERE r.post_id=p.id AND r.user_id=? AND kind='repost') reposted,
+    (
+      (SELECT COUNT(*) FROM reactions r WHERE r.post_id=p.id AND kind='like') * 3 +
+      (SELECT COUNT(*) FROM comments x WHERE x.post_id=p.id) * 5 +
+      (SELECT COUNT(*) FROM reactions r WHERE r.post_id=p.id AND kind='repost') * 7
+    ) / (1 + ((strftime('%s','now') * 1000 - p.created) / 3600000.0) / 12.0) rank_score
     FROM posts p JOIN users u ON u.id=p.author
     WHERE ?=0 OR p.author=? OR EXISTS(SELECT 1 FROM follows WHERE follower=? AND target=p.author)
-    ORDER BY p.created DESC LIMIT 60
-  `).bind(id,id,Number(following),id,id).all<PostRow>()
+    ORDER BY CASE WHEN ?=1 THEN p.created ELSE rank_score END DESC LIMIT 60
+  `).bind(id,id,Number(following),id,id,Number(following)).all<PostRow>()
   c.header('Cache-Control','private, max-age=15, stale-while-revalidate=30')
   return c.json(results.map(r=>({id:r.post_id,author:person(r,c.req.url),body:r.body,time:time(r.created),likes:r.likes,liked:Boolean(r.liked),comments:r.comments,reposts:r.reposts,reposted:Boolean(r.reposted),kind:r.media_kind??undefined,media:r.media?new URL('/api/media/'+r.media,c.req.url).href:undefined})))
 })
@@ -611,7 +616,16 @@ app.post('/api/posts/:id/comments',async c=>{
 app.get('/api/people',async c=>{
   const user=c.get('user').id
   const q=clean(c.req.query('q'),60).toLowerCase()
-  const {results}=await c.env.DB.prepare('SELECT id,name,role,username,verified,teacher,dob,avatar_media,cover_media,EXISTS(SELECT 1 FROM follows WHERE follower=? AND target=u.id) following FROM users u WHERE id!=? AND (instr(lower(name),?)>0 OR instr(username,?)>0) ORDER BY name LIMIT 30').bind(user,user,q,q.replace(/^@/,'')||q).all<PublicAccount&{following:number}>()
+  const {results}=await c.env.DB.prepare(`
+    SELECT id,name,role,username,verified,teacher,dob,avatar_media,cover_media,
+      EXISTS(SELECT 1 FROM follows WHERE follower=? AND target=u.id) following,
+      (SELECT COUNT(*) FROM follows f1 JOIN follows f2 ON f1.target=f2.target WHERE f1.follower=? AND f2.follower=u.id) mutuals,
+      (SELECT COUNT(*) FROM posts p WHERE p.author=u.id) post_count
+    FROM users u
+    WHERE id!=? AND (instr(lower(name),?)>0 OR instr(username,?)>0)
+    ORDER BY following ASC, mutuals DESC, post_count DESC, name ASC
+    LIMIT 30
+  `).bind(user,user,user,q,q.replace(/^@/,'')||q).all<PublicAccount&{following:number;mutuals:number;post_count:number}>()
   return c.json(results.map(r=>({...person(r,c.req.url),following:Boolean(r.following)})))
 })
 app.get('/api/people/:id/follow-stats',async c=>{
