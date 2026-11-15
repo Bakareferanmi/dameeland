@@ -27,7 +27,7 @@ export function birthdayToday(birthday:string|undefined,at=new Date()){
   const leap=(year:number)=>year%4===0&&(year%100!==0||year%400===0)
   return birthday==='02-29'&&!leap(at.getFullYear())&&monthDay(at)==='02-28'
 }
-export type BirthdayEntry = {person:Person;wished:boolean}
+export type BirthdayEntry = {person:Person;wished:boolean;daysUntil?:number}
 export type Person = {id:string; name:string; initials:string; role:Role; color:string; detail:string; verified?:boolean; teacher?:boolean; group?:boolean; birthday?:string; dob?:string; avatar?:string; cover?:string; username?:string}
 export type Viewer = Person & {isAdmin?:boolean}
 export type AdminAccount = {person:Person;email:string;created:number|null;independentlyVerified:boolean}

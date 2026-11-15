@@ -389,7 +389,7 @@ app.put('/api/me/birthday',async c=>{
 })
 // Birthdays are shown as month and day only. The server accepts UTC yesterday, today and tomorrow so every
 // timezone gets its own "today"; the app then picks the exact local day.
-const birthdayWindow=(at=now())=>[-1,0,1].map(offset=>{const day=new Date(at+offset*86400000);return {md:String(day.getUTCMonth()+1).padStart(2,'0')+'-'+String(day.getUTCDate()).padStart(2,'0'),year:day.getUTCFullYear()}})
+const birthdayWindow=(at=now())=>Array.from({length:9},(_,index)=>index-1).map(offset=>{const day=new Date(at+offset*86400000);return {md:String(day.getUTCMonth()+1).padStart(2,'0')+'-'+String(day.getUTCDate()).padStart(2,'0'),year:day.getUTCFullYear(),offset}})
 app.get('/api/birthdays',async c=>{
   const me=c.get('user')
   const window=birthdayWindow()
@@ -402,7 +402,12 @@ app.get('/api/birthdays',async c=>{
   const wishes=await c.env.DB.prepare('SELECT recipient,year FROM birthday_wishes WHERE sender=? AND year>=?').bind(me.id,window[0].year).all<{recipient:string;year:number}>()
   const wished=new Set(wishes.results.map(item=>item.recipient+':'+item.year))
   c.header('Cache-Control','no-store')
-  return c.json<BirthdayEntry[]>(results.map(account=>({person:person(account,c.req.url),wished:window.some(day=>day.md===account.dob?.slice(5)&&wished.has(account.id+':'+day.year))})))
+  return c.json<BirthdayEntry[]>(results.map(account=>{const match=window.find(day=>day.md===account.dob?.slice(5)||(day.md==='02-28'&&account.dob?.slice(5)==='02-29'));return {person:person(account,c.req.url),wished:window.some(day=>day.md===account.dob?.slice(5)&&wished.has(account.id+':'+day.year)),daysUntil:match?.offset??undefined}}))
+})
+app.get('/api/people/:id/birthday-wall',async c=>{
+  const year=new Date().getUTCFullYear()
+  const {results}=await c.env.DB.prepare(`SELECT w.body,w.created,u.id,u.name,u.role,u.username,u.verified,u.teacher,u.dob,u.avatar_media,u.cover_media FROM birthday_wishes w JOIN users u ON u.id=w.sender WHERE w.recipient=? AND w.year IN (?,?) ORDER BY w.created DESC LIMIT 100`).bind(c.req.param('id'),year,year-1).all<PublicAccount&{body:string;created:number}>()
+  return c.json(results.map(item=>({body:item.body,created:time(item.created),author:person(item,c.req.url)})))
 })
 app.post('/api/people/:id/birthday-wish',async c=>{
   const me=c.get('user'),db=c.env.DB
@@ -410,14 +415,17 @@ app.post('/api/people/:id/birthday-wish',async c=>{
   if(!target||target.id===me.id)return c.json({error:'Profile unavailable.'},404)
   const day=birthdayWindow().find(item=>item.md===target.dob?.slice(5)||item.md==='02-28'&&target.dob?.slice(5)==='02-29')
   if(!target.dob||!day)return c.json({error:'It is not '+target.name.split(' ')[0]+'’s birthday today.'},400)
-  const wish=await db.prepare('INSERT INTO birthday_wishes VALUES (?,?,?,?) ON CONFLICT DO NOTHING').bind(me.id,target.id,day.year,now()).run()
+  const input=await readBody(c.req.raw)
+  const body=clean(input?.body,240)||('Happy birthday, '+target.name.split(' ')[0]+'! 🎂🎉')
+  const wish=await db.prepare('INSERT INTO birthday_wishes (sender,recipient,year,created,body) VALUES (?,?,?,?,?) ON CONFLICT DO NOTHING').bind(me.id,target.id,day.year,now(),body).run()
   if(!wish.meta.changes)return c.json({error:'You already wished '+target.name.split(' ')[0]+' a happy birthday.'},409)
   const [first,second]=[me.id,target.id].sort()
   await db.prepare('INSERT INTO rooms VALUES (?,?,?) ON CONFLICT DO NOTHING').bind(crypto.randomUUID(),first,second).run()
   const room=await db.prepare('SELECT id FROM rooms WHERE first_user=? AND second_user=?').bind(first,second).first<{id:string}>()
   if(!room)return c.json({error:'Could not send your wish.'},500)
-  const message={id:crypto.randomUUID(),author:person(me,c.req.url),body:'Happy birthday, '+target.name.split(' ')[0]+'! 🎂🎉'}
+  const message={id:crypto.randomUUID(),author:person(me,c.req.url),body}
   await db.prepare('INSERT INTO messages VALUES (?,?,?,?,?)').bind(message.id,room.id,me.id,message.body,now()).run()
+  await createNotification(c.env,c.executionCtx,db,target.id,me.id,'birthday',target.id,me.name+' sent you a birthday wish','birthday:'+target.id+':'+day.year)
   c.executionCtx.waitUntil(c.env.ROOMS.getByName(room.id).fetch('https://room.internal/notify',{method:'POST',body:JSON.stringify(message)}))
   return c.json({ok:true,room:room.id},201)
 })

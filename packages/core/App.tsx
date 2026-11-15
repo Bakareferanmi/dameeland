@@ -327,6 +327,7 @@ export default function App(props:Props){
   const [storyImage,setStoryImage]=useState<string>()
   const [storyBackground,setStoryBackground]=useState('#4F25D6')
   const [birthdays,setBirthdays]=useState<BirthdayEntry[]>([])
+  const [birthdayWall,setBirthdayWall]=useState<Array<{body:string;created:string;author:Person}>>([])
   const [wishedBirthdays,setWishedBirthdays]=useState<Set<string>>(()=>new Set())
   const [birthDraft,setBirthDraft]=useState<BirthDraft>(emptyBirth)
   const [storyMedia,setStoryMedia]=useState<Media|null>(null)
@@ -525,6 +526,7 @@ export default function App(props:Props){
     if(demo||!token||page!=='Home')return
     let alive=true
     api<BirthdayEntry[]>(base,'/birthdays',{},token).then(data=>{if(alive)setBirthdays(data)}).catch(()=>{})
+    api<Array<{body:string;created:string;author:Person}>>(base,'/people/'+encodeURIComponent(user.id)+'/birthday-wall',{},token).then(data=>{if(alive)setBirthdayWall(data)}).catch(()=>{})
     return ()=>{alive=false}
   },[base,demo,token,page])
   // Stories vanish 12 hours after posting: hide them on the client as soon as they expire, not only on the next refresh.
@@ -715,7 +717,7 @@ export default function App(props:Props){
       scrollOffsets.current={};pendingOffset.current=null;setToast(null)
       roomCall.end();pageHistory.current=[];dismissOverlays();setToken('');setUser(me);setPage('Home');setStage('auth');setError('')
       setPosts(props.demo?initialPosts:[]);setNotes({});setChats(props.demo?initialChats:{});setFollows({});setProfileStats(null)
-      setRooms(props.demo?localRooms:[]);setRoom(null);setDraft('');setAttachment(null);clearComment();setMessage('');setSeen(new Set());setOwnStory(null);setDemoEntered(false);setBirthdays([]);setWishedBirthdays(new Set());setLiveStories([]);setStoryIndex(0);setStoryMedia(null);setWishes([]);setLessonComplete(false);setVoicePlaying(false);setQuietMode(false);setFollowingOnly(false)
+      setRooms(props.demo?localRooms:[]);setRoom(null);setDraft('');setAttachment(null);clearComment();setMessage('');setSeen(new Set());setOwnStory(null);setDemoEntered(false);setBirthdays([]);setBirthdayWall([]);setWishedBirthdays(new Set());setLiveStories([]);setStoryIndex(0);setStoryMedia(null);setWishes([]);setLessonComplete(false);setVoicePlaying(false);setQuietMode(false);setFollowingOnly(false)
     }catch(reason){fail(reason)}
   }
   async function react(post:Post,kind:'like'|'repost'){
@@ -781,13 +783,14 @@ export default function App(props:Props){
       setDraft('');setAttachment(null);dismissOverlays();setFollowingOnly(false);open('Home');notify('Post shared')
     }catch(reason){fail(reason)}finally{setBusy(false)}
   }
-  async function wishBirthday(person:Person){
+  async function wishBirthday(person:Person,message?:string){
     if(busy)return
     const first=person.name.split(' ')[0]
-    if(demo){setWishedBirthdays(previous=>new Set(previous).add(person.id));notify('Birthday wish sent to '+first+'.');return}
+    const body=message||'Happy birthday, '+first+'! 🎂🎉'
+    if(demo){setWishedBirthdays(previous=>new Set(previous).add(person.id));setWishes(previous=>[...previous,body]);notify('Birthday wish sent to '+first+'.');return}
     setBusy(true)
     try{
-      await call('/people/'+encodeURIComponent(person.id)+'/birthday-wish',{method:'POST'})
+      await call('/people/'+encodeURIComponent(person.id)+'/birthday-wish',json({body}))
       setWishedBirthdays(previous=>new Set(previous).add(person.id))
       notify('Your wish was sent to '+first+' as a message.')
     }catch(reason){fail(reason)}finally{setBusy(false)}
@@ -941,6 +944,8 @@ export default function App(props:Props){
   }
   const ownBirthday=birthdayToday(user.birthday??user.dob?.slice(5))
   const birthdayPeople=demo?people.filter(person=>!person.group&&birthdayToday(person.birthday)):birthdays.filter(entry=>entry.person.id!==user.id&&birthdayToday(entry.person.birthday)).map(entry=>entry.person)
+  const upcomingBirthdays=demo?[]:birthdays.filter(entry=>entry.person.id!==user.id&&typeof entry.daysUntil==='number'&&entry.daysUntil>=0&&entry.daysUntil<=7).sort((a,b)=>(a.daysUntil??99)-(b.daysUntil??99))
+  const birthdayDayLabel=(days:number|undefined)=>days===0?'Today':days===1?'Tomorrow':'In '+days+' days'
   const wishedAlready=(id:string)=>wishedBirthdays.has(id)||birthdays.some(entry=>entry.person.id===id&&entry.wished)
   const hasOwnStory=demo?!!demoOwn:activeStories.some(group=>group.author.id===user.id)
   const home=<>
@@ -949,8 +954,10 @@ export default function App(props:Props){
       {ownBirthday&&<View style={{gap:4}}><Copy size={19} weight={800}>Happy birthday, {user.name.split(' ')[0]}! 🎂</Copy><Copy color={theme.muted}>Have a great day. Friends can send you a wish today.</Copy></View>}
       {birthdayPeople.length>0&&<>{section('Birthdays today')}{birthdayPeople.map(person=><View key={person.id} style={{...row,flexWrap:'wrap'}}>
         <Avatar person={person}/><View style={{flex:1,minWidth:120}}><PersonName person={person}/><Copy size={12} color={theme.muted}>{person.detail}</Copy></View>
-        <Button label={wishedAlready(person.id)?'Wished':'Wish happy birthday'} variant="secondary" disabled={busy||wishedAlready(person.id)} onPress={()=>void wishBirthday(person)}/>
+        <View style={{...row,gap:4}}>{['🎉','✨','💪'].map(wish=><Button key={wish} label={wishedAlready(person.id)?'✓':wish} variant="secondary" disabled={busy||wishedAlready(person.id)} onPress={()=>void wishBirthday(person,wish+' Happy birthday!')}/>)}</View>
       </View>)}</>}
+      {upcomingBirthdays.length>0&&<Card>{section('Upcoming birthdays')}{upcomingBirthdays.slice(0,5).map(entry=><View key={entry.person.id} style={{...row,flexWrap:'wrap'}}><Avatar person={entry.person} size={42}/><View style={{flex:1,minWidth:130}}><PersonName person={entry.person}/><Copy size={12} color={theme.muted}>{birthdayDayLabel(entry.daysUntil)}</Copy></View>{entry.daysUntil===0&&<Button label={entry.wished?'Wished':'Wish'} variant="secondary" disabled={busy||entry.wished} onPress={()=>void wishBirthday(entry.person)}/>}</View>)}</Card>}
+      {ownBirthday&&<Card style={{backgroundColor:theme.chip}}>{section('Your birthday wall')}<Copy color={theme.muted}>{birthdayWall.length?'Wishes from your classmates today.':'Your birthday wishes will appear here.'}</Copy>{birthdayWall.slice(0,5).map((wish,index)=><View key={wish.created+index} style={{...row,alignItems:'flex-start'}}><Avatar person={wish.author} size={34}/><View style={{flex:1}}><PersonName person={wish.author}/><Copy>{wish.body}</Copy></View></View>)}{demo&&wishes.map((wish,index)=><View key={'demo'+index} style={{...row,alignItems:'flex-start'}}><Avatar person={user} size={34}/><View style={{flex:1}}><Copy>{wish}</Copy></View></View>)}</Card>}
     </Card>}
     {!demo&&!!token&&!user.dob&&<Card>{section('Add your birthday')}<Copy color={theme.muted}>Friends can wish you a happy birthday. Only the day and month are shown to others.</Copy><BirthdayFields value={birthDraft} onChange={setBirthDraft}/><Button label="Save birthday" disabled={busy||!birthIso(birthDraft)} onPress={()=>void saveBirthday()}/></Card>}
     <Segmented options={['For you','Following']} selected={followingOnly?'Following':'For you'} onSelect={value=>setFollowingOnly(value==='Following')}/>
