@@ -45,7 +45,7 @@ function BirthdayFields({value,onChange,note}:{value:BirthDraft;onChange:(next:B
 }
 type GoogleStart={url:string;state:string;exchange:string}
 type GoogleWindow={close:()=>void}
-type Media={name:string;uri:string;data:Blob|{uri:string;name:string;type:string}}
+type Media={name:string;uri:string;data:Blob|{uri:string;name:string;type:string};kind?:'image'|'video';duration?:number}
 type Props={
   demo:boolean; base:string; phone?:boolean; initialTheme:Theme; font:(weight:number)=>object; renderIcon:React.ComponentType<IconRendererProps>;
   loadToken?:()=>Promise<string|null>; saveToken?:(token:string|null)=>Promise<void>;
@@ -201,13 +201,20 @@ function PreviewMedia({kind}:{kind:'image'|'video'}){
     </View>
   </View>
 }
+function UploadedMedia({post}:{post:Post}){
+  const {theme}=useDesign()
+  if(!post.media)return null
+  if(post.kind==='video'&&Platform.OS==='web')return React.createElement('video',{src:post.media,controls:true,playsInline:true,preload:'metadata',style:{width:'100%',maxHeight:360,borderRadius:14,backgroundColor:theme.chip}})
+  if(post.kind==='video')return <View style={{height:210,borderRadius:14,backgroundColor:'#120D1F',alignItems:'center',justifyContent:'center'}}><IconTile name="vid"/><Copy color="#fff" weight={800}>Video status</Copy></View>
+  return <Image accessibilityLabel="Post attachment" source={{uri:post.media}} resizeMode="cover" style={{width:'100%',height:195,borderRadius:14,backgroundColor:theme.chip}}/>
+}
 
 function PostCard({post,onReact,onOverlay,onProfile,detail=false}:{post:Post;detail?:boolean;onReact:(p:Post,k:'like'|'repost')=>void;onOverlay:(o:Overlay)=>void;onProfile:(p:Person)=>void}){
   const {theme}=useDesign()
   return <Card style={{padding:14,gap:9}}>
     <Pressable accessibilityRole="button" accessibilityLabel={'Open '+post.author.name+' profile'} onPress={()=>onProfile(post.author)} style={row}><Avatar person={post.author} size={40}/><View style={{flex:1}}><PersonName person={post.author}/><Copy color={theme.muted} size={12}>{post.author.detail} · {shortTime(post.time)}</Copy></View></Pressable>
     {!!post.body&&(detail?<Copy size={15}>{post.body}</Copy>:<Pressable accessibilityRole="button" accessibilityLabel="Open post details" onPress={()=>onOverlay({kind:'post',post})} style={{minHeight:32,justifyContent:'center'}}><Copy size={15}>{post.body}</Copy></Pressable>)}
-    {post.media?<Image accessibilityLabel="Post attachment" source={{uri:post.media}} resizeMode="cover" style={{width:'100%',height:195,borderRadius:14,backgroundColor:theme.chip}}/>:post.kind&&<PreviewMedia kind={post.kind}/>}
+    {post.media?<UploadedMedia post={post}/>:post.kind&&<PreviewMedia kind={post.kind}/>} 
     <View style={{...row,justifyContent:'space-between',gap:1,borderTopWidth:1,borderColor:theme.border,paddingTop:3}}><IconButton name={post.liked?'heartOn':'heart'} label={post.liked?'Unlike post':'Like post'} active={post.liked} count={post.likes} onPress={()=>onReact(post,'like')}/><IconButton name="cm" label="Comments" count={post.comments} onPress={()=>onOverlay({kind:'comments',post})}/><IconButton name="rp" label={post.reposted?'Undo repost':'Repost'} active={post.reposted} count={post.reposts} onPress={()=>onReact(post,'repost')}/><IconButton name="sh" label="Share post" onPress={()=>onOverlay({kind:'share',post})}/></View>
   </Card>
 }
@@ -690,12 +697,12 @@ export default function App(props:Props){
     if(busy||(!draft.trim()&&!attachment))return
     setBusy(true)
     try{
-      if(demo)setPosts(previous=>[{id:uid(),author:user,body:draft.trim(),media:attachment?.uri,time:'Just now',likes:0,comments:0,reposts:0,liked:false,reposted:false},...previous])
+      if(demo)setPosts(previous=>[{id:uid(),author:user,body:draft.trim(),media:attachment?.uri,kind:attachment?.kind,time:'Just now',likes:0,comments:0,reposts:0,liked:false,reposted:false},...previous])
       else{
         const form=new FormData()
         form.append('body',draft.trim())
-        if(attachment?.data instanceof Blob)form.append('image',attachment.data,attachment.name)
-        else if(attachment)form.append('image',attachment.data as unknown as Blob)
+        if(attachment?.data instanceof Blob)form.append(attachment.kind==='video'?'video':'image',attachment.data,attachment.name)
+        else if(attachment)form.append(attachment.kind==='video'?'video':'image',attachment.data as unknown as Blob)
         await call('/posts',attachment?{method:'POST',body:form}:json({body:draft}))
         setRetry(n=>n+1)
       }
@@ -728,9 +735,9 @@ export default function App(props:Props){
     try{
       const form=new FormData()
       form.append('text',comment.trim())
-      if(storyMode==='Photo'&&storyMedia){
-        if(storyMedia.data instanceof Blob)form.append('image',storyMedia.data,storyMedia.name)
-        else form.append('image',storyMedia.data as unknown as Blob)
+      if((storyMode==='Photo'||storyMode==='Video')&&storyMedia){
+        if(storyMedia.data instanceof Blob)form.append(storyMode==='Video'?'video':'image',storyMedia.data,storyMedia.name)
+        else form.append(storyMode==='Video'?'video':'image',storyMedia.data as unknown as Blob)
       }
       await call('/stories',{method:'POST',body:form})
       setStoryRefresh(n=>n+1)
@@ -769,7 +776,7 @@ export default function App(props:Props){
       if(demo){
         item={id:uid(),author:user,body,attachment:commentMedia&&'uri' in commentMedia?{kind:'image',url:commentMedia.uri}:commentMedia??undefined}
       }else{
-        let request=json({body,...(commentMedia&&'kind' in commentMedia?{[commentMedia.kind]:commentMedia.id}:{})}) as RequestInit
+        let request=json({body,...(commentMedia&&'uri' in commentMedia?{}:commentMedia?{[commentMedia.kind]:commentMedia.id}:{})}) as RequestInit
         if(commentMedia&&'uri' in commentMedia){
           const form=new FormData()
           form.append('body',body)
@@ -1012,14 +1019,14 @@ export default function App(props:Props){
   }else if(overlay?.kind==='create'){
     sheet=<><View style={row}><Avatar person={user}/><PersonName person={user}/></View><Field label="What’s happening?" value={draft} onChangeText={setDraft} multiline maxLength={1200} style={{minHeight:106,textAlignVertical:'top'}}/>
       {attachment&&<View style={spread}><Copy size={12}>{attachment.name}</Copy><IconButton name="close" label="Remove image" onPress={()=>setAttachment(null)}/></View>}
-      {props.pickMedia&&<Button label="Add image" leading="image" variant="secondary" onPress={()=>{void props.pickMedia?.().then(value=>{if(value)setAttachment(value)}).catch(fail)}}/>}
+      {props.pickMedia&&<Button label="Add image or video" leading="image" variant="secondary" onPress={()=>{void props.pickMedia?.().then(value=>{if(value)setAttachment(value)}).catch(fail)}}/>}
       <Button label={busy?'Posting…':'Publish post'} onPress={()=>void createPost()} disabled={busy||(!draft.trim()&&!attachment)}/></>
   }else if(overlay?.kind==='newStory'){
-    const valid=storyMode==='Text'?!!comment.trim():storyMode==='Photo'?!!storyImage:true
+    const valid=storyMode==='Text'?!!comment.trim():storyMode==='Photo'?!!storyImage:storyMedia?.kind==='video'
     sheet=<>
-      <Segmented options={demo?['Text','Photo','Video']:['Text','Photo']} selected={storyMode} onSelect={setStoryMode}/>
-      {storyMode==='Photo'&&<>{storyImage&&<Image source={{uri:storyImage}} style={{width:'100%',height:140,borderRadius:12}}/>}{props.pickMedia&&<Button label={storyImage?'Replace photo':'Choose photo'} leading="image" variant="secondary" onPress={()=>{void props.pickMedia?.().then(value=>{if(value){setStoryImage(value.uri);setStoryMedia(value)}}).catch(fail)}}/>}</>}
-      {storyMode==='Video'&&<Card><IconTile name="vid"/><Copy>Try the video story layout with a sample preview.</Copy></Card>}
+      <Segmented options={['Text','Photo','Video']} selected={storyMode} onSelect={setStoryMode}/>
+      {storyMode==='Photo'&&<>{storyImage&&<Image source={{uri:storyImage}} style={{width:'100%',height:140,borderRadius:12}}/>}{props.pickMedia&&<Button label={storyImage?'Replace photo':'Choose photo'} leading="image" variant="secondary" onPress={()=>{void props.pickMedia?.().then(value=>{if(value&&value.kind!=='video'){setStoryImage(value.uri);setStoryMedia(value)}}).catch(fail)}}/>}</>}
+      {storyMode==='Video'&&<>{storyMedia?.kind==='video'&&<Card><IconTile name="vid"/><Copy weight={800}>Video ready · 10 seconds maximum</Copy></Card>}{props.pickMedia&&<Button label={storyMedia?.kind==='video'?'Replace video':'Choose video'} leading="vid" variant="secondary" onPress={()=>{void props.pickMedia?.().then(value=>{if(value&&value.kind==='video'){setStoryImage(undefined);setStoryMedia(value)}}).catch(fail)}}/>}</>}
       <Field label={storyMode==='Text'?'What’s your story?':'Caption'} value={comment} onChangeText={setComment} multiline maxLength={240}/>
       <Copy size={12} color={theme.muted}>Stories disappear 12 hours after you share them.</Copy>
       <Button label={busy?'Sharing…':'Share story'} disabled={!valid||busy} onPress={()=>{if(!demo){void shareStory();return}setOwnStory({text:comment.trim(),image:storyMode==='Photo'?storyImage:undefined,videoPreview:storyMode==='Video',posted:Date.now()});modalClose();notify('Story shared in the preview. It disappears after 12 hours.')}}/>
@@ -1040,7 +1047,7 @@ export default function App(props:Props){
   const liveGroup=story&&!demo?activeStories.find(group=>group.author.id===story.id):undefined
   const activeIndex=liveGroup?Math.min(storyIndex,liveGroup.stories.length-1):0
   const liveItem=liveGroup?.stories[activeIndex]
-  const personalStory:{text:string;image?:string;videoPreview?:boolean}|null=demo?(story?.id===user.id?demoOwn:null):liveItem?{text:liveItem.text,image:liveItem.image}:null
+  const personalStory:{text:string;image?:string;video?:string;videoPreview?:boolean}|null=demo?(story?.id===user.id?demoOwn:null):liveItem?{text:liveItem.text,image:liveItem.image,video:liveItem.video}:null
   const storyPosted=demo?(story?.id===user.id?demoOwn?.posted:story?demoPosted[story.id]:undefined):liveItem?Date.parse(liveItem.created):undefined
   const storyText=demo?personalStory?.text??(story?.id==='ada'?'Study session after school. Bring your notes!':story?.id==='bello'?'Maths test is on Friday. Revise quadratics!':story?.id==='code'?'Code Club meets on Friday!':'See you at quiz night!'):liveItem?.text??''
   return <Design.Provider value={{theme,font,reduced,renderIcon:props.renderIcon}}><View style={{flex:1,backgroundColor:theme.bg,width:'100%'}}>
@@ -1119,7 +1126,7 @@ export default function App(props:Props){
           </View>
           <View {...storySwipe.panHandlers} style={{flex:1,minHeight:0,justifyContent:'center',gap:16,paddingBottom:16}}>
             {personalStory?.image&&<Image accessibilityLabel="Story photo" source={{uri:personalStory.image}} resizeMode="contain" style={{width:'100%',flex:1,minHeight:0}}/>}
-            {personalStory?.videoPreview&&<View style={{...row,justifyContent:'center'}}><IconTile name="vid"/><Copy color="#fff">Video story preview</Copy></View>}
+            {(personalStory?.video||personalStory?.videoPreview)&&(Platform.OS==='web'&&personalStory?.video?React.createElement('video',{src:personalStory.video,controls:true,autoPlay:true,playsInline:true,style:{width:'100%',maxHeight:'70%',borderRadius:16,backgroundColor:'#000'}}):<View style={{...row,justifyContent:'center'}}><IconTile name="vid"/><Copy color="#fff">Video story · 10s max</Copy></View>)}
             {!!storyText&&<Copy center color="#fff" weight={800} size={personalStory?.image?18:28}>{storyText}</Copy>}
             <View style={{position:'absolute',inset:0,flexDirection:'row'}}>
               <Pressable accessibilityRole="button" accessibilityLabel="Next story" onPress={()=>moveStory(1)} style={{flex:1}}/>

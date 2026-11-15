@@ -32,13 +32,14 @@ async function openGoogle(getUrl:()=>Promise<string>){
 }
 async function pickMedia(){
   const ImagePicker=await import('expo-image-picker')
-  const result=await ImagePicker.launchImageLibraryAsync({mediaTypes:['images'],quality:.8})
+  const result=await ImagePicker.launchImageLibraryAsync({mediaTypes:['images','videos'],quality:.8,videoMaxDuration:10})
   if(result.canceled)return null
   const image=result.assets[0]
-  if(image.fileSize&&image.fileSize>5*1024*1024)throw new Error('Choose an image under 5 MB.')
+  const kind:'image'|'video'=image.type==='video'?'video':'image'
+  if(image.fileSize&&image.fileSize>(kind==='video'?25*1024*1024:5*1024*1024))throw new Error(kind==='video'?'Choose a video under 25 MB.':'Choose an image under 5 MB.')
   const name=image.fileName??'image.jpg'
   const type=image.mimeType??'image/jpeg'
-  return {name,uri:image.uri,data:image.file??{name,type,uri:image.uri}}
+  return {name,uri:image.uri,data:image.file??{name,type,uri:image.uri},kind,duration:image.duration??undefined}
 }
 function CommentGif({uri,label,animate}:{uri:string;label:string;animate:boolean}){
   return <ExpoImage source={{uri}} accessibilityLabel={label} accessible autoplay={animate} contentFit="cover"

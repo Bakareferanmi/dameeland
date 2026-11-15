@@ -48,7 +48,7 @@ async function authAllowed(db:D1Database,ip:string,flow:string,maxAttempts=25){
 app.use('/api/*',async(c,next)=>cors({origin:[c.env.ALLOWED_ORIGIN,'http://127.0.0.1:5173'],allowMethods:['GET','POST','PUT','DELETE','OPTIONS'],allowHeaders:['Authorization','Content-Type']})(c,next))
 app.use('/api/*',async(c,next)=>{
   if(c.req.method!=='POST'&&c.req.method!=='PUT')return next()
-  const maxSize=c.req.path==='/api/posts'||c.req.path==='/api/stories'||c.req.path.startsWith('/api/me/photos/')||/^\/api\/posts\/[^/]+\/comments$/.test(c.req.path)?5300000:8192
+  const maxSize=c.req.path==='/api/posts'||c.req.path==='/api/stories'?30000000:c.req.path.startsWith('/api/me/photos/')||/^\/api\/posts\/[^/]+\/comments$/.test(c.req.path)?5300000:8192
   return bodyLimit({maxSize,onError:()=>{throw new HTTPException(413,{message:'The request is too large.'})}})(c,next)
 })
 app.get('/api/health',c=>c.json({ok:true}))
@@ -252,7 +252,7 @@ app.get('/api/media/:id',async c=>{
   return new Response(object.body,{headers})
 })
 const storyKey=(user:string)=>'stories:'+user
-type StoryRecord={id:string;text:string;media?:string;created:number}
+type StoryRecord={id:string;text:string;media?:string;kind?:'image'|'video';created:number}
 const storyExpiry=(story:StoryRecord)=>story.created+storyLifetime
 async function readStories(env:Env,user:string){
   const list=await env.STORIES.get<StoryRecord[]>(storyKey(user),'json')
@@ -265,7 +265,7 @@ async function writeStories(env:Env,user:string,list:StoryRecord[]){
   const ttl=Math.max(60,Math.ceil((Math.max(...list.map(storyExpiry))-now())/1000))
   return env.STORIES.put(storyKey(user),JSON.stringify(list),{expirationTtl:ttl})
 }
-const storyView=(user:string,story:StoryRecord,url:string):Story=>({id:story.id,text:story.text,image:story.media?new URL('/api/story-media/'+user+'/'+story.id,url).href:undefined,created:time(story.created),expires:time(storyExpiry(story))})
+const storyView=(user:string,story:StoryRecord,url:string):Story=>({id:story.id,text:story.text,kind:story.kind,image:story.kind==='image'&&story.media?new URL('/api/story-media/'+user+'/'+story.id,url).href:undefined,video:story.kind==='video'&&story.media?new URL('/api/story-media/'+user+'/'+story.id,url).href:undefined,created:time(story.created),expires:time(storyExpiry(story))})
 const storyMediaKey=(user:string,id:string)=>'stories/'+user+'/'+id
 const uuidPattern=/^[a-f0-9-]{36}$/
 app.get('/api/story-media/:user/:id',async c=>{
@@ -461,14 +461,16 @@ app.get('/api/stories',async c=>{
 app.post('/api/stories',async c=>{
   const user=c.get('user')
   const id=crypto.randomUUID()
-  let text='',contentType:string|null=null,file:File|null=null
+  let text='',contentType:string|null=null,file:File|null=null,kind:'image'|'video'='image'
   if(c.req.header('Content-Type')?.startsWith('multipart/form-data')){
     const form=await c.req.raw.formData().catch(()=>null)
     text=clean(form?.get('text'),240)
-    const upload:unknown=form?.get('image')
+    const upload:unknown=form?.get('image')??form?.get('video')
     if(upload instanceof File){
-      contentType=await imageType(upload)
-      if(!contentType)return c.json({error:'Choose a PNG, JPEG or WebP image under 5 MB.'},400)
+      const isVideo=upload.type.startsWith('video/')
+      contentType=isVideo&&upload.size<=25*1024*1024?upload.type:await imageType(upload)
+      if(!contentType||(!isVideo&&upload.size>5*1024*1024))return c.json({error:'Choose an image under 5 MB or a video under 25 MB.'},400)
+      kind=isVideo?'video':'image'
       file=upload
     }
   }else text=clean((await readBody(c.req.raw))?.text,240)
@@ -477,7 +479,7 @@ app.post('/api/stories',async c=>{
   const all=await readStories(c.env,user.id)
   const active=all.filter(story=>storyExpiry(story)>at)
   if(active.length>=storyLimit)return c.json({error:'You can have up to '+storyLimit+' stories at once. Delete one or wait for it to expire.'},429)
-  const story:StoryRecord={id,text,created:at,media:file?id:undefined}
+  const story:StoryRecord={id,text,created:at,media:file?id:undefined,kind:file?kind:undefined}
   if(file&&contentType)await c.env.MEDIA.put(storyMediaKey(user.id,id),await file.arrayBuffer(),{httpMetadata:{contentType}})
   try{await writeStories(c.env,user.id,[...active,story])}
   catch(error){if(file)await c.env.MEDIA.delete(storyMediaKey(user.id,id));throw error}
@@ -498,12 +500,12 @@ app.post('/api/logout',async c=>{
   await c.env.DB.prepare('DELETE FROM sessions WHERE token_hash=?').bind(c.get('tokenHash')).run()
   return c.json({ok:true})
 })
-type PostRow=PublicAccount&{post_id:string;body:string;created:number;media:string|null;likes:number;liked:number;comments:number;reposts:number;reposted:number}
+type PostRow=PublicAccount&{post_id:string;body:string;created:number;media:string|null;media_kind:'image'|'video'|null;likes:number;liked:number;comments:number;reposts:number;reposted:number}
 app.get('/api/feed',async c=>{
   const id=c.get('user').id
   const following=c.req.query('following')==='1'
   const {results}=await c.env.DB.prepare(`
-    SELECT u.id,u.name,u.role,u.username,u.verified,u.teacher,u.dob,u.avatar_media,u.cover_media,p.id post_id,p.body,p.created,p.media,
+    SELECT u.id,u.name,u.role,u.username,u.verified,u.teacher,u.dob,u.avatar_media,u.cover_media,p.id post_id,p.body,p.created,p.media,p.media_kind,
     (SELECT COUNT(*) FROM reactions r WHERE r.post_id=p.id AND kind='like') likes,
     EXISTS(SELECT 1 FROM reactions r WHERE r.post_id=p.id AND r.user_id=? AND kind='like') liked,
     (SELECT COUNT(*) FROM comments x WHERE x.post_id=p.id) comments,
@@ -513,27 +515,30 @@ app.get('/api/feed',async c=>{
     WHERE ?=0 OR p.author=? OR EXISTS(SELECT 1 FROM follows WHERE follower=? AND target=p.author)
     ORDER BY p.created DESC LIMIT 60
   `).bind(id,id,Number(following),id,id).all<PostRow>()
-  return c.json(results.map(r=>({id:r.post_id,author:person(r,c.req.url),body:r.body,time:time(r.created),likes:r.likes,liked:Boolean(r.liked),comments:r.comments,reposts:r.reposts,reposted:Boolean(r.reposted),media:r.media?new URL('/api/media/'+r.media,c.req.url).href:undefined})))
+  return c.json(results.map(r=>({id:r.post_id,author:person(r,c.req.url),body:r.body,time:time(r.created),likes:r.likes,liked:Boolean(r.liked),comments:r.comments,reposts:r.reposts,reposted:Boolean(r.reposted),kind:r.media_kind??undefined,media:r.media?new URL('/api/media/'+r.media,c.req.url).href:undefined})))
 })
 app.post('/api/posts',async c=>{
   const db=c.env.DB
   const id=crypto.randomUUID()
   let body=''
   let media:string|null=null
+  let mediaKind:'image'|'video'='image'
   if(c.req.header('Content-Type')?.startsWith('multipart/form-data')){
-    if(Number(c.req.header('Content-Length'))>5300000) return c.json({error:'Choose an image under 5 MB.'},413)
+    if(Number(c.req.header('Content-Length'))>30000000) return c.json({error:'Choose a video under 25 MB or an image under 5 MB.'},413)
     const form=await c.req.raw.formData().catch(()=>null)
     body=clean(form?.get('body'),1200)
-    const file:unknown=form?.get('image')
+    const file:unknown=form?.get('image')??form?.get('video')
     if(file instanceof File){
-      const contentType=await imageType(file)
-      if(!contentType)return c.json({error:'Choose a PNG, JPEG or WebP image under 5 MB.'},400)
+      const isVideo=file.type.startsWith('video/')
+      const contentType=isVideo&&file.size<=25*1024*1024?file.type:await imageType(file)
+      if(!contentType||(!isVideo&&file.size>5*1024*1024))return c.json({error:'Choose a valid image or video.'},400)
+      mediaKind=isVideo?'video':'image'
       media=id
       await c.env.MEDIA.put(media,await file.arrayBuffer(),{httpMetadata:{contentType}})
     }
   }else body=clean((await readBody(c.req.raw))?.body,1200)
   if(!body&&!media) return c.json({error:'Write a post or add an image.'},400)
-  try{await db.prepare('INSERT INTO posts VALUES (?,?,?,?,?)').bind(id,c.get('user').id,body,now(),media).run()}
+  try{await db.prepare('INSERT INTO posts VALUES (?,?,?,?,?,?)').bind(id,c.get('user').id,body,now(),media,mediaKind).run()}
   catch(error){if(media) await c.env.MEDIA.delete(media);throw error}
   return c.json({id},201)
 })

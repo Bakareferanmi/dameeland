@@ -26,16 +26,17 @@ const openGoogle=async(getUrl:()=>Promise<string>)=>{
 const pickMedia=()=>{
   const input=document.createElement('input')
   input.type='file'
-  input.accept='image/png,image/jpeg,image/webp'
-  return new Promise<{name:string;uri:string;data:File}|null>((resolve,reject)=>{
+  input.accept='image/png,image/jpeg,image/webp,video/mp4,video/webm,video/quicktime'
+  return new Promise<{name:string;uri:string;data:File;kind:'image'|'video';duration?:number}|null>((resolve,reject)=>{
     input.oncancel=()=>resolve(null)
     input.onchange=()=>{
       const file=input.files?.[0]
       if(!file){resolve(null);return}
-      if(file.size>5*1024*1024){reject(new Error('Choose an image under 5 MB.'));return}
+      const kind:'image'|'video'=file.type.startsWith('video/')?'video':'image'
+      if(file.size>(kind==='video'?25*1024*1024:5*1024*1024)){reject(new Error(kind==='video'?'Choose a video under 25 MB.':'Choose an image under 5 MB.'));return}
       const reader=new FileReader()
       reader.onerror=()=>reject(new Error('Couldn’t open this image.'))
-      reader.onload=()=>resolve({name:file.name,uri:String(reader.result),data:file})
+      reader.onload=()=>{if(kind==='image'){resolve({name:file.name,uri:String(reader.result),data:file,kind});return}const video=document.createElement('video');video.preload='metadata';video.onloadedmetadata=()=>{if(video.duration>10.1){reject(new Error('Videos must be 10 seconds or shorter.'));return}resolve({name:file.name,uri:String(reader.result),data:file,kind,duration:video.duration})};video.onerror=()=>reject(new Error('Couldn’t open this video.'));video.src=String(reader.result)}
       reader.readAsDataURL(file)
     }
     input.click()
