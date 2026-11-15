@@ -195,8 +195,8 @@ function PreviewMedia({kind}:{kind:'image'|'video'}){
   const accent=maths?'#4F25D6':lime
   return <View style={{minHeight:172,backgroundColor:maths?'#E9E0FF':'#251651',borderRadius:14,padding:15,gap:12,justifyContent:'space-between',overflow:'hidden'}}>
     <View style={spread}>
-      <IconTile name={maths?'maths':'play'} size={34} color={accent} background={maths?'#FFFFFFBA':'#FFFFFF19'}/>
-      <Copy color={accent} size={11} weight={800}>{maths?'MATHS NOTES':'VIDEO PREVIEW · 0:40'}</Copy>
+      <IconTile name={maths?'maths':'play'} size={maths?34:42} color={accent} background={maths?'#FFFFFFBA':'#FFFFFF19'}/>
+      <Copy color={accent} size={11} weight={800}>{maths?'MATHS NOTES':'VIDEO · 0:40'}</Copy>
     </View>
     <View style={{gap:5}}>
       <Copy color={ink} weight={800} size={25}>{maths?'Quadratic equations':'Build a weather app'}</Copy>
@@ -208,7 +208,7 @@ function UploadedMedia({post}:{post:Post}){
   const {theme}=useDesign()
   if(!post.media)return null
   if(post.kind==='video'&&Platform.OS==='web')return React.createElement('video',{src:post.media,controls:true,playsInline:true,preload:'metadata',style:{width:'100%',maxHeight:360,borderRadius:14,backgroundColor:theme.chip}})
-  if(post.kind==='video')return <View style={{height:210,borderRadius:14,backgroundColor:'#120D1F',alignItems:'center',justifyContent:'center'}}><IconTile name="vid"/><Copy color="#fff" weight={800}>Video status</Copy></View>
+  if(post.kind==='video')return <View style={{height:210,borderRadius:14,backgroundColor:'#120D1F',alignItems:'center',justifyContent:'center',gap:10}}><IconTile name="play" size={48} color={lime} background="#FFFFFF19"/><Copy color="#fff" weight={800}>VIDEO · 0:10 MAX</Copy></View>
   return <Image accessibilityLabel="Post attachment" source={{uri:post.media}} resizeMode="cover" style={{width:'100%',height:195,borderRadius:14,backgroundColor:theme.chip}}/>
 }
 
@@ -257,7 +257,7 @@ function ConnectionList({base,token,profile,list,samples,onProfile}:{base:string
 }
 function Empty({title,detail,action,onPress}:{title:string;detail:string;action?:string;onPress?:()=>void}){
   const {theme}=useDesign()
-  return <Card style={{padding:22}}><Copy weight={800} size={19}>{title}</Copy><Copy color={theme.muted}>{detail}</Copy>{action&&onPress&&<Button label={action} variant="secondary" onPress={onPress}/>}</Card>
+  return <Card style={{padding:24,alignItems:'center',gap:10}}><IconTile name="plus" size={42} color={theme.purple} background={theme.chip}/><Copy center weight={800} size={19}>{title}</Copy><Copy center color={theme.muted}>{detail}</Copy>{action&&onPress&&<Button label={action} variant="fun" onPress={onPress}/>}</Card>
 }
 function Loading(){
   const {theme}=useDesign()
@@ -1030,7 +1030,7 @@ export default function App(props:Props){
     const valid=storyMode==='Text'?!!comment.trim():storyMode==='Photo'?!!storyImage:storyMedia?.kind==='video'
     sheet=<>
       <Segmented options={['Text','Photo','Video']} selected={storyMode} onSelect={setStoryMode}/>
-      {storyMode==='Text'&&<View style={{gap:8}}><Copy size={12} weight={800}>Background colour</Copy><View style={{...row,gap:10}}>{['#4F25D6','#120D1F','#E9E0FF','#C8F53F','#F0447A'].map(color=><Pressable key={color} accessibilityRole="button" accessibilityLabel={'Use '+color+' background'} onPress={()=>setStoryBackground(color)} style={{width:34,height:34,borderRadius:17,backgroundColor:color,borderWidth:storyBackground===color?3:1,borderColor:storyBackground===color?'#fff':theme.border}}/>)}</View></View>}
+      {storyMode==='Text'&&<Motion key={storyBackground} reduced={reduced} distance={4} style={{gap:8}}><Copy size={12} weight={800}>Background colour</Copy><View style={{...row,gap:10}}>{['#4F25D6','#120D1F','#E9E0FF','#C8F53F','#F0447A'].map(color=><Pressable key={color} accessibilityRole="button" accessibilityLabel={'Use '+color+' background'} onPress={()=>setStoryBackground(color)} style={{width:34,height:34,borderRadius:17,backgroundColor:color,borderWidth:storyBackground===color?3:1,borderColor:storyBackground===color?'#fff':theme.border}}/>)}</View></Motion>}
       {storyMode==='Photo'&&<>{storyImage&&<Image source={{uri:storyImage}} style={{width:'100%',height:140,borderRadius:12}}/>}{props.pickMedia&&<Button label={storyImage?'Replace photo':'Choose photo'} leading="image" variant="secondary" onPress={()=>{void props.pickMedia?.().then(value=>{if(value&&value.kind!=='video'){setStoryImage(value.uri);setStoryMedia(value)}}).catch(fail)}}/>}</>}
       {storyMode==='Video'&&<>{storyMedia?.kind==='video'&&<Card><IconTile name="vid"/><Copy weight={800}>Video ready · 10 seconds maximum</Copy></Card>}{props.pickMedia&&<Button label={storyMedia?.kind==='video'?'Replace video':'Choose video'} leading="vid" variant="secondary" onPress={()=>{void props.pickMedia?.().then(value=>{if(value&&value.kind==='video'){setStoryImage(undefined);setStoryMedia(value)}}).catch(fail)}}/>}</>}
       <Field label={storyMode==='Text'?'What’s your story?':'Caption'} value={comment} onChangeText={setComment} multiline maxLength={240}/>
@@ -1122,7 +1122,7 @@ export default function App(props:Props){
       <ModalViewport color={story?(personalStory?.background??(personalStory?.image?'#120D1F':'#4F25D6')):theme.bg}>
       {story?<View accessibilityViewIsModal style={{flex:1,backgroundColor:personalStory?.background??(personalStory?.image?'#120D1F':'#4F25D6'),padding:18}}>
         <View style={{width:'100%',maxWidth:640,alignSelf:'center',flex:1,gap:14}}>
-          <View style={{...row,gap:4}}>{Array.from({length:liveGroup?.stories.length??1},(_,index)=><View key={index} style={{flex:1,height:3,borderRadius:3,backgroundColor:index<=activeIndex?lime:'rgba(255,255,255,.35)'}}/>)}</View>
+          <View accessibilityLabel={`Story ${activeIndex+1} of ${liveGroup?.stories.length??1}`} style={{...row,gap:7}}><View style={{...row,flex:1,gap:4}}>{Array.from({length:liveGroup?.stories.length??1},(_,index)=><View key={index} style={{flex:1,height:3,borderRadius:3,backgroundColor:index<=activeIndex?lime:'rgba(255,255,255,.35)'}}/>)}</View><Copy color="#fff" size={11} weight={800}>{activeIndex+1}/{liveGroup?.stories.length??1}</Copy></View>
           <View style={spread}>
             <View style={{...row,flex:1}}><Avatar person={story} size={40}/><View style={{flex:1,gap:2}}>
               <View style={{...row,gap:5}}><Copy color="#fff" weight={800}>{story.name}</Copy><VerifiedBadge person={story}/></View>
@@ -1132,7 +1132,7 @@ export default function App(props:Props){
           </View>
           <View {...storySwipe.panHandlers} style={{flex:1,minHeight:0,justifyContent:'center',gap:16,paddingBottom:16}}>
             {personalStory?.image&&<Image accessibilityLabel="Story photo" source={{uri:personalStory.image}} resizeMode="contain" style={{width:'100%',flex:1,minHeight:0}}/>}
-            {(personalStory?.video||personalStory?.videoPreview)&&(Platform.OS==='web'&&personalStory?.video?React.createElement('video',{src:personalStory.video,controls:true,autoPlay:true,playsInline:true,style:{width:'100%',maxHeight:'70%',borderRadius:16,backgroundColor:'#000'}}):<View style={{...row,justifyContent:'center'}}><IconTile name="vid"/><Copy color="#fff">Video story · 10s max</Copy></View>)}
+            {(personalStory?.video||personalStory?.videoPreview)&&(Platform.OS==='web'&&personalStory?.video?React.createElement('video',{src:personalStory.video,controls:true,autoPlay:true,playsInline:true,style:{width:'100%',maxHeight:'70%',borderRadius:16,backgroundColor:'#000'}}):<View style={{...stack,alignItems:'center'}}><IconTile name="play" size={52} color={lime} background="#FFFFFF19"/><Copy color="#fff" weight={800}>VIDEO · 0:10 MAX</Copy></View>)}
             {!!storyText&&<Copy center color="#fff" weight={800} size={personalStory?.image?18:28}>{storyText}</Copy>}
             <View style={{position:'absolute',inset:0,flexDirection:'row'}}>
               <Pressable accessibilityRole="button" accessibilityLabel="Next story" onPress={()=>moveStory(1)} style={{flex:1}}/>
