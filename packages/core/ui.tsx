@@ -139,12 +139,17 @@ export function IconTile({name,color,background,size=38}:{name:Glyph;color?:stri
 }
 
 export function IconButton({name,label,onPress,active=false,solid=false,count,size=21,tint}:{name:Glyph;label:string;onPress:()=>void;active?:boolean;solid?:boolean;count?:number;size?:number;tint?:string}){
-  const {theme}=useDesign()
+  const {theme,reduced}=useDesign()
   const {scale,...press}=usePressScale()
+  const feedback=useRef(new Animated.Value(1)).current
+  useEffect(()=>{
+    if(reduced||!active)return
+    Animated.sequence([Animated.timing(feedback,{toValue:1.22,duration:100,useNativeDriver:Platform.OS!=='web',isInteraction:false}),Animated.spring(feedback,{toValue:1,useNativeDriver:Platform.OS!=='web',isInteraction:false})]).start()
+  },[active,feedback,reduced])
   const color=tint??(solid?'#fff':active?theme.ink:theme.muted)
   return <Pressable accessibilityRole="button" accessibilityLabel={label} onPress={onPress} {...press}
     style={({pressed})=>({...row,gap:6,minHeight:44,minWidth:44,paddingHorizontal:9,borderRadius:14,backgroundColor:solid?theme.purple:active?theme.chip:'transparent',justifyContent:'center',opacity:pressed?.68:1})}>
-    <Animated.View style={{...row,gap:6,transform:[{scale}]}}>
+    <Animated.View style={{...row,gap:6,transform:[{scale:Animated.multiply(scale,feedback)},{rotate:name==='rp'&&active?'8deg':'0deg'}]}}>
     <Icon name={name} color={color} size={size} strong={solid||active}/>
     {count!==undefined&&<Copy color={color} size={12} weight={700}>{count}</Copy>}
     </Animated.View>

@@ -1,5 +1,5 @@
-import React,{useState} from 'react'
-import {Image,Pressable,ScrollView,View} from 'react-native'
+import React,{useEffect,useRef,useState} from 'react'
+import {Animated,Image,Pressable,ScrollView,View,Platform} from 'react-native'
 import {commentGifs,commentStickers,type CommentAttachment,type Note,type Person} from './index'
 import {gifImages} from './commentGifs'
 import {Avatar,Button,Copy,Field,Icon,IconButton,PersonName,row,spread,useDesign} from './ui'
@@ -22,6 +22,15 @@ function CommentMedia({attachment,renderGif:Gif}:{attachment:CommentAttachment;r
   return <Image accessibilityLabel="Comment photo" source={{uri:attachment.url}} resizeMode="cover"
     style={{width:200,maxWidth:'100%',height:136,borderRadius:12,backgroundColor:theme.chip}}/>
 }
+function CommentEntry({item,onProfile,renderGif}:{item:Note;onProfile:(person:Person)=>void;renderGif?:GifRenderer}){
+  const {reduced}=useDesign()
+  const progress=useRef(new Animated.Value(reduced?1:0)).current
+  useEffect(()=>{if(reduced){progress.setValue(1);return}Animated.timing(progress,{toValue:1,duration:220,useNativeDriver:Platform.OS!=='web',isInteraction:false}).start()},[progress,reduced])
+  return <Animated.View style={{...row,alignItems:'flex-start',opacity:progress,transform:[{translateY:progress.interpolate({inputRange:[0,1],outputRange:[8,0]})}]}}>
+    <Pressable accessibilityRole="button" accessibilityLabel={'Open '+item.author.name+' profile'} onPress={()=>onProfile(item.author)} hitSlop={4} style={{minWidth:40,minHeight:40,justifyContent:'center',alignItems:'center'}}><Avatar person={item.author} size={36}/></Pressable>
+    <View style={{flex:1,gap:5}}><Pressable accessibilityRole="button" onPress={()=>onProfile(item.author)} style={{alignSelf:'flex-start',minHeight:24,justifyContent:'center'}}><PersonName person={item.author}/></Pressable>{!!item.body&&<Copy>{item.body}</Copy>}{item.attachment&&<CommentMedia attachment={item.attachment} renderGif={renderGif}/>}</View>
+  </Animated.View>
+}
 
 export function Comments({list,body,onBody,attachment,onPreset,onPhoto,onRemove,onPost,onProfile,busy,renderGif}:{
   list:Note[];body:string;onBody:(value:string)=>void;attachment?:CommentAttachment;onPreset:(value:Preset)=>void;
@@ -34,19 +43,7 @@ export function Comments({list,body,onBody,attachment,onPreset,onPhoto,onRemove,
     : (Object.keys(commentStickers) as (keyof typeof commentStickers)[]).map(id=>({kind:'sticker',id}))
   return <>
     <ScrollView style={{maxHeight:260}} nestedScrollEnabled keyboardShouldPersistTaps="handled" contentContainerStyle={{gap:14,paddingVertical:4}}>
-      {list.length?list.map(item=><View key={item.id} style={{...row,alignItems:'flex-start'}}>
-        <Pressable accessibilityRole="button" accessibilityLabel={'Open '+item.author.name+' profile'} onPress={()=>onProfile(item.author)}
-          hitSlop={4} style={{minWidth:40,minHeight:40,justifyContent:'center',alignItems:'center'}}>
-          <Avatar person={item.author} size={36}/>
-        </Pressable>
-        <View style={{flex:1,gap:5}}>
-          <Pressable accessibilityRole="button" onPress={()=>onProfile(item.author)} style={{alignSelf:'flex-start',minHeight:24,justifyContent:'center'}}>
-            <PersonName person={item.author}/>
-          </Pressable>
-          {!!item.body&&<Copy>{item.body}</Copy>}
-          {item.attachment&&<CommentMedia attachment={item.attachment} renderGif={renderGif}/>}
-        </View>
-      </View>):<Copy color={theme.muted}>Be the first to leave a comment.</Copy>}
+      {list.length?list.map(item=><CommentEntry key={item.id} item={item} onProfile={onProfile} renderGif={renderGif}/>):<Copy color={theme.muted}>Be the first to leave a comment.</Copy>}
     </ScrollView>
     <View style={{gap:8,borderTopWidth:1,borderColor:theme.border,paddingTop:12}}>
       <Field label="Add a comment" placeholder="Write a reply…" value={body} onChangeText={onBody} editable={!busy} maxLength={500}/>

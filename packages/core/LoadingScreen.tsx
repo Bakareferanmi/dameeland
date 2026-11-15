@@ -10,6 +10,7 @@ const pupilTop=30/56*logoSize-pupilSize/2
 
 export function LoadingScreen({compact=false}:{compact?:boolean}){
   const look=useRef(new Animated.Value(0)).current
+  const pulse=useRef(new Animated.Value(1)).current
   const [animate,setAnimate]=useState(false)
   useEffect(()=>{
     let mounted=true
@@ -26,15 +27,21 @@ export function LoadingScreen({compact=false}:{compact?:boolean}){
     animation.start()
     return ()=>animation.stop()
   },[animate,look])
+  useEffect(()=>{
+    if(!animate){pulse.setValue(1);return}
+    const animation=Animated.loop(Animated.sequence([Animated.timing(pulse,{toValue:1.045,duration:900,easing:Easing.inOut(Easing.quad),useNativeDriver:Platform.OS!=='web',isInteraction:false}),Animated.timing(pulse,{toValue:1,duration:900,easing:Easing.inOut(Easing.quad),useNativeDriver:Platform.OS!=='web',isInteraction:false})]))
+    animation.start()
+    return ()=>animation.stop()
+  },[animate,pulse])
   const translateX=look.interpolate({inputRange:[-1,1],outputRange:[-5,5]})
   return <View testID="dameeland-loading" accessibilityRole="progressbar" accessibilityLabel="Loading dameeland" accessibilityState={{busy:true}}
     style={{flex:compact?undefined:1,minHeight:compact?208:0,alignItems:'center',justifyContent:'center',backgroundColor:'#4F25D6',borderRadius:compact?20:0}}>
-    <View style={{width:logoSize,height:logoSize}} accessibilityElementsHidden importantForAccessibility="no-hide-descendants">
+    <Animated.View style={{width:logoSize,height:logoSize,transform:[{scale:pulse}]}} accessibilityElementsHidden importantForAccessibility="no-hide-descendants">
       <Image source={{uri:art.loadingLogo}} resizeMode="contain" style={{width:logoSize,height:logoSize}}/>
       {eyeCentres.map(centre=><Animated.View key={centre} testID="logo-pupil" style={{
         position:'absolute',left:centre*logoSize-pupilSize/2,top:pupilTop,width:pupilSize,height:pupilSize,
         borderRadius:pupilSize/2,backgroundColor:'#1B1233',transform:[{translateX}],
       }}/>)}
-    </View>
+    </Animated.View>
   </View>
 }

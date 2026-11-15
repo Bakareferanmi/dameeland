@@ -1,5 +1,5 @@
 import React,{useEffect,useRef,useState} from 'react'
-import {Platform,View} from 'react-native'
+import {Animated,Platform,View} from 'react-native'
 import type {CallSignal} from './callSignal'
 import {Avatar,Button,Copy,PersonName,row,useDesign} from './ui'
 import type {Person} from './index'
@@ -186,11 +186,18 @@ const callLabels={incoming:'Incoming call',preparing:'Starting call…',ringing:
 export function RoomCall({person,media,call,accept,end}:{person:Person;media:CallMedia;call:ActiveCall;accept:()=>void;end:()=>void}){
   const [muted,setMuted]=useState(false)
   const [cameraOff,setCameraOff]=useState(false)
-  const {theme}=useDesign()
+  const {theme,reduced}=useDesign()
+  const wave=useRef(new Animated.Value(1)).current
+  useEffect(()=>{
+    if(reduced||call.video||call.state!=='connected'){wave.setValue(1);return}
+    const animation=Animated.loop(Animated.sequence([Animated.timing(wave,{toValue:1.14,duration:650,useNativeDriver:Platform.OS!=='web',isInteraction:false}),Animated.timing(wave,{toValue:1,duration:650,useNativeDriver:Platform.OS!=='web',isInteraction:false})]))
+    animation.start();return ()=>animation.stop()
+  },[call.state,call.video,reduced,wave])
   const Surface=media.Surface
   return <View style={{gap:16}}>
     <View style={row}><Avatar person={person}/><View><PersonName person={person}/><Copy color={theme.muted}>{callLabels[call.state]}</Copy></View></View>
-    {call.remote&&<Surface stream={call.remote} video={call.video}/>}
+    {call.state==='connected'&&!call.video&&<Animated.View style={{alignSelf:'center',width:92,height:92,borderRadius:46,borderWidth:3,borderColor:'#2FB66D',opacity:.65,transform:[{scale:wave}]}}/>}
+    {call.remote&&<Surface stream={call.remote} video={call.video}/>} 
     {call.video&&call.local&&<Surface stream={call.local} video local/>}
     <View style={{...row,flexWrap:'wrap'}}>
       {call.state==='incoming'&&<Button label="Accept call" onPress={accept}/>}
