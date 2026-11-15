@@ -174,13 +174,16 @@ function Auth({base,demo,busy,error,submit,onGoogle,onCancelGoogle,googlePending
     </Motion>
   </ScrollView>
 }
-function StoryRow({onStory,onCreate,seen,own,others}:{onStory:(p:Person)=>void;onCreate:()=>void;seen:Set<string>;own:Person|null;others:Person[]}){
+function StoryRow({onStory,onCreate,onAdd,seen,own,others}:{onStory:(p:Person)=>void;onCreate:()=>void;onAdd?:()=>void;seen:Set<string>;own:Person|null;others:Person[]}){
   const {theme}=useDesign()
   return <ScrollView horizontal directionalLockEnabled showsHorizontalScrollIndicator={false} contentContainerStyle={{...row,gap:10,paddingVertical:1}}>
-    <Pressable accessibilityRole="button" accessibilityLabel="Your story" onPress={onCreate} style={{width:52,alignItems:'center',gap:7}}>
-      {own?<Avatar person={own} size={44} ring seen={seen.has(own.id)}/>:<View style={{width:52,height:52,borderRadius:26,borderWidth:1,borderStyle:'dashed',borderColor:theme.purple,backgroundColor:theme.chip,alignItems:'center',justifyContent:'center'}}><Icon name="plus" color={theme.ink}/></View>}
+    <View style={{width:58,alignItems:'center',gap:7}}>
+      <Pressable accessibilityRole="button" accessibilityLabel="Your story" onPress={onCreate} style={{width:52,height:52,alignItems:'center',justifyContent:'center'}}>
+        {own?<Avatar person={own} size={44} ring seen={seen.has(own.id)}/>:<View style={{width:52,height:52,borderRadius:26,borderWidth:1,borderStyle:'dashed',borderColor:theme.purple,backgroundColor:theme.chip,alignItems:'center',justifyContent:'center'}}><Icon name="plus" color={theme.ink}/></View>}
+      </Pressable>
+      {own&&onAdd&&<Pressable accessibilityRole="button" accessibilityLabel="Add another story" onPress={onAdd} style={{position:'absolute',right:0,top:29,width:23,height:23,borderRadius:12,backgroundColor:theme.purple,borderWidth:2,borderColor:theme.card,alignItems:'center',justifyContent:'center'}}><Icon name="plus" color="#fff" size={14}/></Pressable>}
       <Copy size={10} weight={800}>Your story</Copy>
-    </Pressable>
+    </View>
     {others.map(person=><Pressable key={person.id} accessibilityRole="button" accessibilityLabel={person.name+' story'} onPress={()=>onStory(person)} style={{width:52,alignItems:'center',gap:7}}>
       <Avatar person={person} size={43} ring seen={seen.has(person.id)}/><Copy size={10} weight={700}>{person.name.split(' ')[0]}</Copy>
     </Pressable>)}
@@ -311,9 +314,10 @@ export default function App(props:Props){
   const [toast,setToast]=useState<ToastMessage|null>(null)
   const [seen,setSeen]=useState(new Set<string>())
   const [demoAccounts,setDemoAccounts]=useState<AdminAccount[]>(()=>people.filter(person=>!person.group).map(person=>({person,email:'',created:null,independentlyVerified:person.role!=='tech'&&!!person.verified})))
-  const [ownStory,setOwnStory]=useState<{text:string;image?:string;videoPreview?:boolean;posted:number}|null>(null)
+  const [ownStory,setOwnStory]=useState<{text:string;image?:string;videoPreview?:boolean;posted:number;background?:string}|null>(null)
   const [storyMode,setStoryMode]=useState('Text')
   const [storyImage,setStoryImage]=useState<string>()
+  const [storyBackground,setStoryBackground]=useState('#4F25D6')
   const [birthdays,setBirthdays]=useState<BirthdayEntry[]>([])
   const [wishedBirthdays,setWishedBirthdays]=useState<Set<string>>(()=>new Set())
   const [birthDraft,setBirthDraft]=useState<BirthDraft>(emptyBirth)
@@ -558,7 +562,7 @@ export default function App(props:Props){
   },[voicePlaying])
   const showProfile=(person:Person)=>open('Profile',{profile:demo?demoAccounts.find(account=>account.person.id===person.id)?.person??person:person})
   const selectOverlay=(value:Overlay)=>{
-    if(value.kind==='newStory'){setStoryMode('Text');setStoryImage(undefined);setStoryMedia(null)}
+    if(value.kind==='newStory'){setStoryMode('Text');setStoryImage(undefined);setStoryMedia(null);setStoryBackground('#4F25D6')}
     if(overlay)overlayHistory.current.push(overlay)
     clearComment()
     setOverlay(value)
@@ -735,6 +739,7 @@ export default function App(props:Props){
     try{
       const form=new FormData()
       form.append('text',comment.trim())
+      if(storyMode==='Text')form.append('background',storyBackground)
       if((storyMode==='Photo'||storyMode==='Video')&&storyMedia){
         if(storyMedia.data instanceof Blob)form.append(storyMode==='Video'?'video':'image',storyMedia.data,storyMedia.name)
         else form.append(storyMode==='Video'?'video':'image',storyMedia.data as unknown as Blob)
@@ -871,7 +876,7 @@ export default function App(props:Props){
   const wishedAlready=(id:string)=>wishedBirthdays.has(id)||birthdays.some(entry=>entry.person.id===id&&entry.wished)
   const hasOwnStory=demo?!!demoOwn:activeStories.some(group=>group.author.id===user.id)
   const home=<>
-    {(demo||token)&&<View style={{paddingHorizontal:2}}><StoryRow onStory={person=>selectOverlay({kind:'story',person})} onCreate={()=>selectOverlay(hasOwnStory?{kind:'story',person:user}:{kind:'newStory'})} seen={seen} own={hasOwnStory?user:null} others={demo?demoStories:activeStories.map(group=>group.author).filter(author=>author.id!==user.id)}/></View>}
+    {(demo||token)&&<View style={{paddingHorizontal:2}}><StoryRow onStory={person=>selectOverlay({kind:'story',person})} onCreate={()=>selectOverlay(hasOwnStory?{kind:'story',person:user}:{kind:'newStory'})} onAdd={()=>selectOverlay({kind:'newStory'})} seen={seen} own={hasOwnStory?user:null} others={demo?demoStories:activeStories.map(group=>group.author).filter(author=>author.id!==user.id)}/></View>}
     {(ownBirthday||birthdayPeople.length>0)&&<Card>
       {ownBirthday&&<View style={{gap:4}}><Copy size={19} weight={800}>Happy birthday, {user.name.split(' ')[0]}! 🎂</Copy><Copy color={theme.muted}>Have a great day. Friends can send you a wish today.</Copy></View>}
       {birthdayPeople.length>0&&<>{section('Birthdays today')}{birthdayPeople.map(person=><View key={person.id} style={{...row,flexWrap:'wrap'}}>
@@ -1025,11 +1030,12 @@ export default function App(props:Props){
     const valid=storyMode==='Text'?!!comment.trim():storyMode==='Photo'?!!storyImage:storyMedia?.kind==='video'
     sheet=<>
       <Segmented options={['Text','Photo','Video']} selected={storyMode} onSelect={setStoryMode}/>
+      {storyMode==='Text'&&<View style={{gap:8}}><Copy size={12} weight={800}>Background colour</Copy><View style={{...row,gap:10}}>{['#4F25D6','#120D1F','#E9E0FF','#C8F53F','#F0447A'].map(color=><Pressable key={color} accessibilityRole="button" accessibilityLabel={'Use '+color+' background'} onPress={()=>setStoryBackground(color)} style={{width:34,height:34,borderRadius:17,backgroundColor:color,borderWidth:storyBackground===color?3:1,borderColor:storyBackground===color?'#fff':theme.border}}/>)}</View></View>}
       {storyMode==='Photo'&&<>{storyImage&&<Image source={{uri:storyImage}} style={{width:'100%',height:140,borderRadius:12}}/>}{props.pickMedia&&<Button label={storyImage?'Replace photo':'Choose photo'} leading="image" variant="secondary" onPress={()=>{void props.pickMedia?.().then(value=>{if(value&&value.kind!=='video'){setStoryImage(value.uri);setStoryMedia(value)}}).catch(fail)}}/>}</>}
       {storyMode==='Video'&&<>{storyMedia?.kind==='video'&&<Card><IconTile name="vid"/><Copy weight={800}>Video ready · 10 seconds maximum</Copy></Card>}{props.pickMedia&&<Button label={storyMedia?.kind==='video'?'Replace video':'Choose video'} leading="vid" variant="secondary" onPress={()=>{void props.pickMedia?.().then(value=>{if(value&&value.kind==='video'){setStoryImage(undefined);setStoryMedia(value)}}).catch(fail)}}/>}</>}
       <Field label={storyMode==='Text'?'What’s your story?':'Caption'} value={comment} onChangeText={setComment} multiline maxLength={240}/>
       <Copy size={12} color={theme.muted}>Stories disappear 12 hours after you share them.</Copy>
-      <Button label={busy?'Sharing…':'Share story'} disabled={!valid||busy} onPress={()=>{if(!demo){void shareStory();return}setOwnStory({text:comment.trim(),image:storyMode==='Photo'?storyImage:undefined,videoPreview:storyMode==='Video',posted:Date.now()});modalClose();notify('Story shared in the preview. It disappears after 12 hours.')}}/>
+      <Button label={busy?'Sharing…':'Share story'} disabled={!valid||busy} onPress={()=>{if(!demo){void shareStory();return}setOwnStory({text:comment.trim(),image:storyMode==='Photo'?storyImage:undefined,videoPreview:storyMode==='Video',posted:Date.now(),background:storyMode==='Text'?storyBackground:undefined});modalClose();notify('Story shared in the preview. It disappears after 12 hours.')}}/>
     </>
   }else if(overlay?.kind==='share'){
     sheet=<><Copy>{overlay.post.body||'Image post'}</Copy>{canShare&&<Button label="Share post text" onPress={()=>{void props.share?.(overlay.post.body).then(()=>{modalClose();notify('Post text ready to share')}).catch(fail)}}/>}</>
@@ -1047,7 +1053,7 @@ export default function App(props:Props){
   const liveGroup=story&&!demo?activeStories.find(group=>group.author.id===story.id):undefined
   const activeIndex=liveGroup?Math.min(storyIndex,liveGroup.stories.length-1):0
   const liveItem=liveGroup?.stories[activeIndex]
-  const personalStory:{text:string;image?:string;video?:string;videoPreview?:boolean}|null=demo?(story?.id===user.id?demoOwn:null):liveItem?{text:liveItem.text,image:liveItem.image,video:liveItem.video}:null
+  const personalStory:{text:string;image?:string;video?:string;videoPreview?:boolean;background?:string}|null=demo?(story?.id===user.id?demoOwn:null):liveItem?{text:liveItem.text,image:liveItem.image,video:liveItem.video,background:liveItem.background}:null
   const storyPosted=demo?(story?.id===user.id?demoOwn?.posted:story?demoPosted[story.id]:undefined):liveItem?Date.parse(liveItem.created):undefined
   const storyText=demo?personalStory?.text??(story?.id==='ada'?'Study session after school. Bring your notes!':story?.id==='bello'?'Maths test is on Friday. Revise quadratics!':story?.id==='code'?'Code Club meets on Friday!':'See you at quiz night!'):liveItem?.text??''
   return <Design.Provider value={{theme,font,reduced,renderIcon:props.renderIcon}}><View style={{flex:1,backgroundColor:theme.bg,width:'100%'}}>
@@ -1113,8 +1119,8 @@ export default function App(props:Props){
       </View>}
     {toast&&!overlay&&<Toast key={toast.id} item={toast} reduced={reduced} onDismiss={dismissToast} bottom={desktop?24:76}/>}
     <Modal presentationStyle="fullScreen" visible={overlay!==null} animationType={reduced?'none':'fade'} onRequestClose={modalClose}>
-      <ModalViewport color={story?(personalStory?.image?'#120D1F':'#4F25D6'):theme.bg}>
-      {story?<View accessibilityViewIsModal style={{flex:1,backgroundColor:personalStory?.image?'#120D1F':'#4F25D6',padding:18}}>
+      <ModalViewport color={story?(personalStory?.background??(personalStory?.image?'#120D1F':'#4F25D6')):theme.bg}>
+      {story?<View accessibilityViewIsModal style={{flex:1,backgroundColor:personalStory?.background??(personalStory?.image?'#120D1F':'#4F25D6'),padding:18}}>
         <View style={{width:'100%',maxWidth:640,alignSelf:'center',flex:1,gap:14}}>
           <View style={{...row,gap:4}}>{Array.from({length:liveGroup?.stories.length??1},(_,index)=><View key={index} style={{flex:1,height:3,borderRadius:3,backgroundColor:index<=activeIndex?lime:'rgba(255,255,255,.35)'}}/>)}</View>
           <View style={spread}>

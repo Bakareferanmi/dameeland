@@ -252,7 +252,7 @@ app.get('/api/media/:id',async c=>{
   return new Response(object.body,{headers})
 })
 const storyKey=(user:string)=>'stories:'+user
-type StoryRecord={id:string;text:string;media?:string;kind?:'image'|'video';created:number}
+type StoryRecord={id:string;text:string;media?:string;kind?:'image'|'video';background?:string;created:number}
 const storyExpiry=(story:StoryRecord)=>story.created+storyLifetime
 async function readStories(env:Env,user:string){
   const list=await env.STORIES.get<StoryRecord[]>(storyKey(user),'json')
@@ -265,7 +265,7 @@ async function writeStories(env:Env,user:string,list:StoryRecord[]){
   const ttl=Math.max(60,Math.ceil((Math.max(...list.map(storyExpiry))-now())/1000))
   return env.STORIES.put(storyKey(user),JSON.stringify(list),{expirationTtl:ttl})
 }
-const storyView=(user:string,story:StoryRecord,url:string):Story=>({id:story.id,text:story.text,kind:story.kind,image:story.kind==='image'&&story.media?new URL('/api/story-media/'+user+'/'+story.id,url).href:undefined,video:story.kind==='video'&&story.media?new URL('/api/story-media/'+user+'/'+story.id,url).href:undefined,created:time(story.created),expires:time(storyExpiry(story))})
+const storyView=(user:string,story:StoryRecord,url:string):Story=>({id:story.id,text:story.text,kind:story.kind,background:story.background,image:story.kind==='image'&&story.media?new URL('/api/story-media/'+user+'/'+story.id,url).href:undefined,video:story.kind==='video'&&story.media?new URL('/api/story-media/'+user+'/'+story.id,url).href:undefined,created:time(story.created),expires:time(storyExpiry(story))})
 const storyMediaKey=(user:string,id:string)=>'stories/'+user+'/'+id
 const uuidPattern=/^[a-f0-9-]{36}$/
 app.get('/api/story-media/:user/:id',async c=>{
@@ -461,10 +461,12 @@ app.get('/api/stories',async c=>{
 app.post('/api/stories',async c=>{
   const user=c.get('user')
   const id=crypto.randomUUID()
-  let text='',contentType:string|null=null,file:File|null=null,kind:'image'|'video'='image'
+  let text='',contentType:string|null=null,file:File|null=null,kind:'image'|'video'='image',background:string|undefined
   if(c.req.header('Content-Type')?.startsWith('multipart/form-data')){
     const form=await c.req.raw.formData().catch(()=>null)
     text=clean(form?.get('text'),240)
+    const requestedBackground=clean(form?.get('background'),20)
+    if(['#4F25D6','#120D1F','#E9E0FF','#C8F53F','#F0447A'].includes(requestedBackground))background=requestedBackground
     const upload:unknown=form?.get('image')??form?.get('video')
     if(upload instanceof File){
       const isVideo=upload.type.startsWith('video/')
@@ -479,7 +481,7 @@ app.post('/api/stories',async c=>{
   const all=await readStories(c.env,user.id)
   const active=all.filter(story=>storyExpiry(story)>at)
   if(active.length>=storyLimit)return c.json({error:'You can have up to '+storyLimit+' stories at once. Delete one or wait for it to expire.'},429)
-  const story:StoryRecord={id,text,created:at,media:file?id:undefined,kind:file?kind:undefined}
+  const story:StoryRecord={id,text,created:at,media:file?id:undefined,kind:file?kind:undefined,background:kind==='image'&&background?background:undefined}
   if(file&&contentType)await c.env.MEDIA.put(storyMediaKey(user.id,id),await file.arrayBuffer(),{httpMetadata:{contentType}})
   try{await writeStories(c.env,user.id,[...active,story])}
   catch(error){if(file)await c.env.MEDIA.delete(storyMediaKey(user.id,id));throw error}
