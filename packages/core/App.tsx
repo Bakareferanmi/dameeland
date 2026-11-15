@@ -182,13 +182,13 @@ function StoryRow({onStory,onCreate,onAdd,seen,own,others}:{onStory:(p:Person)=>
   const {theme}=useDesign()
   return <ScrollView horizontal directionalLockEnabled showsHorizontalScrollIndicator={false} contentContainerStyle={{...row,gap:10,paddingVertical:1}}>
     <View style={{width:58,alignItems:'center',gap:7}}>
-      <Pressable accessibilityRole="button" accessibilityLabel="Your story" onPress={onCreate} style={{width:52,height:52,alignItems:'center',justifyContent:'center'}}>
+      <Pressable accessibilityRole="button" accessibilityLabel="Your story" onPress={onCreate} style={({pressed})=>({width:52,height:52,alignItems:'center',justifyContent:'center',transform:[{scale:pressed?.92:1}]})}>
         {own?<Avatar person={own} size={44} ring seen={seen.has(own.id)}/>:<View style={{width:52,height:52,borderRadius:26,borderWidth:1,borderStyle:'dashed',borderColor:theme.purple,backgroundColor:theme.chip,alignItems:'center',justifyContent:'center'}}><Icon name="plus" color={theme.ink}/></View>}
       </Pressable>
       {own&&onAdd&&<Pressable accessibilityRole="button" accessibilityLabel="Add another story" onPress={onAdd} style={{position:'absolute',right:0,top:29,width:23,height:23,borderRadius:12,backgroundColor:theme.purple,borderWidth:2,borderColor:theme.card,alignItems:'center',justifyContent:'center'}}><Icon name="plus" color="#fff" size={14}/></Pressable>}
       <Copy size={10} weight={800}>Your story</Copy>
     </View>
-    {others.map(person=><Pressable key={person.id} accessibilityRole="button" accessibilityLabel={person.name+' story'} onPress={()=>onStory(person)} style={{width:52,alignItems:'center',gap:7}}>
+    {others.map(person=><Pressable key={person.id} accessibilityRole="button" accessibilityLabel={person.name+' story'} onPress={()=>onStory(person)} style={({pressed})=>({width:52,alignItems:'center',gap:7,transform:[{scale:pressed?.92:1}]})}>
       <Avatar person={person} size={43} ring seen={seen.has(person.id)}/><Copy size={10} weight={700}>{person.name.split(' ')[0]}</Copy>
     </Pressable>)}
   </ScrollView>
