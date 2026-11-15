@@ -9,6 +9,7 @@ import {PlusJakartaSans_500Medium} from '@expo-google-fonts/plus-jakarta-sans/50
 import {PlusJakartaSans_700Bold} from '@expo-google-fonts/plus-jakarta-sans/700Bold'
 import {PlusJakartaSans_800ExtraBold} from '@expo-google-fonts/plus-jakarta-sans/800ExtraBold'
 import * as SecureStore from 'expo-secure-store'
+import * as Notifications from 'expo-notifications'
 import Dameeland from '@dameeland/core/app'
 import {LoadingScreen} from '@dameeland/core/loading'
 
@@ -18,6 +19,14 @@ const tokenKey='dameeland-session'
 const loadToken=()=>SecureStore.getItemAsync(tokenKey)
 const saveToken=(value:string|null)=>value?SecureStore.setItemAsync(tokenKey,value):SecureStore.deleteItemAsync(tokenKey)
 const share=async(message:string)=>{await Share.share({message})}
+Notifications.setNotificationHandler({handleNotification:async()=>({shouldShowAlert:true,shouldShowBanner:true,shouldShowList:true,shouldPlaySound:true,shouldSetBadge:true})})
+const requestNotifications=async()=>{
+  const current=await Notifications.getPermissionsAsync()
+  if(current.granted)return true
+  const next=await Notifications.requestPermissionsAsync()
+  return next.granted
+}
+const notifyDevice=async(title:string,body:string)=>{await Notifications.scheduleNotificationAsync({content:{title,body,sound:'default'},trigger:null})}
 async function openGoogle(getUrl:()=>Promise<string>){
   if(Platform.OS==='web'){
     const popup=window.open('about:blank','_blank','popup,width=500,height=650')
@@ -62,5 +71,5 @@ export default function App(){
   const configuredBase=process.env.EXPO_PUBLIC_API_URL
   const base=configuredBase??(Platform.OS==='android'?'http://10.0.2.2:8787':'http://localhost:8787')
   const demo=offline||process.env.EXPO_PUBLIC_DEMO==='1'||!configuredBase
-  return <SafeAreaProvider><SafeAreaView style={{flex:1,backgroundColor:theme==='dark'?'#120D1F':'#FAF8FF'}}>{loaded||error?<Dameeland phone={offline} demo={demo} base={base} callMedia={callMedia} renderIcon={HugeiconsIcon} initialTheme={theme} font={error?()=>({}):font} loadToken={loadToken} saveToken={saveToken} openGoogle={openGoogle} modalViewport={Platform.OS==='web'?undefined:NativeModalViewport} pickMedia={pickMedia} renderGif={CommentGif} share={share}/>:<LoadingScreen/>}</SafeAreaView></SafeAreaProvider>
+  return <SafeAreaProvider><SafeAreaView style={{flex:1,backgroundColor:theme==='dark'?'#120D1F':'#FAF8FF'}}>{loaded||error?<Dameeland phone={offline} demo={demo} base={base} callMedia={callMedia} renderIcon={HugeiconsIcon} initialTheme={theme} font={error?()=>({}):font} loadToken={loadToken} saveToken={saveToken} openGoogle={openGoogle} modalViewport={Platform.OS==='web'?undefined:NativeModalViewport} pickMedia={pickMedia} renderGif={CommentGif} share={share} requestNotifications={requestNotifications} notifyDevice={notifyDevice}/>:<LoadingScreen/>}</SafeAreaView></SafeAreaProvider>
 }

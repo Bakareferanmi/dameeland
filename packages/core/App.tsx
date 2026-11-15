@@ -53,6 +53,7 @@ type Props={
   callMedia?:CallMedia;
   modalViewport?:React.ComponentType<{color:string;children:React.ReactNode}>;
   pickMedia?:()=>Promise<Media|null>; renderGif?:GifRenderer; share?:(text:string)=>Promise<void>;
+  requestNotifications?:()=>Promise<boolean>; notifyDevice?:(title:string,body:string)=>Promise<void>;
 }
 type Overlay={kind:'connections';list:FollowListKind;person:Person}|{kind:'comments'|'share'|'post';post:Post}|{kind:'story';person:Person}|{kind:'create'|'wish'|'newStory'}|{kind:'call';video:boolean;person:Person;ringing?:boolean;incoming?:boolean}
 type PageEntry={page:Page;profile:Person;room:Room|null;overlays:Overlay[];scrollY:number}
@@ -355,6 +356,7 @@ export default function App(props:Props){
   const clearComment=()=>{commentDraft.current+=1;setComment('');setCommentMedia(null)}
   const [unread,setUnread]=useState(demo)
   const [notifications,setNotifications]=useState(true)
+  const [deviceNotifications,setDeviceNotifications]=useState<'unknown'|'granted'|'denied'>(props.requestNotifications?'unknown':'denied')
   const pending=useRef(new Set<string>())
   const scroll=useRef<React.ComponentRef<typeof ScrollView>>(null)
   const scrollOffsets=useRef<Partial<Record<Page,number>>>({})
@@ -368,6 +370,14 @@ export default function App(props:Props){
   const notify=(message:string,tone:ToastMessage['tone']='success')=>setToast({id:uid(),message,tone})
   const dismissToast=(id:string)=>setToast(current=>current?.id===id?null:current)
   const fail=(reason:unknown)=>notify(errorMessage(reason),'error')
+  async function enableDeviceNotifications(){
+    if(!props.requestNotifications)return
+    try{
+      const granted=await props.requestNotifications()
+      setDeviceNotifications(granted?'granted':'denied')
+      notify(granted?'Device notifications enabled.':'Notifications were not enabled.',granted?'success':'error')
+    }catch(reason){setDeviceNotifications('denied');fail(reason)}
+  }
   useEffect(()=>{
     let alive=true
     AccessibilityInfo.isReduceMotionEnabled?.().then(value=>{if(alive)setReduced(value)})
@@ -457,6 +467,7 @@ export default function App(props:Props){
       }
       const item=data as Note
       setChats(previous=>({...previous,[roomId]:[...(previous[roomId]??[]).filter(m=>m.id!==item.id),item]}))
+      if(item.author.id!==user.id)void props.notifyDevice?.(item.author.name,'New message: '+item.body)
     }
     void refresh()
     const poll=setInterval(()=>{if(socket.readyState!==WebSocket.OPEN)void refresh()},3500)
@@ -835,7 +846,7 @@ export default function App(props:Props){
       append(item);setMessage('')
       if(demo){
         const session=demoSession.current
-        replyTimers.current.push(setTimeout(()=>{if(session===demoSession.current)append({id:uid(),author:room.person,body:'Thanks for the message! See you at school.'})},950))
+        replyTimers.current.push(setTimeout(()=>{if(session===demoSession.current){append({id:uid(),author:room.person,body:'Thanks for the message! See you at school.'});void props.notifyDevice?.(room.person.name,'Thanks for the message! See you at school.')}},950))
       }
     }catch(reason){fail(reason)}finally{setBusy(false)}
   }
@@ -992,7 +1003,7 @@ export default function App(props:Props){
   </>
   const settings=<>
     <Card>{section('Appearance')}<View style={row}>{(['light','dark','system'] as const).map(mode=><Button key={mode} label={mode[0].toUpperCase()+mode.slice(1)} variant={appearance===mode?'primary':'secondary'} onPress={()=>setAppearance(mode)}/>)}</View></Card>
-    <Card>{section('Notifications')}<Button label={notifications?'In-app notifications on':'In-app notifications off'} variant="secondary" onPress={()=>{setNotifications(!notifications);setUnread(!notifications&&demo)}}/></Card>
+    <Card>{section('Notifications')}<Button label={notifications?'In-app notifications on':'In-app notifications off'} variant="secondary" onPress={()=>{setNotifications(!notifications);setUnread(!notifications&&demo)}}/>{props.requestNotifications&&<Button label={deviceNotifications==='granted'?'Device notifications enabled':'Enable device notifications'} variant="secondary" disabled={deviceNotifications==='granted'} onPress={()=>void enableDeviceNotifications()}/>}<Copy size={12} color={theme.muted}>{deviceNotifications==='denied'?'Allow notifications in your browser or phone settings, then try again.':'Get alerts for messages and activity when dameeland is in the background.'}</Copy></Card>
     {demo&&<Card>{section('Privacy and safety')}<Copy color={theme.muted}>Try the activity status control in this preview.</Copy><Button label={quietMode?'Show my activity status':'Hide my activity status'} variant="secondary" onPress={()=>setQuietMode(!quietMode)}/></Card>}
     {demo&&<ScreenLinks items={ [['Screen states','settings'],['Design system','image'],['Logo board','image']] } open={open}/>}
     {(demo||user.isAdmin)&&<Button label="Admin dashboard" leading="settings" variant="secondary" onPress={()=>open('Admin')}/>}

@@ -46,5 +46,18 @@ const share=async(text:string)=>{
   if(navigator.clipboard){await navigator.clipboard.writeText(text);return}
   window.prompt('Copy this post text',text)
 }
+const requestNotifications=async()=>{
+  if(!('Notification' in window))return false
+  if(Notification.permission==='granted')return true
+  return (await Notification.requestPermission())==='granted'
+}
+const notifyDevice=async(title:string,body:string)=>{
+  if(!('Notification' in window)||Notification.permission!=='granted')return
+  if(document.visibilityState==='visible')return
+  const registration=await navigator.serviceWorker?.ready.catch(()=>null)
+  if(registration){await registration.showNotification(title,{body,icon:'/icon-192.png',badge:'/icon-192.png',tag:'dameeland-activity'})}
+  else new Notification(title,{body,icon:'/icon-192.png'})
+}
+if('serviceWorker' in navigator)window.addEventListener('load',()=>{void navigator.serviceWorker.register('/sw.js')})
 if(phone)document.body.classList.add('phone-preview')
-createRoot(document.getElementById('root')!).render(<App demo={demo} phone={phone} base={import.meta.env.VITE_API_URL??''} renderIcon={HugeiconsIcon} initialTheme={initialTheme} font={font} loadToken={loadToken} saveToken={saveToken} openGoogle={openGoogle} pickMedia={pickMedia} share={share}/>)
+createRoot(document.getElementById('root')!).render(<App demo={demo} phone={phone} base={import.meta.env.VITE_API_URL??''} renderIcon={HugeiconsIcon} initialTheme={initialTheme} font={font} loadToken={loadToken} saveToken={saveToken} openGoogle={openGoogle} pickMedia={pickMedia} share={share} requestNotifications={requestNotifications} notifyDevice={notifyDevice}/>)
