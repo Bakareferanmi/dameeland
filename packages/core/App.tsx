@@ -24,6 +24,7 @@ type Session={token:string;user:Viewer}
 type AuthMode='signup'|'login'
 type Credentials={firstName:string;lastName:string;username:string;email:string;password:string;dob:string}
 type NotificationItem={id:string;kind:string;entityId?:string;body:string;created:string;read:boolean;actor?:Person}
+type Presence={online:boolean;lastSeen:string|null}
 type BirthDraft={day:string;month:string;year:string}
 const emptyBirth:BirthDraft={day:'',month:'',year:''}
 const digits=(value:string,max:number)=>value.replace(/\D/g,'').slice(0,max)
@@ -347,6 +348,7 @@ export default function App(props:Props){
   const [photoBusy,setPhotoBusy]=useState<'avatar'|'cover'|null>(null)
   const photoLock=useRef(false)
   const [profileStats,setProfileStats]=useState<{id:string; data?:FollowStats; error?:boolean}|null>(null)
+  const [presenceById,setPresenceById]=useState<Record<string,Presence>>({})
   const profileLinkHandled=useRef(false)
   const [statsRefresh,refreshStats]=useState(0)
   const [notes,setNotes]=useState<Record<string,Note[]>>({})
@@ -502,7 +504,8 @@ export default function App(props:Props){
     }
     void refresh()
     const poll=setInterval(()=>{if(socket.readyState!==WebSocket.OPEN)void refresh()},3500)
-    return ()=>{active=false;setChatConnected(false);clearInterval(poll);if(chatSocket.current===socket)chatSocket.current=null;socket.close()}
+    const heartbeat=setInterval(()=>{if(socket.readyState===WebSocket.OPEN)socket.send(JSON.stringify({type:'presence'}))},30000)
+    return ()=>{active=false;setChatConnected(false);clearInterval(poll);clearInterval(heartbeat);if(chatSocket.current===socket)chatSocket.current=null;socket.close()}
   },[base,demo,token,page,roomId])
   useEffect(()=>{
     if(demo||!token||page!=='Home')return
@@ -602,6 +605,15 @@ export default function App(props:Props){
       .catch(()=>{if(!controller.signal.aborted)setProfileStats({id,error:true})})
     return ()=>controller.abort()
   },[base,demo,page,profile.id,statsRefresh,token])
+  const presenceTarget=page==='Chat'?room?.person.id:page==='Profile'?profile.id:undefined
+  useEffect(()=>{
+    if(demo||!token||!presenceTarget)return
+    let alive=true
+    const load=()=>api<Presence>(base,'/people/'+encodeURIComponent(presenceTarget)+'/presence',{},token).then(value=>{if(alive)setPresenceById(previous=>({...previous,[presenceTarget]:value}))}).catch(()=>{})
+    void load()
+    const timer=setInterval(load,30000)
+    return ()=>{alive=false;clearInterval(timer)}
+  },[base,demo,token,presenceTarget])
   useEffect(()=>{
     if(!voicePlaying)return
     const timer=setTimeout(()=>setVoicePlaying(false),8000)
@@ -974,7 +986,7 @@ export default function App(props:Props){
     {feedError?failure:loading?<Loading/>:roomList.length?roomList.map(r=><Pressable key={r.id} accessibilityRole="button" accessibilityLabel={'Open conversation with '+r.person.name} onPress={()=>openRoom(r)}><Card style={row}><Avatar person={r.person} size={50}/><View style={{flex:1}}><PersonName person={r.person}/><Copy color={theme.muted} size={12}>{chats[r.id]?.at(-1)?.body??'Open conversation'}</Copy></View></Card></Pressable>):<Empty title={inboxTab==='Chats'?'No messages yet':inboxTab==='Groups'?'No groups yet':'No message requests'} detail={inboxTab==='Chats'?'Find a classmate and start a chat.':inboxTab==='Groups'?'Group conversations are available in the preview.':'New requests will appear here.'} action={inboxTab==='Chats'?'Find people':undefined} onPress={()=>open('Explore')}/>}
   </>
   const chat=room&&<>
-    <Card style={spread}><View style={{...row,flex:1}}><Avatar person={room.person}/><View style={{flex:1}}><PersonName person={room.person}/><Copy color={theme.muted} size={12}>{demo?'Active now':'Direct message'}</Copy></View></View>{demo&&<View style={{...row,gap:0}}><IconButton name="ph" label="Voice call" onPress={()=>selectOverlay({kind:'call',video:false,person:room.person})}/><IconButton name="vid" label="Video call" onPress={()=>selectOverlay({kind:'call',video:true,person:room.person})}/></View>}</Card>
+    <Card style={spread}><View style={{...row,flex:1}}><Avatar person={room.person}/><View style={{flex:1}}><PersonName person={room.person}/><View style={{...row,gap:5}}>{!demo&&<View style={{width:7,height:7,borderRadius:4,backgroundColor:presenceById[room.person.id]?.online?'#2FB66D':theme.muted}}/>}<Copy color={presenceById[room.person.id]?.online?'#2FB66D':theme.muted} size={12}>{demo?'Active now':presenceById[room.person.id]?.online?'Online':presenceById[room.person.id]?.lastSeen?'Last seen '+shortTime(presenceById[room.person.id]?.lastSeen||''):'Offline'}</Copy></View></View></View>{demo&&<View style={{...row,gap:0}}><IconButton name="ph" label="Voice call" onPress={()=>selectOverlay({kind:'call',video:false,person:room.person})}/><IconButton name="vid" label="Video call" onPress={()=>selectOverlay({kind:'call',video:true,person:room.person})}/></View>}</Card>
     {!demo&&callMedia&&<View style={{...row,flexWrap:'wrap'}}>
       <Button label="Voice call" leading="ph" variant="secondary" disabled={!chatConnected||!!roomCall.call} onPress={()=>roomCall.start(false)}/>
       <Button label="Video call" leading="vid" variant="secondary" disabled={!chatConnected||!!roomCall.call} onPress={()=>roomCall.start(true)}/>
@@ -991,6 +1003,7 @@ export default function App(props:Props){
   </>
   const ownProfile=profile.id===user.id
   const currentStats=profileStats?.id===profile.id?profileStats:undefined
+  const profilePresence=presenceById[profile.id]
   const demoConnections=(id:string,list:FollowListKind)=>{
     const members=[...people,user]
     const outgoing=(person:Person)=>person.id===user.id?Object.keys(follows).filter(key=>follows[key]):sampleFollows[person.id]??[]
@@ -1005,7 +1018,7 @@ export default function App(props:Props){
       <View style={{height:136,backgroundColor:'#4F25D6'}}>{profile.cover&&<Image accessibilityLabel="Cover photo" source={{uri:profile.cover}} resizeMode="cover" style={{width:'100%',height:'100%'}}/>}</View>
       <View style={{padding:18,paddingTop:0,gap:14}}>
         <View style={{alignSelf:'flex-start',marginTop:-40}}><Avatar person={profile} size={74} ring/></View>
-        <View style={{gap:4}}><Copy size={27} weight={800}>{profile.name}</Copy>{profile.username&&<Copy color={theme.ink}>@{profile.username}</Copy>}<Copy color={theme.muted}>{profile.detail}</Copy></View>
+        <View style={{gap:4}}><Copy size={27} weight={800}>{profile.name}</Copy>{profile.username&&<Copy color={theme.ink}>@{profile.username}</Copy>}<Copy color={theme.muted}>{profile.detail}</Copy>{!demo&&<View style={{...row,gap:5}}><View style={{width:7,height:7,borderRadius:4,backgroundColor:profilePresence?.online?'#2FB66D':theme.muted}}/><Copy size={12} color={profilePresence?.online?'#2FB66D':theme.muted}>{profilePresence?.online?'Online':profilePresence?.lastSeen?'Last seen '+shortTime(profilePresence.lastSeen||''):'Offline'}</Copy></View>}</View>
         <View style={{...row,gap:22,borderTopWidth:1,borderColor:theme.border,paddingTop:12}}>
           {([{label:'Followers',count:followers},{label:'Following',count:following}]).map(({label,count})=>
             <Pressable key={label} accessibilityRole="button" accessibilityLabel={'View '+label.toLowerCase()+(count===undefined?'':' ('+count+')')} onPress={()=>selectOverlay({kind:'connections',list:label==='Followers'?'followers':'following',person:profile})} style={{gap:2,minWidth:72,minHeight:48}}>

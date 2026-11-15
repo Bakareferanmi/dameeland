@@ -22,6 +22,7 @@ const person=(user:PublicAccount,url:string):Person=>({id:user.id,name:user.name
 const readBody=async(request:Request)=>request.json<Record<string,unknown>>().catch(()=>null)
 const time=(date:number)=>new Date(date).toISOString()
 const now=()=>Date.now()
+const touchPresence=(db:D1Database,userId:string,online:boolean)=>db.prepare('INSERT INTO presence (user_id,online,last_seen) VALUES (?,?,?) ON CONFLICT(user_id) DO UPDATE SET online=excluded.online,last_seen=excluded.last_seen').bind(userId,online?1:0,now()).run()
 const base64Url=(bytes:ArrayBuffer)=>btoa(String.fromCharCode(...new Uint8Array(bytes))).replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,'')
 const isAdmin=(env:Env,id:string)=>env.ADMIN_USER_IDS?.split(',').some(value=>value.trim()===id)??false
 const viewer=(env:Env,account:PublicAccount,url:string)=>({...person(account,url),dob:account.dob??undefined,isAdmin:isAdmin(env,account.id)})
@@ -737,6 +738,12 @@ app.get('/api/people/:id/follow-stats',async c=>{
   if(!stats)return c.json({error:'Profile unavailable.'},404)
   return c.json({...stats,followedByViewer:Boolean(stats.followedByViewer)})
 })
+app.get('/api/people/:id/presence',async c=>{
+  const row=await c.env.DB.prepare('SELECT online,last_seen FROM presence WHERE user_id=?').bind(c.req.param('id')).first<{online:number;last_seen:number}>()
+  const lastSeen=row?.last_seen??null
+  const online=Boolean(row?.online)&&!!lastSeen&&now()-lastSeen<90000
+  return c.json({online,lastSeen:lastSeen?time(lastSeen):null})
+})
 app.get('/api/people/:id/connections/:kind',async c=>{
   const {id,kind}=c.req.param()
   if(kind!=='followers'&&kind!=='following')return c.json({error:'Unknown connections list.'},404)
@@ -803,10 +810,12 @@ app.post('/api/rooms/:id/messages',async c=>{
 })
 app.get('/api/rooms/:id/socket',async c=>{
   const room=c.req.param('id')
-  if(!await member(c.env.DB,room,c.get('user').id)) return c.json({error:'Conversation unavailable.'},404)
+  const user=c.get('user').id
+  if(!await member(c.env.DB,room,user)) return c.json({error:'Conversation unavailable.'},404)
   if(c.req.header('Upgrade')?.toLowerCase()!=='websocket') return c.json({error:'WebSocket required.'},426)
   if(c.req.header('Origin')&&!new Set([c.env.ALLOWED_ORIGIN,'http://127.0.0.1:5173']).has(c.req.header('Origin')!)) return c.json({error:'Origin unavailable.'},403)
-  return c.env.ROOMS.getByName(room).fetch('https://room.internal/socket',{headers:{Upgrade:'websocket','X-Room-User':c.get('user').id}})
+  await touchPresence(c.env.DB,user,true)
+  return c.env.ROOMS.getByName(room).fetch('https://room.internal/socket',{headers:{Upgrade:'websocket','X-Room-User':user}})
 })
 app.onError((error,c)=>{
   if(error instanceof HTTPException)return c.json({error:error.message||'The request could not be completed.'},error.status)
@@ -814,6 +823,7 @@ app.onError((error,c)=>{
   return c.json({error:'Something went wrong. Try again.'},500)
 })
 export class ChatRoom extends DurableObject<Env>{
+  private async setPresence(user:string,online:boolean){await touchPresence(this.env.DB,user,online)}
   async fetch(request:Request){
     if(new URL(request.url).pathname==='/notify'&&request.method==='POST'){
       const message=await request.text()
@@ -830,8 +840,10 @@ export class ChatRoom extends DurableObject<Env>{
     if(typeof message!=='string'||message.length>40000)return
     const [user]=this.ctx.getTags(sender)
     if(!user)return
+    void this.setPresence(user,true)
     let envelope
     try{envelope=JSON.parse(message)}catch{return}
+    if(envelope?.type==='presence')return
     if(envelope?.type!=='call')return
     const signal=readCallSignal(envelope.signal)
     if(!signal||signal.kind==='unavailable')return
@@ -842,6 +854,8 @@ export class ChatRoom extends DurableObject<Env>{
     }
     if(!peers.length&&signal.kind==='offer')sender.send(JSON.stringify({type:'call',signal:{kind:'unavailable',id:signal.id}}))
   }
+  webSocketClose(sender:WebSocket){const [user]=this.ctx.getTags(sender);if(user)void this.setPresence(user,false)}
+  webSocketError(sender:WebSocket){const [user]=this.ctx.getTags(sender);if(user)void this.setPresence(user,false)}
 
 }
 export default app

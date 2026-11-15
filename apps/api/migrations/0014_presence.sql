@@ -1,0 +1,5 @@
+CREATE TABLE IF NOT EXISTS presence (
+  user_id TEXT PRIMARY KEY,
+  online INTEGER NOT NULL DEFAULT 0,
+  last_seen INTEGER NOT NULL
+);
