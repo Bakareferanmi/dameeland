@@ -4,9 +4,10 @@ import {cors} from 'hono/cors'
 import {bodyLimit} from 'hono/body-limit'
 import {HTTPException} from 'hono/http-exception'
 import {DurableObject} from 'cloudflare:workers'
+import * as webpush from 'web-push'
 import {commentGifs,validBirthDate,type BirthdayEntry,storyLimit,storyLifetime,type Story,type StoryGroup,commentStickers,capitalizeName,initials,normalizeUsername,usernameHint,validUsername,type AdminAccount,type AdminActivity,type AdminDay,type AdminOverview,type CommentAttachment,type FollowPage,type FollowStats,type Person,type Role} from '@dameeland/core'
 
-interface Env {DB:D1Database;MEDIA:R2Bucket;STORIES:KVNamespace;ROOMS:DurableObjectNamespace<ChatRoom>;ALLOWED_ORIGIN:string;GOOGLE_CLIENT_ID?:string;GOOGLE_CLIENT_SECRET?:string;GOOGLE_REDIRECT_URI?:string;ADMIN_USER_IDS?:string;RESEND_API_KEY?:string;RECOVERY_FROM?:string}
+interface Env {DB:D1Database;MEDIA:R2Bucket;STORIES:KVNamespace;ROOMS:DurableObjectNamespace<ChatRoom>;ALLOWED_ORIGIN:string;VAPID_PUBLIC_KEY?:string;VAPID_PRIVATE_KEY?:string;VAPID_SUBJECT?:string;GOOGLE_CLIENT_ID?:string;GOOGLE_CLIENT_SECRET?:string;GOOGLE_REDIRECT_URI?:string;ADMIN_USER_IDS?:string;RESEND_API_KEY?:string;RECOVERY_FROM?:string}
 type Account={id:string;email:string;name:string;role:Role;salt:string;password_hash:string;username?:string|null;verified?:number;teacher?:number;dob?:string|null}
 type PublicAccount=Pick<Account,'id'|'name'|'role'|'username'|'verified'|'teacher'|'dob'> & {avatar_media?:string|null;cover_media?:string|null}
 type App={Bindings:Env;Variables:{user:PublicAccount;tokenHash:string}}
@@ -26,18 +27,38 @@ const isAdmin=(env:Env,id:string)=>env.ADMIN_USER_IDS?.split(',').some(value=>va
 const viewer=(env:Env,account:PublicAccount,url:string)=>({...person(account,url),dob:account.dob??undefined,isAdmin:isAdmin(env,account.id)})
 type NotificationKind='message'|'follow'|'comment'|'reaction'|'call'|'birthday'|'announcement'
 type NotificationPreferenceRow={messages:number;follows:number;comments:number;reactions:number;calls:number;birthdays:number;announcements:number;quiet_start:string|null;quiet_end:string|null}
+type WaitContext={waitUntil:(promise:Promise<unknown>)=>void}
 const preferenceColumn=(kind:NotificationKind):'messages'|'follows'|'comments'|'reactions'|'calls'|'birthdays'|'announcements'=>({message:'messages',follow:'follows',comment:'comments',reaction:'reactions',call:'calls',birthday:'birthdays',announcement:'announcements'}[kind] as 'messages'|'follows'|'comments'|'reactions'|'calls'|'birthdays'|'announcements')
 const quietNow=(start:string|null,end:string|null)=>{
   if(!start||!end)return false
   const current=new Date().toISOString().slice(11,16)
   return start<=end?current>=start&&current<end:current>=start||current<end
 }
-async function createNotification(db:D1Database,userId:string,actorId:string|undefined,kind:NotificationKind,entityId:string|undefined,body:string,groupKey?:string){
+type PushDevice={id:string;platform:string;endpoint:string|null;token:string|null}
+async function sendPush(env:Env,db:D1Database,devices:PushDevice[],title:string,body:string,entityId?:string){
+  const dead:string[]=[]
+  if(env.VAPID_PUBLIC_KEY&&env.VAPID_PRIVATE_KEY&&env.VAPID_SUBJECT){
+    webpush.setVapidDetails(env.VAPID_SUBJECT,env.VAPID_PUBLIC_KEY,env.VAPID_PRIVATE_KEY)
+    await Promise.all(devices.filter(device=>device.endpoint&&device.platform!=='android'&&device.platform!=='ios').map(async device=>{
+      try{await webpush.sendNotification({endpoint:device.endpoint!,keys:JSON.parse(device.token??'{}')},JSON.stringify({title,body,entityId}))}
+      catch(error){const status=error instanceof webpush.WebPushError?error.statusCode:0;if(status===404||status===410)dead.push(device.id)}
+    }))
+  }
+  const expo=devices.filter(device=>device.token?.startsWith('ExponentPushToken['))
+  if(expo.length){
+    const response=await fetch('https://exp.host/--/api/v2/push/send',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(expo.map(device=>({to:device.token,title,body,data:entityId?{entityId}:undefined,sound:'default'})))})
+    if(response.ok){const result=await response.json<{data?:Array<{status:string;details?:{error?:string}}>}>();result.data?.forEach((item,index)=>{if(item.status==='error'&&item.details?.error==='DeviceNotRegistered')dead.push(expo[index].id)})}
+  }
+  if(dead.length)await db.prepare('DELETE FROM notification_devices WHERE id IN ('+dead.map(()=>'?').join(',')+')').bind(...dead).run()
+}
+async function createNotification(env:Env,ctx:WaitContext,db:D1Database,userId:string,actorId:string|undefined,kind:NotificationKind,entityId:string|undefined,body:string,groupKey?:string){
   if(!userId||userId===actorId)return
   const pref=await db.prepare('SELECT messages,follows,comments,reactions,calls,birthdays,announcements,quiet_start,quiet_end FROM notification_preferences WHERE user_id=?').bind(userId).first<NotificationPreferenceRow>()
   if(pref&&!pref[preferenceColumn(kind)])return
   if(pref&&kind!=='call'&&quietNow(pref.quiet_start,pref.quiet_end))return
   await db.prepare('INSERT INTO notifications (id,user_id,actor_id,kind,entity_id,body,group_key,created) VALUES (?,?,?,?,?,?,?,?)').bind(crypto.randomUUID(),userId,actorId??null,kind,entityId??null,body,groupKey??null,now()).run()
+  const devices=(await db.prepare('SELECT id,platform,endpoint,token FROM notification_devices WHERE user_id=?').bind(userId).all<PushDevice>()).results
+  if(devices.length)ctx.waitUntil(sendPush(env,db,devices,'dameeland',body,entityId))
 }
 async function session(env:Env,account:PublicAccount,url:string){
   const token=random(32)
@@ -295,6 +316,7 @@ app.get('/api/story-media/:user/:id',async c=>{
   object.writeHttpMetadata(headers)
   return new Response(object.body,{headers})
 })
+app.get('/api/notification-public-key',c=>c.env.VAPID_PUBLIC_KEY?c.json({publicKey:c.env.VAPID_PUBLIC_KEY}):c.json({error:'Push notifications are not configured.'},503))
 app.use('/api/*',async(c,next)=>{
   const header=c.req.header('Authorization')
   const ticket=c.req.path.endsWith('/socket')?c.req.header('Sec-WebSocket-Protocol')?.split(',').map(s=>s.trim()).find(s=>s.startsWith('ticket.'))?.slice(7):undefined
@@ -630,7 +652,7 @@ app.put('/api/posts/:id/:kind',async c=>{
   await statement.run()
   if(body.active){
     const post=await db.prepare('SELECT author FROM posts WHERE id=?').bind(id).first<{author:string}>()
-    if(post)await createNotification(db,post.author,user,kind==='like'?'reaction':'reaction',id,kind==='like'?'liked your post':'reposted your post','post:'+id+':reaction')
+    if(post)await createNotification(c.env,c.executionCtx,db,post.author,user,'reaction',id,kind==='like'?'liked your post':'reposted your post','post:'+id+':reaction')
   }
   return c.json({ok:true})
 })
@@ -681,7 +703,7 @@ app.post('/api/posts/:id/comments',async c=>{
     }
   }catch(error){if(media)await MEDIA.delete(media);throw error}
   const postOwner=await DB.prepare('SELECT author FROM posts WHERE id=?').bind(post).first<{author:string}>()
-  if(postOwner)await createNotification(DB,postOwner.author,author.id,'comment',post,'commented on your post','post:'+post+':comment')
+  if(postOwner)await createNotification(c.env,c.executionCtx,DB,postOwner.author,author.id,'comment',post,'commented on your post','post:'+post+':comment')
   return c.json({id,author:person(author,c.req.url),body,attachment:commentAttachment(attachment,c.req.url)},201)
 })
 app.get('/api/people',async c=>{
@@ -741,7 +763,7 @@ app.put('/api/people/:id/follow',async c=>{
   await db.prepare(body.active?'INSERT INTO follows VALUES (?,?) ON CONFLICT DO NOTHING':'DELETE FROM follows WHERE follower=? AND target=?').bind(me,target).run()
   if(body.active){
     const actor=c.get('user')
-    await createNotification(db,target,me,'follow',me,actor.name+' started following you','follow:'+me)
+    await createNotification(c.env,c.executionCtx,db,target,me,'follow',me,actor.name+' started following you','follow:'+me)
   }
   return c.json({ok:true})
 })
@@ -775,7 +797,7 @@ app.post('/api/rooms/:id/messages',async c=>{
   const message={id:crypto.randomUUID(),author:person(author,c.req.url),body}
   await c.env.DB.prepare('INSERT INTO messages VALUES (?,?,?,?,?)').bind(message.id,room,author.id,body,now()).run()
   const other=await c.env.DB.prepare('SELECT CASE WHEN first_user=? THEN second_user ELSE first_user END target FROM rooms WHERE id=?').bind(author.id,room).first<{target:string}>()
-  if(other)await createNotification(c.env.DB,other.target,author.id,'message',room,'sent you a message','room:'+room)
+  if(other)await createNotification(c.env,c.executionCtx,c.env.DB,other.target,author.id,'message',room,'sent you a message','room:'+room)
   c.executionCtx.waitUntil(c.env.ROOMS.getByName(room).fetch('https://room.internal/notify',{method:'POST',body:JSON.stringify(message)}))
   return c.json(message,201)
 })

@@ -3,6 +3,7 @@
   "name":"dameeland-api",
   "main":"index.ts",
   "compatibility_date":"2026-04-07",
+  "compatibility_flags":["nodejs_compat"],
   "workers_dev":true,
   "vars":{"ALLOWED_ORIGIN":"https://dameeland.pages.dev"},
   "d1_databases":[{"binding":"DB","database_name":"dameeland","database_id":"767a9c3e-a2a0-4d72-8c0c-93d5b270e510","migrations_dir":"migrations"}],

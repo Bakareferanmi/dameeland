@@ -26,6 +26,10 @@ const requestNotifications=async()=>{
   const next=await Notifications.requestPermissionsAsync()
   return next.granted
 }
+const getNotificationDevice=async()=>{
+  const token=await Notifications.getExpoPushTokenAsync()
+  return {platform:Platform.OS==='ios'?'ios':'android',token:token.data} as {platform:'android'|'ios';token:string}
+}
 const notifyDevice=async(title:string,body:string)=>{await Notifications.scheduleNotificationAsync({content:{title,body,sound:'default'},trigger:null})}
 async function openGoogle(getUrl:()=>Promise<string>){
   if(Platform.OS==='web'){
@@ -71,5 +75,5 @@ export default function App(){
   const configuredBase=process.env.EXPO_PUBLIC_API_URL
   const base=configuredBase??(Platform.OS==='android'?'http://10.0.2.2:8787':'http://localhost:8787')
   const demo=offline||process.env.EXPO_PUBLIC_DEMO==='1'||!configuredBase
-  return <SafeAreaProvider><SafeAreaView style={{flex:1,backgroundColor:theme==='dark'?'#120D1F':'#FAF8FF'}}>{loaded||error?<Dameeland phone={offline} demo={demo} base={base} callMedia={callMedia} renderIcon={HugeiconsIcon} initialTheme={theme} font={error?()=>({}):font} loadToken={loadToken} saveToken={saveToken} openGoogle={openGoogle} modalViewport={Platform.OS==='web'?undefined:NativeModalViewport} pickMedia={pickMedia} renderGif={CommentGif} share={share} requestNotifications={requestNotifications} notifyDevice={notifyDevice}/>:<LoadingScreen/>}</SafeAreaView></SafeAreaProvider>
+  return <SafeAreaProvider><SafeAreaView style={{flex:1,backgroundColor:theme==='dark'?'#120D1F':'#FAF8FF'}}>{loaded||error?<Dameeland phone={offline} demo={demo} base={base} callMedia={callMedia} renderIcon={HugeiconsIcon} initialTheme={theme} font={error?()=>({}):font} loadToken={loadToken} saveToken={saveToken} openGoogle={openGoogle} modalViewport={Platform.OS==='web'?undefined:NativeModalViewport} pickMedia={pickMedia} renderGif={CommentGif} share={share} requestNotifications={requestNotifications} getNotificationDevice={getNotificationDevice} notifyDevice={notifyDevice}/>:<LoadingScreen/>}</SafeAreaView></SafeAreaProvider>
 }

@@ -54,7 +54,7 @@ type Props={
   callMedia?:CallMedia;
   modalViewport?:React.ComponentType<{color:string;children:React.ReactNode}>;
   pickMedia?:()=>Promise<Media|null>; renderGif?:GifRenderer; share?:(text:string)=>Promise<void>;
-  requestNotifications?:()=>Promise<boolean>; notifyDevice?:(title:string,body:string)=>Promise<void>;
+  requestNotifications?:()=>Promise<boolean>; getNotificationDevice?:()=>Promise<{platform:'android'|'ios';token:string}|null>; notifyDevice?:(title:string,body:string)=>Promise<void>;
 }
 type Overlay={kind:'connections';list:FollowListKind;person:Person}|{kind:'comments'|'share'|'post';post:Post}|{kind:'story';person:Person}|{kind:'create'|'wish'|'newStory'}|{kind:'call';video:boolean;person:Person;ringing?:boolean;incoming?:boolean}
 type PageEntry={page:Page;profile:Person;room:Room|null;overlays:Overlay[];scrollY:number}
@@ -67,6 +67,7 @@ const demoPosted:Record<string,number>={ada:Date.now()-2*hour,bello:Date.now()-4
 const storyLeft=(ms:number)=>{const minutes=Math.max(1,Math.ceil(ms/60000));return minutes>=60?Math.floor(minutes/60)+'h '+(minutes%60)+'m left':minutes+'m left'}
 const uid=()=>Date.now().toString(36)+Math.random().toString(36).slice(2)
 const json=(body:unknown,method='POST')=>({method,body:JSON.stringify(body)})
+const vapidBytes=(value:string)=>Uint8Array.from(atob(value.replace(/-/g,'+').replace(/_/g,'/')+'='.repeat((4-value.length%4)%4)),char=>char.charCodeAt(0))
 const errorMessage=(error:unknown)=>error instanceof Error?error.message:'Something went wrong. Try again.'
 const demoUsernameTaken=(username:string)=>people.some(person=>person.id===username)||[...welcomeAccounts.values()].some(account=>account.user.username===username)
 const welcomeAccounts=new Map<string,{user:Person;password:string}>()
@@ -378,6 +379,17 @@ export default function App(props:Props){
     if(!props.requestNotifications)return
     try{
       const granted=await props.requestNotifications()
+      if(granted&&Platform.OS==='web'&&token){
+        const publicKey=await fetch(base.replace(/\/$/,'')+'/api/notification-public-key').then(response=>response.ok?response.json() as Promise<{publicKey:string}>:Promise.reject(new Error('Push notifications are not configured.')))
+        const registration=await navigator.serviceWorker.ready
+        const subscription=await registration.pushManager.subscribe({userVisibleOnly:true,applicationServerKey:vapidBytes(publicKey.publicKey)})
+        const jsonSubscription=subscription.toJSON()
+        await call('/notifications/devices',json({platform:'pwa',endpoint:subscription.endpoint,token:JSON.stringify(jsonSubscription.keys??{})}))
+      }
+      if(granted&&Platform.OS!=='web'&&token&&props.getNotificationDevice){
+        const device=await props.getNotificationDevice()
+        if(device)await call('/notifications/devices',json(device))
+      }
       setDeviceNotifications(granted?'granted':'denied')
       notify(granted?'Device notifications enabled.':'Notifications were not enabled.',granted?'success':'error')
     }catch(reason){setDeviceNotifications('denied');fail(reason)}
