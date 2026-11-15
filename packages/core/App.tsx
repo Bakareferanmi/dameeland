@@ -23,6 +23,7 @@ type Room={id:string;person:Person}
 type Session={token:string;user:Viewer}
 type AuthMode='signup'|'login'
 type Credentials={firstName:string;lastName:string;username:string;email:string;password:string;dob:string}
+type NotificationItem={id:string;kind:string;entityId?:string;body:string;created:string;read:boolean;actor?:Person}
 type BirthDraft={day:string;month:string;year:string}
 const emptyBirth:BirthDraft={day:'',month:'',year:''}
 const digits=(value:string,max:number)=>value.replace(/\D/g,'').slice(0,max)
@@ -357,6 +358,9 @@ export default function App(props:Props){
   const [unread,setUnread]=useState(demo)
   const [notifications,setNotifications]=useState(true)
   const [deviceNotifications,setDeviceNotifications]=useState<'unknown'|'granted'|'denied'>(props.requestNotifications?'unknown':'denied')
+  const [notificationItems,setNotificationItems]=useState<NotificationItem[]>([])
+  const [notificationsLoading,setNotificationsLoading]=useState(false)
+  const [quietStart,setQuietStart]=useState(''),[quietEnd,setQuietEnd]=useState('')
   const pending=useRef(new Set<string>())
   const scroll=useRef<React.ComponentRef<typeof ScrollView>>(null)
   const scrollOffsets=useRef<Partial<Record<Page,number>>>({})
@@ -429,6 +433,21 @@ export default function App(props:Props){
     let alive=true
     setLoading(true);setFeedError('')
     api<Room[]>(base,'/rooms',{},token).then(data=>{if(alive)setRooms(data)}).catch(reason=>{if(alive)setFeedError(errorMessage(reason))}).finally(()=>{if(alive)setLoading(false)})
+    return ()=>{alive=false}
+  },[base,demo,token,page,retry])
+  useEffect(()=>{
+    if(demo||!token||page!=='Settings')return
+    api<{quiet_start?:string|null;quiet_end?:string|null}>(base,'/notification-preferences',{},token).then(value=>{setQuietStart(value.quiet_start??'');setQuietEnd(value.quiet_end??'')}).catch(()=>{})
+  },[base,demo,token,page])
+  async function saveNotificationPreferences(){
+    if(demo||!token)return
+    try{await call('/notification-preferences',json({messages:notifications,follows:notifications,comments:notifications,reactions:notifications,calls:true,birthdays:notifications,announcements:notifications,quiet_start:quietStart||null,quiet_end:quietEnd||null}));notify('Notification preferences saved.')}catch(reason){fail(reason)}
+  }
+  useEffect(()=>{
+    if(demo||!token||page!=='Notifications')return
+    let alive=true
+    setNotificationsLoading(true)
+    api<{unread:number;items:NotificationItem[]}>(base,'/notifications',{},token).then(data=>{if(alive){setNotificationItems(data.items);setUnread(data.unread>0)}}).catch(reason=>{if(alive)notify(errorMessage(reason),'error')}).finally(()=>{if(alive)setNotificationsLoading(false)})
     return ()=>{alive=false}
   },[base,demo,token,page,retry])
   const roomId=room?.id
@@ -1003,7 +1022,7 @@ export default function App(props:Props){
   </>
   const settings=<>
     <Card>{section('Appearance')}<View style={row}>{(['light','dark','system'] as const).map(mode=><Button key={mode} label={mode[0].toUpperCase()+mode.slice(1)} variant={appearance===mode?'primary':'secondary'} onPress={()=>setAppearance(mode)}/>)}</View></Card>
-    <Card>{section('Notifications')}<Button label={notifications?'In-app notifications on':'In-app notifications off'} variant="secondary" onPress={()=>{setNotifications(!notifications);setUnread(!notifications&&demo)}}/>{props.requestNotifications&&<Button label={deviceNotifications==='granted'?'Device notifications enabled':'Enable device notifications'} variant="secondary" disabled={deviceNotifications==='granted'} onPress={()=>void enableDeviceNotifications()}/>}<Copy size={12} color={theme.muted}>{deviceNotifications==='denied'?'Allow notifications in your browser or phone settings, then try again.':'Get alerts for messages and activity when dameeland is in the background.'}</Copy></Card>
+    <Card>{section('Notifications')}<Button label={notifications?'In-app notifications on':'In-app notifications off'} variant="secondary" onPress={()=>{setNotifications(!notifications);setUnread(!notifications&&demo)}}/>{props.requestNotifications&&<Button label={deviceNotifications==='granted'?'Device notifications enabled':'Enable device notifications'} variant="secondary" disabled={deviceNotifications==='granted'} onPress={()=>void enableDeviceNotifications()}/>} {!demo&&<><View style={{...row,alignItems:'flex-start'}}><View style={{flex:1}}><Field label="Quiet hours start" placeholder="22:00" value={quietStart} onChangeText={setQuietStart} maxLength={5}/></View><View style={{flex:1}}><Field label="Quiet hours end" placeholder="07:00" value={quietEnd} onChangeText={setQuietEnd} maxLength={5}/></View></View><Button label="Save notification preferences" variant="secondary" onPress={()=>void saveNotificationPreferences()}/></>}<Copy size={12} color={theme.muted}>{deviceNotifications==='denied'?'Allow notifications in your browser or phone settings, then try again.':'Get alerts for messages and activity when dameeland is in the background.'}</Copy></Card>
     {demo&&<Card>{section('Privacy and safety')}<Copy color={theme.muted}>Try the activity status control in this preview.</Copy><Button label={quietMode?'Show my activity status':'Hide my activity status'} variant="secondary" onPress={()=>setQuietMode(!quietMode)}/></Card>}
     {demo&&<ScreenLinks items={ [['Screen states','settings'],['Design system','image'],['Logo board','image']] } open={open}/>}
     {(demo||user.isAdmin)&&<Button label="Admin dashboard" leading="settings" variant="secondary" onPress={()=>open('Admin')}/>}
@@ -1032,7 +1051,7 @@ export default function App(props:Props){
     Quiz:<Quiz onBack={goBack}/>,
     Admin:(demo||user.isAdmin)&&<Suspense fallback={<Loading/>}><Admin base={base} token={token}
       sample={demo?{overview:demoOverview,accounts:demoAccounts}:undefined} onSampleChange={changeDemoAccount}/></Suspense>,
-    Notifications:demo&&notifications?<Card><View style={row}><Avatar person={people[1]}/><View style={{flex:1}}><Copy weight={800}>Tobi A. liked your post</Copy><Copy color={theme.muted} size={12}>Today</Copy></View></View><View style={row}><Avatar person={people[4]}/><View style={{flex:1}}><Copy weight={800}>Code Club shared a new post</Copy><Copy color={theme.muted} size={12}>Yesterday</Copy></View></View></Card>:<Empty title="You’re all caught up" detail="New activity will appear here."/>,
+    Notifications:demo&&notifications?<Card><View style={row}><Avatar person={people[1]}/><View style={{flex:1}}><Copy weight={800}>Tobi A. liked your post</Copy><Copy color={theme.muted} size={12}>Today</Copy></View></View><View style={row}><Avatar person={people[4]}/><View style={{flex:1}}><Copy weight={800}>Code Club shared a new post</Copy><Copy color={theme.muted} size={12}>Yesterday</Copy></View></View></Card>:notificationsLoading?<Loading/>:notificationItems.length?<View style={stack}>{notificationItems.map(item=><Pressable key={item.id} accessibilityRole="button" onPress={()=>{if(!item.read){void call('/notifications/'+item.id+'/read',{method:'PUT'});setNotificationItems(previous=>previous.map(value=>value.id===item.id?{...value,read:true}:value));setUnread(previous=>previous&&notificationItems.some(value=>value.id!==item.id&&!value.read))}if(item.kind==='message'&&item.entityId)notify('Open Messages to continue the conversation.')}} style={{...row,alignItems:'flex-start',padding:13,borderRadius:16,borderWidth:1,borderColor:theme.border,backgroundColor:item.read?theme.card:theme.chip}}>{item.actor?<Avatar person={item.actor} size={42}/>:<IconTile name="bell" size={42}/>}<View style={{flex:1,gap:3}}><Copy weight={item.read?600:800}>{item.body}</Copy><Copy size={12} color={theme.muted}>{shortTime(item.created)}</Copy></View></Pressable>)}<Button label="Mark all as read" variant="secondary" onPress={()=>{void call('/notifications/read-all',{method:'PUT'});setNotificationItems(previous=>previous.map(item=>({...item,read:true})));setUnread(false)}}/></View>:<Empty title="You’re all caught up" detail="New activity will appear here."/>,
   }
   let sheet:React.ReactNode
   if(overlay?.kind==='connections'){

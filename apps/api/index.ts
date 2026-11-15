@@ -24,6 +24,21 @@ const now=()=>Date.now()
 const base64Url=(bytes:ArrayBuffer)=>btoa(String.fromCharCode(...new Uint8Array(bytes))).replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,'')
 const isAdmin=(env:Env,id:string)=>env.ADMIN_USER_IDS?.split(',').some(value=>value.trim()===id)??false
 const viewer=(env:Env,account:PublicAccount,url:string)=>({...person(account,url),dob:account.dob??undefined,isAdmin:isAdmin(env,account.id)})
+type NotificationKind='message'|'follow'|'comment'|'reaction'|'call'|'birthday'|'announcement'
+type NotificationPreferenceRow={messages:number;follows:number;comments:number;reactions:number;calls:number;birthdays:number;announcements:number;quiet_start:string|null;quiet_end:string|null}
+const preferenceColumn=(kind:NotificationKind):'messages'|'follows'|'comments'|'reactions'|'calls'|'birthdays'|'announcements'=>({message:'messages',follow:'follows',comment:'comments',reaction:'reactions',call:'calls',birthday:'birthdays',announcement:'announcements'}[kind] as 'messages'|'follows'|'comments'|'reactions'|'calls'|'birthdays'|'announcements')
+const quietNow=(start:string|null,end:string|null)=>{
+  if(!start||!end)return false
+  const current=new Date().toISOString().slice(11,16)
+  return start<=end?current>=start&&current<end:current>=start||current<end
+}
+async function createNotification(db:D1Database,userId:string,actorId:string|undefined,kind:NotificationKind,entityId:string|undefined,body:string,groupKey?:string){
+  if(!userId||userId===actorId)return
+  const pref=await db.prepare('SELECT messages,follows,comments,reactions,calls,birthdays,announcements,quiet_start,quiet_end FROM notification_preferences WHERE user_id=?').bind(userId).first<NotificationPreferenceRow>()
+  if(pref&&!pref[preferenceColumn(kind)])return
+  if(pref&&kind!=='call'&&quietNow(pref.quiet_start,pref.quiet_end))return
+  await db.prepare('INSERT INTO notifications (id,user_id,actor_id,kind,entity_id,body,group_key,created) VALUES (?,?,?,?,?,?,?,?)').bind(crypto.randomUUID(),userId,actorId??null,kind,entityId??null,body,groupKey??null,now()).run()
+}
 async function session(env:Env,account:PublicAccount,url:string){
   const token=random(32)
   await env.DB.prepare('INSERT INTO sessions VALUES (?,?,?)').bind(await hash(token),account.id,now()+7*86400000).run()
@@ -290,6 +305,56 @@ app.use('/api/*',async(c,next)=>{
   if(!user) return c.json({error:'Your session has expired. Log in again.'},401)
   c.set('user',user);c.set('tokenHash',tokenHash)
   await next()
+})
+app.get('/api/notifications',async c=>{
+  const user=c.get('user').id
+  const {results}=await c.env.DB.prepare(`
+    SELECT n.id,n.kind,n.entity_id,n.body,n.group_key,n.created,n.read,
+      u.id actor_id,u.name actor_name,u.role actor_role,u.username actor_username,u.verified actor_verified,u.teacher actor_teacher,u.dob actor_dob,u.avatar_media actor_avatar_media,u.cover_media actor_cover_media
+    FROM notifications n LEFT JOIN users u ON u.id=n.actor_id
+    WHERE n.user_id=? ORDER BY n.created DESC LIMIT 50
+  `).bind(user).all<Record<string,unknown>>()
+  const unread=results.filter(row=>!row.read).length
+  return c.json({unread,items:results.map(row=>({id:row.id,kind:row.kind,entityId:row.entity_id??undefined,body:row.body,groupKey:row.group_key??undefined,created:time(Number(row.created)),read:Boolean(row.read),actor:row.actor_id?person({id:String(row.actor_id),name:String(row.actor_name??''),role:row.actor_role as Role,username:row.actor_username as string|null,verified:Number(row.actor_verified??0),teacher:Number(row.actor_teacher??0),dob:row.actor_dob as string|null,avatar_media:row.actor_avatar_media as string|null,cover_media:row.actor_cover_media as string|null},c.req.url):undefined}))})
+})
+app.put('/api/notifications/:id/read',async c=>{
+  const result=await c.env.DB.prepare('UPDATE notifications SET read=1 WHERE id=? AND user_id=?').bind(c.req.param('id'),c.get('user').id).run()
+  return c.json({ok:Boolean(result.meta.changes)})
+})
+app.put('/api/notifications/read-all',async c=>{
+  await c.env.DB.prepare('UPDATE notifications SET read=1 WHERE user_id=?').bind(c.get('user').id).run()
+  return c.json({ok:true})
+})
+app.post('/api/notifications/devices',async c=>{
+  const input=await readBody(c.req.raw)
+  const platform=input?.platform
+  const endpoint=typeof input?.endpoint==='string'?input.endpoint.slice(0,2000):null
+  const token=typeof input?.token==='string'?input.token.slice(0,1000):null
+  if(!['web','pwa','android','ios'].includes(String(platform))||(!endpoint&&!token))return c.json({error:'A valid notification device is required.'},400)
+  const id=crypto.randomUUID(),user=c.get('user').id,at=now()
+  await c.env.DB.prepare(`INSERT INTO notification_devices (id,user_id,platform,endpoint,token,created,last_seen) VALUES (?,?,?,?,?,?,?) ON CONFLICT(user_id,platform,endpoint,token) DO UPDATE SET last_seen=excluded.last_seen`).bind(id,user,platform,endpoint,token,at,at).run()
+  return c.json({ok:true},201)
+})
+app.delete('/api/notifications/devices',async c=>{
+  const input=await readBody(c.req.raw)
+  const endpoint=typeof input?.endpoint==='string'?input.endpoint:null
+  const token=typeof input?.token==='string'?input.token:null
+  if(!endpoint&&!token)return c.json({error:'A device endpoint or token is required.'},400)
+  await c.env.DB.prepare('DELETE FROM notification_devices WHERE user_id=? AND (endpoint=? OR token=?)').bind(c.get('user').id,endpoint,token).run()
+  return c.json({ok:true})
+})
+app.get('/api/notification-preferences',async c=>{
+  const user=c.get('user').id
+  const current=await c.env.DB.prepare('SELECT messages,follows,comments,reactions,calls,birthdays,announcements,quiet_start,quiet_end FROM notification_preferences WHERE user_id=?').bind(user).first<NotificationPreferenceRow>()
+  return c.json(current??{messages:true,follows:true,comments:true,reactions:true,calls:true,birthdays:true,announcements:true,quiet_start:null,quiet_end:null})
+})
+app.put('/api/notification-preferences',async c=>{
+  const user=c.get('user').id,input=await readBody(c.req.raw)
+  const bool=(value:unknown)=>value===false?0:1
+  const start=typeof input?.quiet_start==='string'&&/^([01]\d|2[0-3]):[0-5]\d$/.test(input.quiet_start)?input.quiet_start:null
+  const end=typeof input?.quiet_end==='string'&&/^([01]\d|2[0-3]):[0-5]\d$/.test(input.quiet_end)?input.quiet_end:null
+  await c.env.DB.prepare(`INSERT INTO notification_preferences (user_id,messages,follows,comments,reactions,calls,birthdays,announcements,quiet_start,quiet_end,updated) VALUES (?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(user_id) DO UPDATE SET messages=excluded.messages,follows=excluded.follows,comments=excluded.comments,reactions=excluded.reactions,calls=excluded.calls,birthdays=excluded.birthdays,announcements=excluded.announcements,quiet_start=excluded.quiet_start,quiet_end=excluded.quiet_end,updated=excluded.updated`).bind(user,bool(input?.messages),bool(input?.follows),bool(input?.comments),bool(input?.reactions),bool(input?.calls),bool(input?.birthdays),bool(input?.announcements),start,end,now()).run()
+  return c.json({ok:true})
 })
 app.get('/api/me',c=>c.json(viewer(c.env,c.get('user'),c.req.url)))
 app.put('/api/me/birthday',async c=>{
@@ -563,6 +628,10 @@ app.put('/api/posts/:id/:kind',async c=>{
     ?db.prepare('INSERT INTO reactions(post_id,user_id,kind,created) VALUES (?,?,?,?) ON CONFLICT DO NOTHING').bind(id,user,kind,now())
     :db.prepare('DELETE FROM reactions WHERE post_id=? AND user_id=? AND kind=?').bind(id,user,kind)
   await statement.run()
+  if(body.active){
+    const post=await db.prepare('SELECT author FROM posts WHERE id=?').bind(id).first<{author:string}>()
+    if(post)await createNotification(db,post.author,user,kind==='like'?'reaction':'reaction',id,kind==='like'?'liked your post':'reposted your post','post:'+id+':reaction')
+  }
   return c.json({ok:true})
 })
 type NoteRow=PublicAccount&{note_id:string;body:string}
@@ -611,6 +680,8 @@ app.post('/api/posts/:id/comments',async c=>{
       return c.json({error:'Post unavailable.'},404)
     }
   }catch(error){if(media)await MEDIA.delete(media);throw error}
+  const postOwner=await DB.prepare('SELECT author FROM posts WHERE id=?').bind(post).first<{author:string}>()
+  if(postOwner)await createNotification(DB,postOwner.author,author.id,'comment',post,'commented on your post','post:'+post+':comment')
   return c.json({id,author:person(author,c.req.url),body,attachment:commentAttachment(attachment,c.req.url)},201)
 })
 app.get('/api/people',async c=>{
@@ -668,6 +739,10 @@ app.put('/api/people/:id/follow',async c=>{
   const db=c.env.DB
   if(!(await db.prepare('SELECT id FROM users WHERE id=?').bind(target).first())) return c.json({error:'Profile unavailable.'},404)
   await db.prepare(body.active?'INSERT INTO follows VALUES (?,?) ON CONFLICT DO NOTHING':'DELETE FROM follows WHERE follower=? AND target=?').bind(me,target).run()
+  if(body.active){
+    const actor=c.get('user')
+    await createNotification(db,target,me,'follow',me,actor.name+' started following you','follow:'+me)
+  }
   return c.json({ok:true})
 })
 const member=(db:D1Database,room:string,user:string)=>db.prepare('SELECT id FROM rooms WHERE id=? AND (first_user=? OR second_user=?)').bind(room,user,user).first()
@@ -699,6 +774,8 @@ app.post('/api/rooms/:id/messages',async c=>{
   if(!body) return c.json({error:'Enter a message.'},400)
   const message={id:crypto.randomUUID(),author:person(author,c.req.url),body}
   await c.env.DB.prepare('INSERT INTO messages VALUES (?,?,?,?,?)').bind(message.id,room,author.id,body,now()).run()
+  const other=await c.env.DB.prepare('SELECT CASE WHEN first_user=? THEN second_user ELSE first_user END target FROM rooms WHERE id=?').bind(author.id,room).first<{target:string}>()
+  if(other)await createNotification(c.env.DB,other.target,author.id,'message',room,'sent you a message','room:'+room)
   c.executionCtx.waitUntil(c.env.ROOMS.getByName(room).fetch('https://room.internal/notify',{method:'POST',body:JSON.stringify(message)}))
   return c.json(message,201)
 })
