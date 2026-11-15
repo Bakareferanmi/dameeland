@@ -2,7 +2,7 @@ import React,{useEffect,useRef,useState} from 'react'
 import {AccessibilityInfo,Animated,Easing,Image,Platform,View} from 'react-native'
 import {art} from './art'
 
-const logoSize=100
+const logoSize=116
 const pupilSize=13
 // Eye centres in the original 56 × 56 viewBox, whose origin is (4, 8).
 const eyeCentres=[20/56,36/56]
