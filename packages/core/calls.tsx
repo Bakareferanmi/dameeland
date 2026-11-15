@@ -25,7 +25,10 @@ export type CallMedia={
   Surface:React.ComponentType<{stream:CallStream;local?:boolean;video:boolean}>
 }
 export const callIceServers=[{urls:'stun:stun.cloudflare.com:3478'}]
-export const callConstraints=(video:boolean)=>({audio:true,video:video?{width:640,height:360,frameRate:24,facingMode:'user'}:false})
+export const callConstraints=(video:boolean)=>({
+  audio:{echoCancellation:true,noiseSuppression:true,autoGainControl:true,channelCount:1},
+  video:video?{width:1280,height:720,frameRate:30,facingMode:'user'}:false,
+})
 
 function WebSurface({stream,local,video}:{stream:CallStream;local?:boolean;video:boolean}){
   const element=useRef<HTMLMediaElement|null>(null)
@@ -40,7 +43,7 @@ function WebSurface({stream,local,video}:{stream:CallStream;local?:boolean;video
   return <View>
     {React.createElement(video?'video':'audio',{
       ref:(value:HTMLMediaElement|null)=>{element.current=value},autoPlay:true,playsInline:true,muted:local,
-      style:video?{width:'100%',maxHeight:'38vh',aspectRatio:'16 / 9',background:'#120D1F',borderRadius:14}:undefined,
+      style:video?{width:'100%',maxHeight:'58vh',aspectRatio:'16 / 9',background:'#120D1F',borderRadius:16}:undefined,
     })}
     {blocked&&<Button label="Play call media" onPress={()=>void element.current?.play().then(()=>setBlocked(false)).catch(()=>{})}/>}
   </View>

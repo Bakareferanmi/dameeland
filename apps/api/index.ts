@@ -467,7 +467,7 @@ app.post('/api/stories',async c=>{
     const form=await c.req.raw.formData().catch(()=>null)
     text=clean(form?.get('text'),240)
     const requestedBackground=clean(form?.get('background'),20)
-    if(['#4F25D6','#120D1F','#E9E0FF','#C8F53F','#F0447A'].includes(requestedBackground))background=requestedBackground
+    if(['#4F25D6','#120D1F','#E9E0FF','#C8F53F','#F0447A','#FF6B6B','#FF9F43','#00B8A9','#5B8CFF','#B05CFF'].includes(requestedBackground))background=requestedBackground
     const upload:unknown=form?.get('image')??form?.get('video')
     if(upload instanceof File){
       const isVideo=upload.type.startsWith('video/')
@@ -627,6 +627,11 @@ app.get('/api/people',async c=>{
     LIMIT 30
   `).bind(user,user,user,q,q.replace(/^@/,'')||q).all<PublicAccount&{following:number;mutuals:number;post_count:number}>()
   return c.json(results.map(r=>({...person(r,c.req.url),following:Boolean(r.following)})))
+})
+app.get('/api/people/:id',async c=>{
+  const account=await c.env.DB.prepare('SELECT id,name,role,username,verified,teacher,dob,avatar_media,cover_media FROM users WHERE id=?').bind(c.req.param('id')).first<PublicAccount>()
+  if(!account)return c.json({error:'Profile unavailable.'},404)
+  return c.json(person(account,c.req.url))
 })
 app.get('/api/people/:id/follow-stats',async c=>{
   const stats=await c.env.DB.prepare(`

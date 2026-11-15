@@ -344,6 +344,7 @@ export default function App(props:Props){
   const [photoBusy,setPhotoBusy]=useState<'avatar'|'cover'|null>(null)
   const photoLock=useRef(false)
   const [profileStats,setProfileStats]=useState<{id:string; data?:FollowStats; error?:boolean}|null>(null)
+  const profileLinkHandled=useRef(false)
   const [statsRefresh,refreshStats]=useState(0)
   const [notes,setNotes]=useState<Record<string,Note[]>>({})
   const [chats,setChats]=useState<Record<string,Note[]>>(demo?initialChats:{})
@@ -565,6 +566,15 @@ export default function App(props:Props){
     return ()=>clearTimeout(timer)
   },[voicePlaying])
   const showProfile=(person:Person)=>open('Profile',{profile:demo?demoAccounts.find(account=>account.person.id===person.id)?.person??person:person})
+  const profileLink=(person:Person)=>'https://dameeland.pages.dev/?profile='+encodeURIComponent(person.id)
+  useEffect(()=>{
+    if(profileLinkHandled.current||stage!=='app'||(!demo&&!token)||Platform.OS!=='web')return
+    const id=new URLSearchParams(window.location.search).get('profile')
+    if(!id)return
+    profileLinkHandled.current=true
+    if(demo){const match=demoAccounts.find(account=>account.person.id===id)?.person??people.find(person=>person.id===id);if(match)showProfile(match);return}
+    call<Person>('/people/'+encodeURIComponent(id)).then(showProfile).catch(()=>notify('This profile is no longer available.'))
+  },[stage,token,demo])
   const selectOverlay=(value:Overlay)=>{
     if(value.kind==='newStory'){setStoryMode('Text');setStoryImage(undefined);setStoryMedia(null);setStoryBackground('#4F25D6')}
     if(overlay)overlayHistory.current.push(overlay)
@@ -967,9 +977,10 @@ export default function App(props:Props){
           {ownProfile?<>{props.pickMedia&&<>
             <Button label={photoBusy==='avatar'?'Updating picture…':'Change profile picture'} leading="image" variant="secondary" disabled={!!photoBusy} onPress={()=>void uploadProfilePhoto('avatar')}/>
             <Button label={photoBusy==='cover'?'Updating cover…':'Change cover photo'} variant="secondary" disabled={!!photoBusy} onPress={()=>void uploadProfilePhoto('cover')}/>
-          </>}<Button label="Settings" leading="settings" variant="secondary" onPress={()=>open('Settings')}/></>:<>
+          </>}<Button label="Share profile" leading="sh" variant="secondary" onPress={()=>{void props.share?.('Follow '+profile.name+' on dameeland: '+profileLink(profile)).then(()=>notify('Profile link ready to share')).catch(fail)}}/><Button label="Settings" leading="settings" variant="secondary" onPress={()=>open('Settings')}/></>:<>
             <Button label={follows[profile.id]?'Following':'Follow'} disabled={!demo&&!currentStats?.data} onPress={()=>void follow(profile)}/>
             <Button label="Message" leading="msg" variant="secondary" onPress={()=>void messagePerson(profile)}/>
+            <Button label="Share profile" leading="sh" variant="secondary" onPress={()=>{void props.share?.('Follow '+profile.name+' on dameeland: '+profileLink(profile)).then(()=>notify('Profile link ready to share')).catch(fail)}}/>
           </>}
         </View>
       </View>
@@ -1034,7 +1045,7 @@ export default function App(props:Props){
     const valid=storyMode==='Text'?!!comment.trim():storyMode==='Photo'?!!storyImage:storyMedia?.kind==='video'
     sheet=<>
       <Segmented options={['Text','Photo','Video']} selected={storyMode} onSelect={setStoryMode}/>
-      {storyMode==='Text'&&<Motion key={storyBackground} reduced={reduced} distance={4} style={{gap:8}}><Copy size={12} weight={800}>Background colour</Copy><View style={{...row,gap:10}}>{['#4F25D6','#120D1F','#E9E0FF','#C8F53F','#F0447A'].map(color=><Pressable key={color} accessibilityRole="button" accessibilityLabel={'Use '+color+' background'} onPress={()=>setStoryBackground(color)} style={{width:34,height:34,borderRadius:17,backgroundColor:color,borderWidth:storyBackground===color?3:1,borderColor:storyBackground===color?'#fff':theme.border}}/>)}</View></Motion>}
+      {storyMode==='Text'&&<Motion key={storyBackground} reduced={reduced} distance={4} style={{gap:8}}><Copy size={12} weight={800}>Background colour</Copy><View style={{...row,gap:10,flexWrap:'wrap'}}>{['#4F25D6','#120D1F','#E9E0FF','#C8F53F','#F0447A','#FF6B6B','#FF9F43','#00B8A9','#5B8CFF','#B05CFF'].map(color=><Pressable key={color} accessibilityRole="button" accessibilityLabel={'Use '+color+' background'} onPress={()=>setStoryBackground(color)} style={{width:38,height:38,borderRadius:19,backgroundColor:color,borderWidth:storyBackground===color?3:1,borderColor:storyBackground===color?'#fff':theme.border}}/>)}</View></Motion>}
       {storyMode==='Photo'&&<>{storyImage&&<Image source={{uri:storyImage}} style={{width:'100%',height:140,borderRadius:12}}/>}{props.pickMedia&&<Button label={storyImage?'Replace photo':'Choose photo'} leading="image" variant="secondary" onPress={()=>{void props.pickMedia?.().then(value=>{if(value&&value.kind!=='video'){setStoryImage(value.uri);setStoryMedia(value)}}).catch(fail)}}/>}</>}
       {storyMode==='Video'&&<>{storyMedia?.kind==='video'&&<Card><IconTile name="vid"/><Copy weight={800}>Video ready · 10 seconds maximum</Copy></Card>}{props.pickMedia&&<Button label={storyMedia?.kind==='video'?'Replace video':'Choose video'} leading="vid" variant="secondary" onPress={()=>{void props.pickMedia?.().then(value=>{if(value&&value.kind==='video'){setStoryImage(undefined);setStoryMedia(value)}}).catch(fail)}}/>}</>}
       <Field label={storyMode==='Text'?'What’s your story?':'Caption'} value={comment} onChangeText={setComment} multiline maxLength={240}/>

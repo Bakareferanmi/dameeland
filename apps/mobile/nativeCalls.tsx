@@ -12,7 +12,7 @@ export const nativeCalls:CallMedia={
       if(permissions.some(permission=>result[permission]!==PermissionsAndroid.RESULTS.GRANTED))
         throw new Error(video?'Allow microphone and camera access to start a video call.':'Allow microphone access to start a voice call.')
     }
-    return mediaDevices.getUserMedia(callConstraints(video))
+    return mediaDevices.getUserMedia(callConstraints(video) as unknown as Parameters<typeof mediaDevices.getUserMedia>[0])
   },
   createPeer(){
     const peer=new RTCPeerConnection({iceServers:callIceServers})
