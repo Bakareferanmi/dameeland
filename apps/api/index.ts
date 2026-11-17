@@ -631,7 +631,7 @@ app.post('/api/posts',async c=>{
   const id=crypto.randomUUID()
   let body=''
   let media:string|null=null
-  let mediaKind:'image'|'video'='image'
+  let mediaKind:'image'|'video'|null=null
   if(c.req.header('Content-Type')?.startsWith('multipart/form-data')){
     if(Number(c.req.header('Content-Length'))>30000000) return c.json({error:'Choose a video under 25 MB or an image under 5 MB.'},413)
     const form=await c.req.raw.formData().catch(()=>null)
@@ -647,7 +647,7 @@ app.post('/api/posts',async c=>{
     }
   }else body=clean((await readBody(c.req.raw))?.body,1200)
   if(!body&&!media) return c.json({error:'Write a post or add an image.'},400)
-  try{await db.prepare('INSERT INTO posts VALUES (?,?,?,?,?,?)').bind(id,c.get('user').id,body,now(),media,mediaKind).run()}
+  try{await db.prepare('INSERT INTO posts (id,author,body,created,media,media_kind) VALUES (?,?,?,?,?,?)').bind(id,c.get('user').id,body,now(),media,mediaKind).run()}
   catch(error){if(media) await c.env.MEDIA.delete(media);throw error}
   return c.json({id},201)
 })

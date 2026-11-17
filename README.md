@@ -47,9 +47,10 @@ The mobile app uses the same live Worker as dameen.app by default. Set `EXPO_PUB
 
 ## Production deployment
 
-Deploy the API and web app from the repository root while signed into the existing Cloudflare account.
+Apply pending D1 migrations and deploy the apps from the repository root while signed into the existing Cloudflare account. Migration 0016 adds the media type used by post creation and the feed.
 
 ```bash
+npx wrangler d1 migrations apply dameeland --remote --config apps/api/wrangler.jsonc
 npx wrangler deploy --config apps/api/wrangler.jsonc
 npm run deploy:web
 ```
@@ -60,7 +61,14 @@ Rebuild and install the native app to see the new display name. The Android pack
 
 ## Account recovery
 
-Apply D1 migration `0009_password_resets.sql`. Set `RESEND_API_KEY` as a Worker secret and `RECOVERY_FROM` to an email address on your verified Resend domain. For local development, set both in `apps/api/.dev.vars`. Users can log in with an email address or username. From the login screen, they can request a username reminder or a single-use password reset code by email. Reset codes expire after 15 minutes. A successful password reset ends previous sessions.
+Apply the D1 migrations, including `0009_password_resets.sql`. Verify a sender domain in Resend and create a key with Sending access for that domain. From the repository root, run these commands and enter the values at the Wrangler prompts.
+
+```bash
+npx wrangler secret put RESEND_API_KEY --config apps/api/wrangler.jsonc
+npx wrangler secret put RECOVERY_FROM --config apps/api/wrangler.jsonc
+```
+
+Set `RECOVERY_FROM` to a sender on the verified domain, such as `dameen <accounts@dameen.app>` if `dameen.app` is verified in Resend. For local development, set both values in `apps/api/.dev.vars`. From the login screen, users can request a username reminder or a single-use password reset code by email. Reset codes expire after 15 minutes. A successful password reset ends previous sessions.
 
 ## Admin access
 
