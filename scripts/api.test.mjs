@@ -216,7 +216,7 @@ test('local Worker persists accounts, social activity, media, and private realti
   const followPath='/people/'+ada.user.id+'/follow'
   const adaStats=followPath+'-stats'
   const tobiStats='/people/'+tobi.user.id+'/follow-stats'
-  assert.deepEqual(await request(adaStats,{token:tobi.token}),{followers:0,following:0,followedByViewer:false})
+  assert.deepEqual(await request(adaStats,{token:tobi.token}),{followers:0,following:0,followedByViewer:false,followsViewer:false})
   await request(adaStats,{status:401})
   await request('/stories',{status:401})
   await request('/stories',{token:ada.token,method:'POST',body:{text:'   '},status:400})
@@ -233,8 +233,17 @@ test('local Worker persists accounts, social activity, media, and private realti
   assert.equal(ownStories[0].stories.length,2)
   await request('/people/missing/follow-stats',{token:tobi.token,status:404})
   await request(followPath,{token:tobi.token,method:'PUT',body:{active:true}})
+  assert.equal((await request('/people?q='+ada.username,{token:tobi.token})).find(person=>person.id===ada.user.id).followsViewer,false)
+  await request('/people/'+tobi.user.id+'/follow',{token:ada.token,method:'PUT',body:{active:true}})
+  assert.equal((await request(tobiStats,{token:ada.token})).followsViewer,true)
+  assert.equal((await request('/people?q='+tobi.username,{token:ada.token})).find(person=>person.id===tobi.user.id).followsViewer,true)
+  await request('/people/'+tobi.user.id+'/follow',{token:ada.token,method:'PUT',body:{active:false}})
   const seen=await request('/stories',{token:tobi.token})
   assert.deepEqual(seen.find(group=>group.author.id===ada.user.id)?.stories.map(item=>item.id),[story.id,photoStory.id])
+  const storyPath='/stories/'+ada.user.id+'/'+story.id+'/like'
+  assert.deepEqual(await request(storyPath,{token:tobi.token,method:'PUT',body:{active:true}}),{likes:1,liked:true})
+  assert.equal((await request('/stories',{token:tobi.token})).find(group=>group.author.id===ada.user.id).stories[0].liked,true)
+  assert.deepEqual(await request(storyPath,{token:tobi.token,method:'PUT',body:{active:false}}),{likes:0,liked:false})
   await request('/stories/'+story.id,{token:tobi.token,method:'DELETE',status:404})
   await request('/stories/'+photoStory.id,{token:ada.token,method:'DELETE'})
   assert.equal((await fetch(photoStory.image)).status,404)
@@ -253,10 +262,10 @@ test('local Worker persists accounts, social activity, media, and private realti
   assert.deepEqual(Buffer.from(await image.arrayBuffer()),file)
   assert.ok((await request('/people?q=Ada%20QA',{token:tobi.token})).some(p=>p.id===ada.user.id&&p.following))
   await request(followPath,{token:tobi.token,method:'PUT',body:{active:true}})
-  assert.deepEqual(await request(adaStats,{token:tobi.token}),{followers:1,following:0,followedByViewer:true})
-  assert.deepEqual(await request(tobiStats,{token:tobi.token}),{followers:0,following:1,followedByViewer:false})
+  assert.deepEqual(await request(adaStats,{token:tobi.token}),{followers:1,following:0,followedByViewer:true,followsViewer:false})
+  assert.deepEqual(await request(tobiStats,{token:tobi.token}),{followers:0,following:1,followedByViewer:false,followsViewer:false})
   await request(followPath,{token:tobi.token,method:'PUT',body:{active:false}})
-  assert.deepEqual(await request(adaStats,{token:tobi.token}),{followers:0,following:0,followedByViewer:false})
+  assert.deepEqual(await request(adaStats,{token:tobi.token}),{followers:0,following:0,followedByViewer:false,followsViewer:false})
   assert.equal((await request(tobiStats,{token:tobi.token})).following,0)
   const postPath='/posts/'+post.id
   for(let attempt=0;attempt<2;attempt++) await request(postPath+'/like',{token:tobi.token,method:'PUT',body:{active:true}})
@@ -265,6 +274,17 @@ test('local Worker persists accounts, social activity, media, and private realti
   const updated=(await request('/feed',{token:tobi.token})).find(p=>p.id===post.id)
   assert.deepEqual([updated.likes,updated.comments,updated.reposts,updated.liked],[1,1,1,true])
   assert.equal((await request(postPath+'/comments',{token:ada.token}))[0].id,comment.id)
+  const reply=await request(postPath+'/comments',{token:ada.token,method:'POST',body:{body:'Glad it helped',parentId:comment.id},status:201})
+  assert.equal(reply.parentId,comment.id)
+  assert.equal(reply.replyTo,tobi.username)
+  const replyNotice=(await request('/notifications',{token:tobi.token})).items.find(item=>item.entityId==='comment:'+post.id+':'+comment.id)
+  assert.equal(replyNotice.kind,'comment')
+  await request('/notifications/'+replyNotice.id+'/read',{token:tobi.token,method:'PUT'})
+  assert.equal((await request('/notifications',{token:tobi.token})).items.find(item=>item.id===replyNotice.id).read,true)
+  assert.deepEqual(await request('/comments/'+reply.id+'/like',{token:tobi.token,method:'PUT',body:{active:true}}),{likes:1,liked:true})
+  assert.equal((await request(postPath+'/comments',{token:tobi.token})).find(item=>item.id===reply.id).liked,true)
+  assert.deepEqual(await request('/comments/'+reply.id+'/like',{token:tobi.token,method:'PUT',body:{active:false}}),{likes:0,liked:false})
+  await request(postPath+'/comments',{token:ada.token,method:'POST',body:{body:'Invalid parent',parentId:'missing'},status:404})
 
   const commentsPath=postPath+'/comments'
   const gif=await request(commentsPath,{token:tobi.token,method:'POST',body:{gif:'cheer'},status:201})
@@ -284,7 +304,7 @@ test('local Worker persists accounts, social activity, media, and private realti
   const commentImage=await fetch(photo.attachment.url)
   assert.equal(commentImage.headers.get('content-type'),'image/png')
   assert.deepEqual(Buffer.from(await commentImage.arrayBuffer()),file)
-  assert.equal((await request('/feed',{token:tobi.token})).find(item=>item.id===post.id).comments,4)
+  assert.equal((await request('/feed',{token:tobi.token})).find(item=>item.id===post.id).comments,5)
 
   if(process.env.TEST_ADMIN_TOKEN){
     const token=process.env.TEST_ADMIN_TOKEN

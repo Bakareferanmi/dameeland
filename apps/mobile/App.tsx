@@ -63,8 +63,18 @@ function NativeModalViewport({color,children}:{color:string;children:React.React
 }
 export default function App(){
   const [callMedia,setCallMedia]=useState<CallMedia>()
+  const [notificationTarget,setNotificationTarget]=useState('')
   useEffect(()=>{
-    if(Platform.OS!=='android'||!NativeModules.WebRTCModule)return
+    const open=(response:Notifications.NotificationResponse)=>{
+      const id=response.notification.request.content.data?.notificationId
+      if(typeof id==='string')setNotificationTarget(id)
+    }
+    const subscription=Notifications.addNotificationResponseReceivedListener(open)
+    void Notifications.getLastNotificationResponseAsync().then(response=>{if(response)open(response)}).catch(()=>{})
+    return ()=>subscription.remove()
+  },[])
+  useEffect(()=>{
+    if(Platform.OS==='web'||!NativeModules.WebRTCModule)return
     let active=true
     void import('./nativeCalls').then(module=>{if(active)setCallMedia(module.nativeCalls)}).catch(()=>{})
     return ()=>{active=false}
@@ -74,5 +84,5 @@ export default function App(){
   const [loaded,error]=useFonts(offline?{}:{PlusJakartaSans_500Medium,PlusJakartaSans_700Bold,PlusJakartaSans_800ExtraBold})
   const base=process.env.EXPO_PUBLIC_API_URL?.trim()||'https://dameeland-api.bakareferanmi96.workers.dev'
   const demo=offline||process.env.EXPO_PUBLIC_DEMO==='1'
-  return <SafeAreaProvider><SafeAreaView style={{flex:1,backgroundColor:theme==='dark'?'#120D1F':'#FAF8FF'}}>{loaded||error?<Dameeland phone={offline} demo={demo} base={base} callMedia={callMedia} renderIcon={HugeiconsIcon} initialTheme={theme} font={error?()=>({}):font} loadToken={loadToken} saveToken={saveToken} openGoogle={openGoogle} modalViewport={Platform.OS==='web'?undefined:NativeModalViewport} pickMedia={pickMedia} renderGif={CommentGif} share={share} requestNotifications={requestNotifications} getNotificationDevice={getNotificationDevice} notifyDevice={notifyDevice}/>:<LoadingScreen/>}</SafeAreaView></SafeAreaProvider>
+  return <SafeAreaProvider><SafeAreaView style={{flex:1,backgroundColor:theme==='dark'?'#120D1F':'#FAF8FF'}}>{loaded||error?<Dameeland phone={offline} demo={demo} base={base} callMedia={callMedia} notificationTarget={notificationTarget} renderIcon={HugeiconsIcon} initialTheme={theme} font={error?()=>({}):font} loadToken={loadToken} saveToken={saveToken} openGoogle={openGoogle} modalViewport={Platform.OS==='web'?undefined:NativeModalViewport} pickMedia={pickMedia} renderGif={CommentGif} share={share} requestNotifications={requestNotifications} getNotificationDevice={getNotificationDevice} notifyDevice={notifyDevice}/>:<LoadingScreen/>}</SafeAreaView></SafeAreaProvider>
 }

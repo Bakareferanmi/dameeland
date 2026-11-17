@@ -42,12 +42,12 @@ export type AdminOverview = {
 export const storyLifetime = 12*60*60*1000
 export const storyLimit = 10
 export const teacherGold = '#E5A100'
-export type Story = {id:string;text:string;image?:string;video?:string;kind?:'image'|'video';background?:string;created:string;expires:string}
+export type Story = {id:string;text:string;image?:string;video?:string;kind?:'image'|'video';background?:string;created:string;expires:string;likes?:number;liked?:boolean}
 export type StoryGroup = {author:Person;stories:Story[]}
 export type AdminAccounts = {accounts:AdminAccount[];nextCursor:string|null}
 export type FollowListKind = 'followers'|'following'
 export type FollowPage = {people:Person[]; nextCursor:string|null}
-export type FollowStats = {followers:number; following:number; followedByViewer:boolean}
+export type FollowStats = {followers:number; following:number; followedByViewer:boolean;followsViewer:boolean}
 export type Post = {id:string; author:Person; body:string; likes:number; liked:boolean; comments:number; reposts:number; reposted:boolean; time:string; kind?:'image'|'video'; media?:string}
 export const commentGifs = {cheer:'Cheer',sparkle:'Sparkle',highfive:'High five'} as const
 export const commentStickers = {
@@ -60,7 +60,7 @@ export type CommentAttachment =
   | {kind:'image';url:string}
   | {kind:'gif';id:keyof typeof commentGifs}
   | {kind:'sticker';id:keyof typeof commentStickers}
-export type Note = {id:string; author:Person; body:string; attachment?:CommentAttachment}
+export type Note = {id:string; author:Person; body:string; attachment?:CommentAttachment;parentId?:string;replyTo?:string;likes?:number;liked?:boolean}
 export const me:Person = {id:'you',name:'You',initials:'YO',role:'student',color:lime,detail:'Student'}
 export const people:Person[] = [
   {id:'ada',username:'ada',name:'Ada O.',initials:'AO',role:'student',color:'#FFD9B8',detail:'SS2 · Student',verified:true},

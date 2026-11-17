@@ -39,18 +39,18 @@ const quietNow=(start:string|null,end:string|null)=>{
   return start<=end?current>=start&&current<end:current>=start||current<end
 }
 type PushDevice={id:string;platform:string;endpoint:string|null;token:string|null}
-async function sendPush(env:Env,db:D1Database,devices:PushDevice[],title:string,body:string,entityId?:string){
+async function sendPush(env:Env,db:D1Database,devices:PushDevice[],title:string,body:string,entityId?:string,notificationId?:string){
   const dead:string[]=[]
   if(env.VAPID_PUBLIC_KEY&&env.VAPID_PRIVATE_KEY&&env.VAPID_SUBJECT){
     webpush.setVapidDetails(env.VAPID_SUBJECT,env.VAPID_PUBLIC_KEY,env.VAPID_PRIVATE_KEY)
     await Promise.all(devices.filter(device=>device.endpoint&&device.platform!=='android'&&device.platform!=='ios').map(async device=>{
-      try{await webpush.sendNotification({endpoint:device.endpoint!,keys:JSON.parse(device.token??'{}')},JSON.stringify({title,body,entityId}))}
+      try{await webpush.sendNotification({endpoint:device.endpoint!,keys:JSON.parse(device.token??'{}')},JSON.stringify({title,body,entityId,notificationId}))}
       catch(error){const status=error instanceof webpush.WebPushError?error.statusCode:0;if(status===404||status===410)dead.push(device.id)}
     }))
   }
   const expo=devices.filter(device=>device.token?.startsWith('ExponentPushToken['))
   if(expo.length){
-    const response=await fetch('https://exp.host/--/api/v2/push/send',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(expo.map(device=>({to:device.token,title,body,data:entityId?{entityId}:undefined,sound:'default'})))})
+    const response=await fetch('https://exp.host/--/api/v2/push/send',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(expo.map(device=>({to:device.token,title,body,data:{entityId,notificationId},sound:'default'})))})
     if(response.ok){const result=await response.json<{data?:Array<{status:string;details?:{error?:string}}>}>();result.data?.forEach((item,index)=>{if(item.status==='error'&&item.details?.error==='DeviceNotRegistered')dead.push(expo[index].id)})}
   }
   if(dead.length)await db.prepare('DELETE FROM notification_devices WHERE id IN ('+dead.map(()=>'?').join(',')+')').bind(...dead).run()
@@ -59,10 +59,14 @@ async function createNotification(env:Env,ctx:WaitContext,db:D1Database,userId:s
   if(!userId||userId===actorId)return
   const pref=await db.prepare('SELECT messages,follows,comments,reactions,calls,birthdays,announcements,quiet_start,quiet_end FROM notification_preferences WHERE user_id=?').bind(userId).first<NotificationPreferenceRow>()
   if(pref&&!pref[preferenceColumn(kind)])return
-  if(pref&&kind!=='call'&&quietNow(pref.quiet_start,pref.quiet_end))return
-  await db.prepare('INSERT INTO notifications (id,user_id,actor_id,kind,entity_id,body,group_key,created) VALUES (?,?,?,?,?,?,?,?)').bind(crypto.randomUUID(),userId,actorId??null,kind,entityId??null,body,groupKey??null,now()).run()
+  const muted=!!pref&&kind!=='call'&&quietNow(pref.quiet_start,pref.quiet_end)
+  const notificationId=crypto.randomUUID()
+  await db.prepare('INSERT INTO notifications (id,user_id,actor_id,kind,entity_id,body,group_key,created) VALUES (?,?,?,?,?,?,?,?)').bind(notificationId,userId,actorId??null,kind,entityId??null,body,groupKey??null,now()).run()
   const devices=(await db.prepare('SELECT id,platform,endpoint,token FROM notification_devices WHERE user_id=?').bind(userId).all<PushDevice>()).results
-  if(devices.length)ctx.waitUntil(sendPush(env,db,devices,'dameen',body,entityId))
+  if(devices.length&&!muted){
+    const actor=actorId?await db.prepare('SELECT username FROM users WHERE id=?').bind(actorId).first<{username:string}>():null
+    ctx.waitUntil(sendPush(env,db,devices,'dameen',actor?.username?actor.username+' '+body:body,entityId,notificationId))
+  }
 }
 function sendAccountEmail(key:string,from:string,to:string,message:{subject:string;text:string;html?:string;idempotencyKey?:string}){
   const {idempotencyKey,...content}=message
@@ -680,10 +684,24 @@ app.get('/api/stories',async c=>{
   `).bind(me.id).all<PublicAccount>()
   const at=now()
   const groups=await Promise.all(results.map(async author=>({author,stories:(await readStories(c.env,author.id)).filter(story=>storyExpiry(story)>at)})))
+  const authors=groups.filter(group=>group.stories.length).map(group=>group.author.id)
+  const likes=authors.length?(await c.env.DB.prepare(`SELECT story_id,COUNT(*) likes,MAX(user_id=?) liked FROM story_likes WHERE author_id IN (${authors.map(()=>'?').join(',')}) GROUP BY story_id`).bind(me.id,...authors).all<{story_id:string;likes:number;liked:number}>()).results:[]
+  const byStory=new Map(likes.map(item=>[item.story_id,item]))
   c.header('Cache-Control','no-store')
   return c.json<StoryGroup[]>(groups.filter(group=>group.stories.length)
     .sort((a,b)=>Number(b.author.id===me.id)-Number(a.author.id===me.id)||b.stories[b.stories.length-1].created-a.stories[a.stories.length-1].created)
-    .map(group=>({author:person(group.author,c.req.url),stories:group.stories.map(story=>storyView(group.author.id,story,c.req.url))})))
+    .map(group=>({author:person(group.author,c.req.url),stories:group.stories.map(story=>({...storyView(group.author.id,story,c.req.url),likes:byStory.get(story.id)?.likes??0,liked:Boolean(byStory.get(story.id)?.liked)}))})))
+})
+app.put('/api/stories/:author/:id/like',async c=>{
+  const {author,id}=c.req.param(),me=c.get('user').id
+  const active=(await readBody(c.req.raw))?.active
+  if(typeof active!=='boolean')return c.json({error:'Invalid story reaction.'},400)
+  if(!(await readStories(c.env,author)).some(story=>story.id===id&&storyExpiry(story)>now()))return c.json({error:'Story unavailable.'},404)
+  const db=c.env.DB
+  const result=await db.prepare(active?'INSERT INTO story_likes(story_id,author_id,user_id) VALUES (?,?,?) ON CONFLICT DO NOTHING':'DELETE FROM story_likes WHERE story_id=? AND author_id=? AND user_id=?').bind(id,author,me).run()
+  if(active&&result.meta.changes)await createNotification(c.env,c.executionCtx,db,author,me,'reaction','story:'+author+':'+id,'liked your story')
+  const count=await db.prepare('SELECT COUNT(*) likes FROM story_likes WHERE story_id=?').bind(id).first<{likes:number}>()
+  return c.json({likes:count?.likes??0,liked:active})
 })
 app.post('/api/stories',async c=>{
   const user=c.get('user')
@@ -722,6 +740,7 @@ app.delete('/api/stories/:id',async c=>{
   const target=all.find(story=>story.id===id)
   if(!target)return c.json({error:'Story unavailable.'},404)
   await writeStories(c.env,user.id,all.filter(story=>story.id!==id&&storyExpiry(story)>now()))
+  await c.env.DB.prepare('DELETE FROM story_likes WHERE story_id=? AND author_id=?').bind(id,user.id).run()
   if(target.media)c.executionCtx.waitUntil(c.env.MEDIA.delete(storyMediaKey(user.id,id)).catch(()=>{}))
   return c.json({ok:true})
 })
@@ -807,7 +826,8 @@ app.put('/api/posts/:id/:kind',async c=>{
 })
 type NoteRow=PublicAccount&{note_id:string;body:string}
 const note=(r:NoteRow,url:string)=>({id:r.note_id,author:person(r,url),body:r.body})
-type CommentRow=NoteRow&{media:string|null;gif:keyof typeof commentGifs|null;sticker:keyof typeof commentStickers|null}
+type CommentRow=NoteRow&{media:string|null;gif:keyof typeof commentGifs|null;sticker:keyof typeof commentStickers|null;parent_id:string|null;reply_to:string|null;likes:number;liked:number}
+const commentView=(r:CommentRow,url:string)=>({...note(r,url),attachment:commentAttachment(r,url),parentId:r.parent_id??undefined,replyTo:r.reply_to??undefined,likes:r.likes,liked:Boolean(r.liked)})
 function commentAttachment(row:Pick<CommentRow,'media'|'gif'|'sticker'>,url:string):CommentAttachment|undefined{
   if(row.media)return {kind:'image',url:mediaUrl(row.media,url)}
   if(row.gif)return {kind:'gif',id:row.gif}
@@ -815,10 +835,27 @@ function commentAttachment(row:Pick<CommentRow,'media'|'gif'|'sticker'>,url:stri
 }
 app.get('/api/posts/:id/comments',async c=>{
   const {results}=await c.env.DB.prepare(`
-    SELECT u.id,u.name,u.role,u.username,u.verified,u.teacher,u.dob,u.avatar_media,u.cover_media,u.bio,x.id note_id,x.body,x.media,x.gif,x.sticker
-    FROM comments x JOIN users u ON u.id=x.author WHERE post_id=? ORDER BY x.created LIMIT 100
-  `).bind(c.req.param('id')).all<CommentRow>()
-  return c.json(results.map(r=>({...note(r,c.req.url),attachment:commentAttachment(r,c.req.url)})))
+    SELECT u.id,u.name,u.role,u.username,u.verified,u.teacher,u.dob,u.avatar_media,u.cover_media,u.bio,x.id note_id,x.body,x.media,x.gif,x.sticker,x.parent_id,
+      parent_user.username reply_to,
+      (SELECT COUNT(*) FROM comment_likes l WHERE l.comment_id=x.id) likes,
+      EXISTS(SELECT 1 FROM comment_likes l WHERE l.comment_id=x.id AND l.user_id=?) liked
+    FROM comments x JOIN users u ON u.id=x.author
+    LEFT JOIN comments parent ON parent.id=x.parent_id LEFT JOIN users parent_user ON parent_user.id=parent.author
+    WHERE x.post_id=? ORDER BY COALESCE(parent.created,x.created),x.created LIMIT 100
+  `).bind(c.get('user').id,c.req.param('id')).all<CommentRow>()
+  return c.json(results.map(r=>commentView(r,c.req.url)))
+})
+app.put('/api/comments/:id/like',async c=>{
+  const id=c.req.param('id'),me=c.get('user').id
+  const active=(await readBody(c.req.raw))?.active
+  if(typeof active!=='boolean')return c.json({error:'Invalid comment reaction.'},400)
+  const db=c.env.DB
+  const comment=await db.prepare('SELECT author,post_id FROM comments WHERE id=?').bind(id).first<{author:string;post_id:string}>()
+  if(!comment)return c.json({error:'Comment unavailable.'},404)
+  const result=await db.prepare(active?'INSERT INTO comment_likes(comment_id,user_id) VALUES (?,?) ON CONFLICT DO NOTHING':'DELETE FROM comment_likes WHERE comment_id=? AND user_id=?').bind(id,me).run()
+  if(active&&result.meta.changes)await createNotification(c.env,c.executionCtx,db,comment.author,me,'reaction','comment:'+comment.post_id+':'+id,'liked your comment')
+  const count=await db.prepare('SELECT COUNT(*) likes FROM comment_likes WHERE comment_id=?').bind(id).first<{likes:number}>()
+  return c.json({likes:count?.likes??0,liked:active})
 })
 app.post('/api/posts/:id/comments',async c=>{
   const {DB,MEDIA}=c.env
@@ -829,6 +866,7 @@ app.post('/api/posts/:id/comments',async c=>{
   const form=multipart?await c.req.raw.formData().catch(()=>null):null
   const payload=multipart?null:await readBody(c.req.raw)
   const body=clean(form?.get('body')??payload?.body,500)
+  const parentId=clean(form?.get('parentId')??payload?.parentId,80)
   const file:unknown=form?.get('image')
   const gif=payload?.gif
   const sticker=payload?.sticker
@@ -838,22 +876,25 @@ app.post('/api/posts/:id/comments',async c=>{
   const contentType=file instanceof File?await imageType(file):null
   if(multipart&&(!contentType||!(file instanceof File)))return c.json({error:'Choose a PNG, JPEG or WebP image under 5 MB.'},400)
   if(!body&&!contentType&&gif===undefined&&sticker===undefined)return c.json({error:'Write a comment or add an attachment.'},400)
+  const parent=parentId?await DB.prepare('SELECT x.author,u.username FROM comments x JOIN users u ON u.id=x.author WHERE x.id=? AND x.post_id=?').bind(parentId,post).first<{author:string;username:string|null}>():null
+  if(parentId&&!parent)return c.json({error:'Reply target unavailable.'},404)
   const media=contentType?id:null
   if(media&&file instanceof File&&contentType)await MEDIA.put(media,await file.arrayBuffer(),{httpMetadata:{contentType}})
   const attachment={media,gif:(gif??null) as CommentRow['gif'],sticker:(sticker??null) as CommentRow['sticker']}
   try{
     const result=await DB.prepare(`
-      INSERT INTO comments (id,post_id,author,body,created,media,gif,sticker)
-      SELECT ?,id,?,?,?,?,?,? FROM posts WHERE id=?
-    `).bind(id,author.id,body,now(),media,attachment.gif,attachment.sticker,post).run()
+      INSERT INTO comments (id,post_id,author,body,created,media,gif,sticker,parent_id)
+      SELECT ?,id,?,?,?,?,?,?,? FROM posts WHERE id=?
+    `).bind(id,author.id,body,now(),media,attachment.gif,attachment.sticker,parentId||null,post).run()
     if(!result.meta.changes){
       if(media)await MEDIA.delete(media)
       return c.json({error:'Post unavailable.'},404)
     }
   }catch(error){if(media)await MEDIA.delete(media);throw error}
   const postOwner=await DB.prepare('SELECT author FROM posts WHERE id=?').bind(post).first<{author:string}>()
-  if(postOwner)await createNotification(c.env,c.executionCtx,DB,postOwner.author,author.id,'comment',post,'commented on your post','post:'+post+':comment')
-  return c.json({id,author:person(author,c.req.url),body,attachment:commentAttachment(attachment,c.req.url)},201)
+  if(parent)await createNotification(c.env,c.executionCtx,DB,parent.author,author.id,'comment','comment:'+post+':'+parentId,'replied to your comment')
+  if(postOwner?.author!==parent?.author&&postOwner)await createNotification(c.env,c.executionCtx,DB,postOwner.author,author.id,'comment','comment:'+post+':'+id,'commented on your post')
+  return c.json({id,author:person(author,c.req.url),body,attachment:commentAttachment(attachment,c.req.url),parentId:parentId||undefined,replyTo:parent?.username??undefined,likes:0,liked:false},201)
 })
 app.get('/api/people',async c=>{
   const user=c.get('user').id
@@ -861,14 +902,15 @@ app.get('/api/people',async c=>{
   const {results}=await c.env.DB.prepare(`
     SELECT id,name,role,username,verified,teacher,dob,avatar_media,cover_media,bio,
       EXISTS(SELECT 1 FROM follows WHERE follower=? AND target=u.id) following,
+      EXISTS(SELECT 1 FROM follows WHERE follower=u.id AND target=?) follows_viewer,
       (SELECT COUNT(*) FROM follows f1 JOIN follows f2 ON f1.target=f2.target WHERE f1.follower=? AND f2.follower=u.id) mutuals,
       (SELECT COUNT(*) FROM posts p WHERE p.author=u.id) post_count
     FROM users u
     WHERE id!=? AND (instr(lower(name),?)>0 OR instr(username,?)>0)
     ORDER BY following ASC, mutuals DESC, post_count DESC, name ASC
     LIMIT 30
-  `).bind(user,user,user,q,q.replace(/^@/,'')||q).all<PublicAccount&{following:number;mutuals:number;post_count:number}>()
-  return c.json(results.map(r=>({...person(r,c.req.url),following:Boolean(r.following)})))
+  `).bind(user,user,user,user,q,q.replace(/^@/,'')||q).all<PublicAccount&{following:number;follows_viewer:number;mutuals:number;post_count:number}>()
+  return c.json(results.map(r=>({...person(r,c.req.url),following:Boolean(r.following),followsViewer:Boolean(r.follows_viewer)})))
 })
 app.get('/api/people/:id',async c=>{
   const account=await c.env.DB.prepare('SELECT id,name,role,username,verified,teacher,dob,avatar_media,cover_media,bio FROM users WHERE id=?').bind(c.req.param('id')).first<PublicAccount>()
@@ -880,11 +922,12 @@ app.get('/api/people/:id/follow-stats',async c=>{
     SELECT
       (SELECT COUNT(*) FROM follows WHERE target=u.id) followers,
       (SELECT COUNT(*) FROM follows WHERE follower=u.id) following,
-      EXISTS(SELECT 1 FROM follows WHERE follower=? AND target=u.id) followedByViewer
+      EXISTS(SELECT 1 FROM follows WHERE follower=? AND target=u.id) followedByViewer,
+      EXISTS(SELECT 1 FROM follows WHERE follower=u.id AND target=?) followsViewer
     FROM users u WHERE u.id=?
-  `).bind(c.get('user').id,c.req.param('id')).first<Omit<FollowStats,'followedByViewer'> & {followedByViewer:number}>()
+  `).bind(c.get('user').id,c.get('user').id,c.req.param('id')).first<Omit<FollowStats,'followedByViewer'|'followsViewer'> & {followedByViewer:number;followsViewer:number}>()
   if(!stats)return c.json({error:'Profile unavailable.'},404)
-  return c.json({...stats,followedByViewer:Boolean(stats.followedByViewer)})
+  return c.json({...stats,followedByViewer:Boolean(stats.followedByViewer),followsViewer:Boolean(stats.followsViewer)})
 })
 app.get('/api/people/:id/presence',async c=>{
   const row=await c.env.DB.prepare('SELECT online,last_seen FROM presence WHERE user_id=?').bind(c.req.param('id')).first<{online:number;last_seen:number}>()

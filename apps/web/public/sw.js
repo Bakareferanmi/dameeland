@@ -24,8 +24,17 @@ self.addEventListener('fetch',event=>{
   }))
 })
 self.addEventListener('push',event=>{
-  let payload={title:'dameen',body:'You have new activity.',entityId:null}
+  let payload={title:'dameen',body:'You have new activity.',entityId:null,notificationId:null}
   try{if(event.data)payload={...payload,...event.data.json()}}catch{}
-  event.waitUntil(self.registration.showNotification(payload.title,{body:payload.body,icon:'/icon-192.png',badge:'/icon-192.png',tag:payload.entityId?'dameeland-'+payload.entityId:'dameeland-activity',data:{entityId:payload.entityId}}))
+  event.waitUntil(self.registration.showNotification(payload.title,{body:payload.body,icon:'/icon-192.png',badge:'/icon-192.png',tag:payload.notificationId?'dameeland-'+payload.notificationId:'dameeland-activity',data:{notificationId:payload.notificationId}}))
 })
-self.addEventListener('notificationclick',event=>{event.notification.close();event.waitUntil(self.clients.matchAll({type:'window',includeUncontrolled:true}).then(clients=>{const existing=clients.find(client=>'focus' in client);return existing?existing.focus():self.clients.openWindow('/')}))})
+self.addEventListener('notificationclick',event=>{
+  event.notification.close()
+  const id=event.notification.data?.notificationId
+  const destination=id?'/?notification='+encodeURIComponent(id):'/'
+  event.waitUntil(self.clients.matchAll({type:'window',includeUncontrolled:true}).then(clients=>{
+    const existing=clients.find(client=>'focus' in client)
+    if(existing){if(id)existing.postMessage({type:'dameen-notification',id});return existing.focus()}
+    return self.clients.openWindow(destination)
+  }))
+})

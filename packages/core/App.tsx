@@ -4,7 +4,7 @@ import {browserCallMedia,RoomCall,useRoomCall,type CallMedia} from './calls'
 import {readCallSignal,type CallSignal} from './callSignal'
 import React,{lazy,Suspense,useCallback,useEffect,useLayoutEffect,useRef,useState} from 'react'
 import {AccessibilityInfo,Animated,AppState,BackHandler,Easing,Image,KeyboardAvoidingView,Modal,PanResponder,Platform,Pressable,RefreshControl,ScrollView,View,useWindowDimensions,type ViewStyle} from 'react-native'
-import {api,birthdayToday,validBirthDate,storyLifetime,capitalizeName,normalizeUsername,usernameHint,validUsername,initialChats,initialComments,initialPosts,initials,lime,me,people,questions,slides,themes,type FollowListKind,type FollowPage,type FollowStats,type Note,type Person,type Post,type BirthdayEntry,type Role,type StoryGroup,type Theme} from './index'
+import {api,birthdayToday,validBirthDate,storyLifetime,capitalizeName,normalizeUsername,usernameHint,validUsername,initialChats,initialComments,initialPosts,initials,lime,me,people,questions,slides,themes,type FollowListKind,type FollowPage,type FollowStats,type Note,type Person,type Post,type BirthdayEntry,type Role,type Story,type StoryGroup,type Theme} from './index'
 import {Avatar,Button,Card,Copy,Design,displayHandle,Field,Icon,IconButton,IconTile,Logo,PersonName,ScreenLinks,Segmented,VerifiedBadge,row,spread,stack,useDesign,type Glyph,type IconRendererProps} from './ui'
 import type {ExtraPage} from './FeatureScreens'
 import {LoadingScreen} from './LoadingScreen'
@@ -55,11 +55,12 @@ type Props={
   loadToken?:()=>Promise<string|null>; saveToken?:(token:string|null)=>Promise<void>;
   openGoogle?:(getUrl:()=>Promise<string>)=>Promise<GoogleWindow>;
   callMedia?:CallMedia;
+  notificationTarget?:string;
   modalViewport?:React.ComponentType<{color:string;children:React.ReactNode}>;
   pickMedia?:()=>Promise<Media|null>; renderGif?:GifRenderer; share?:(url:string)=>Promise<void>;
   requestNotifications?:()=>Promise<boolean>; getNotificationDevice?:()=>Promise<{platform:'android'|'ios';token:string}|null>; notifyDevice?:(title:string,body:string)=>Promise<void>;
 }
-type Overlay={kind:'connections';list:FollowListKind;person:Person}|{kind:'comments'|'share'|'post';post:Post}|{kind:'story';person:Person}|{kind:'photo';person:Person;photo:'avatar'|'cover'}|{kind:'create'|'wish'|'newStory'|'editProfile'|'editUsername'}|{kind:'call';video:boolean;person:Person;ringing?:boolean;incoming?:boolean}
+type Overlay={kind:'connections';list:FollowListKind;person:Person}|{kind:'comments'|'share'|'post';post:Post;targetId?:string}|{kind:'story';person:Person}|{kind:'photo';person:Person;photo:'avatar'|'cover'}|{kind:'create'|'wish'|'newStory'|'editProfile'|'editUsername'}|{kind:'call';video:boolean;person:Person;ringing?:boolean;incoming?:boolean}
 type PageEntry={page:Page;profile:Person;room:Room|null;overlays:Overlay[];scrollY:number;lessonId:string}
 const tabs:[Page,Glyph][]=[['Home','home'],['Learn','book'],['Explore','search'],['Play','game']]
 const localRooms=people.filter(p=>p.id in initialChats).map(person=>({id:person.id,person}))
@@ -336,6 +337,8 @@ export default function App(props:Props){
   const [storyMedia,setStoryMedia]=useState<Media|null>(null)
   const [liveStories,setLiveStories]=useState<StoryGroup[]>([])
   const [storyIndex,setStoryIndex]=useState(0)
+  const [storyReplyDraft,setStoryReplyDraft]=useState('')
+  const [storyReplyBusy,setStoryReplyBusy]=useState(false)
   const [storyRefresh,setStoryRefresh]=useState(0)
   const [clock,setClock]=useState(()=>Date.now())
   const [wishes,setWishes]=useState<string[]>([])
@@ -348,7 +351,7 @@ export default function App(props:Props){
   const [bioDraft,setBioDraft]=useState('')
   const [voicePlaying,setVoicePlaying]=useState(false)
   const [quietMode,setQuietMode]=useState(false)
-  const [query,setQuery]=useState(''),[results,setResults]=useState<Person[]>([])
+  const [query,setQuery]=useState(''),[results,setResults]=useState<(Person&{followsViewer?:boolean})[]>([])
   const [searching,setSearching]=useState(false),[searchError,setSearchError]=useState('')
   const [follows,setFollows]=useState<Record<string,boolean>>({})
   const [rooms,setRooms]=useState<Room[]>(demo?localRooms:[])
@@ -367,9 +370,10 @@ export default function App(props:Props){
   const [chats,setChats]=useState<Record<string,Note[]>>(demo?initialChats:{})
   const [draft,setDraft]=useState(''),[attachment,setAttachment]=useState<Media|null>(null)
   const [message,setMessage]=useState(''),[comment,setComment]=useState('')
+  const [replyTarget,setReplyTarget]=useState<Note|null>(null)
   const [commentMedia,setCommentMedia]=useState<Media|Exclude<CommentAttachment,{kind:'image'}>|null>(null)
   const commentDraft=useRef(0)
-  const clearComment=()=>{commentDraft.current+=1;setComment('');setCommentMedia(null)}
+  const clearComment=()=>{commentDraft.current+=1;setComment('');setCommentMedia(null);setReplyTarget(null)}
   useEffect(()=>{
     if(Platform.OS!=='web'||overlay?.kind!=='comments'||!window.visualViewport)return
     const viewport=window.visualViewport
@@ -386,6 +390,7 @@ export default function App(props:Props){
   const [notifications,setNotifications]=useState(true)
   const [deviceNotifications,setDeviceNotifications]=useState<'unknown'|'granted'|'denied'>(props.requestNotifications?'unknown':'denied')
   const [notificationItems,setNotificationItems]=useState<NotificationItem[]>([])
+  const handledNotification=useRef('')
   const [notificationsLoading,setNotificationsLoading]=useState(false)
   const [quietStart,setQuietStart]=useState(''),[quietEnd,setQuietEnd]=useState('')
   const pending=useRef(new Set<string>())
@@ -462,7 +467,7 @@ export default function App(props:Props){
     let alive=true
     setSearching(true);setSearchError('')
     const timer=setTimeout(()=>{
-      api<(Person&{following:boolean})[]>(base,'/people?q='+encodeURIComponent(query),{},token)
+      api<(Person&{following:boolean;followsViewer:boolean})[]>(base,'/people?q='+encodeURIComponent(query),{},token)
         .then(data=>{if(alive){setResults(data);setFollows(previous=>({...previous,...Object.fromEntries(data.map(p=>[p.id,p.following]))}))}})
         .catch(reason=>{if(alive)setSearchError(errorMessage(reason))})
         .finally(()=>{if(alive)setSearching(false)})
@@ -476,6 +481,35 @@ export default function App(props:Props){
     api<Room[]>(base,'/rooms',{},token).then(data=>{if(alive)setRooms(data)}).catch(reason=>{if(alive)setFeedError(errorMessage(reason))}).finally(()=>{if(alive)setLoading(false)})
     return ()=>{alive=false}
   },[base,demo,token,page,retry])
+  useEffect(()=>{
+    if(demo||!token||stage!=='app')return
+    const target=props.notificationTarget||(Platform.OS==='web'?new URLSearchParams(window.location.search).get('notification')??'':'')
+    if(!target||handledNotification.current===target)return
+    handledNotification.current=target
+    void api<{items:NotificationItem[]}>(base,'/notifications',{},token).then(data=>{
+      setNotificationItems(data.items)
+      const item=data.items.find(entry=>entry.id===target)
+      if(item)return openNotification(item)
+      notify('This notification is no longer available.','error')
+    }).catch(fail)
+    if(Platform.OS==='web')window.history.replaceState(window.history.state,'',window.location.pathname+window.location.hash)
+  },[base,demo,props.notificationTarget,stage,token])
+  useEffect(()=>{
+    if(Platform.OS!=='web')return
+    const listener=(event:MessageEvent)=>{
+      if(event.data?.type!=='dameen-notification'||typeof event.data.id!=='string')return
+      const target=event.data.id
+      if(!token||stage!=='app')return
+      handledNotification.current=target
+      void api<{items:NotificationItem[]}>(base,'/notifications',{},token).then(data=>{
+        setNotificationItems(data.items)
+        const item=data.items.find(entry=>entry.id===target)
+        if(item)void openNotification(item)
+      }).catch(fail)
+    }
+    navigator.serviceWorker?.addEventListener('message',listener)
+    return ()=>navigator.serviceWorker?.removeEventListener('message',listener)
+  },[base,stage,token])
   useEffect(()=>{
     if(demo||!token||page!=='Settings')return
     api<{quiet_start?:string|null;quiet_end?:string|null}>(base,'/notification-preferences',{},token).then(value=>{setQuietStart(value.quiet_start??'');setQuietEnd(value.quiet_end??'')}).catch(()=>{})
@@ -491,6 +525,16 @@ export default function App(props:Props){
     api<{unread:number;items:NotificationItem[]}>(base,'/notifications',{},token).then(data=>{if(alive){setNotificationItems(data.items);setUnread(data.unread>0)}}).catch(reason=>{if(alive)notify(errorMessage(reason),'error')}).finally(()=>{if(alive)setNotificationsLoading(false)})
     return ()=>{alive=false}
   },[base,demo,token,page,retry])
+  useEffect(()=>{
+    if(demo||!token||stage!=='app')return
+    let active=true
+    const refresh=()=>api<{unread:number;items:NotificationItem[]}>(base,'/notifications',{},token).then(data=>{
+      if(active){setNotificationItems(data.items);setUnread(data.unread>0)}
+    }).catch(()=>{})
+    void refresh()
+    const interval=setInterval(()=>{if(AppState.currentState==='active')void refresh()},30000)
+    return ()=>{active=false;clearInterval(interval)}
+  },[base,demo,stage,token])
   const roomId=room?.id
   const chatSocket=useRef<WebSocket|null>(null)
   const [chatConnected,setChatConnected]=useState(false)
@@ -565,6 +609,7 @@ export default function App(props:Props){
     if(index<0)return
     const count=demo?1:activeStories[index].stories.length
     const inner=storyIndex+direction
+    setStoryReplyDraft('')
     if(inner>=0&&inner<count){setStoryIndex(inner);return}
     const next=queue[index+direction]
     if(!next&&direction===-1)return
@@ -573,10 +618,10 @@ export default function App(props:Props){
     setOverlay(current=>current?.kind==='story'&&current.person.id===storyId?(next?{kind:'story',person:next}:null):current)
   },[storyId,storyIndex,demoOwn,demoStories,user,demo,activeStories])
   useEffect(()=>{
-    if(!storyId)return
+    if(!storyId||storyReplyDraft||storyReplyBusy)return
     const timer=setTimeout(()=>moveStory(1),6500)
     return ()=>clearTimeout(timer)
-  },[storyId,moveStory])
+  },[storyId,moveStory,storyReplyDraft,storyReplyBusy])
   const storySwipe=React.useMemo(()=>PanResponder.create({
     onMoveShouldSetPanResponderCapture:(_,gesture)=>Math.abs(gesture.dx)>14&&Math.abs(gesture.dx)>Math.abs(gesture.dy)*1.4,
     onPanResponderRelease:(_,gesture)=>{if(Math.abs(gesture.dx)>=42)moveStory(gesture.dx<0?1:-1)},
@@ -597,7 +642,6 @@ export default function App(props:Props){
     pendingOffset.current={page:next,y:scrollY}
     pageScroll.current=scrollY
     setPage(next);setFeedError('')
-    if(next==='Notifications')setUnread(false)
   }
   function dismissOverlays(){
     overlayHistory.current=[]
@@ -711,7 +755,7 @@ export default function App(props:Props){
     if(overlay)overlayHistory.current.push(overlay)
     clearComment()
     setOverlay(value)
-    if(value.kind==='story'){setStoryIndex(0);setSeen(previous=>new Set(previous).add(value.person.id))}
+    if(value.kind==='story'){setStoryIndex(0);setStoryReplyDraft('');setSeen(previous=>new Set(previous).add(value.person.id))}
     if(value.kind==='comments'&&!demo){
       const id=value.post.id
       call<Note[]>('/posts/'+id+'/comments').then(data=>setNotes(previous=>({...previous,[id]:[...data,...(previous[id]??[]).filter(item=>!data.some(match=>match.id===item.id))]}))).catch(fail)
@@ -956,12 +1000,13 @@ export default function App(props:Props){
     try{
       let item:Note
       if(demo){
-        item={id:uid(),author:user,body,attachment:commentMedia&&'uri' in commentMedia?{kind:'image',url:commentMedia.uri}:commentMedia??undefined}
+        item={id:uid(),author:user,body,parentId:replyTarget?.id,replyTo:replyTarget?displayHandle(replyTarget.author):undefined,likes:0,liked:false,attachment:commentMedia&&'uri' in commentMedia?{kind:'image',url:commentMedia.uri}:commentMedia??undefined}
       }else{
-        let request=json({body,...(commentMedia&&'uri' in commentMedia?{}:commentMedia?{[commentMedia.kind]:commentMedia.id}:{})}) as RequestInit
+        let request=json({body,parentId:replyTarget?.id,...(commentMedia&&'uri' in commentMedia?{}:commentMedia?{[commentMedia.kind]:commentMedia.id}:{})}) as RequestInit
         if(commentMedia&&'uri' in commentMedia){
           const form=new FormData()
           form.append('body',body)
+          if(replyTarget)form.append('parentId',replyTarget.id)
           if(commentMedia.data instanceof Blob)form.append('image',commentMedia.data,commentMedia.name)
           else form.append('image',commentMedia.data as unknown as Blob)
           request={method:'POST',body:form}
@@ -978,6 +1023,40 @@ export default function App(props:Props){
     }catch(reason){if(session===demoSession.current)fail(reason)}
     finally{pending.current.delete(key);setBusy(false)}
   }
+  async function likeComment(postId:string,item:Note){
+    const key='comment-like:'+item.id
+    if(pending.current.has(key))return
+    pending.current.add(key)
+    try{
+      const result=demo?{liked:!item.liked,likes:(item.likes??0)+(item.liked?-1:1)}
+        :await call<{liked:boolean;likes:number}>('/comments/'+item.id+'/like',json({active:!item.liked},'PUT'))
+      setNotes(previous=>({...previous,[postId]:(previous[postId]??[]).map(note=>note.id===item.id?{...note,...result}:note)}))
+    }catch(reason){fail(reason)}finally{pending.current.delete(key)}
+  }
+  async function likeStory(author:Person,story:Story){
+    const key='story-like:'+story.id
+    if(pending.current.has(key))return
+    pending.current.add(key)
+    try{
+      const result=demo?{liked:!story.liked,likes:(story.likes??0)+(story.liked?-1:1)}
+        :await call<{liked:boolean;likes:number}>('/stories/'+author.id+'/'+story.id+'/like',json({active:!story.liked},'PUT'))
+      setLiveStories(previous=>previous.map(group=>({...group,stories:group.stories.map(item=>item.id===story.id?{...item,...result}:item)})))
+      if(demo)notify(result.liked?'Story liked':'Story like removed')
+    }catch(reason){fail(reason)}finally{pending.current.delete(key)}
+  }
+  async function replyToStory(author:Person,story:Story){
+    const reply=storyReplyDraft.trim()
+    if(!reply||storyReplyBusy||author.id===user.id)return
+    setStoryReplyBusy(true)
+    try{
+      const next=await call<{id:string}>('/rooms',json({target:author.id}))
+      const context=story.text?'Replied to your story “'+story.text.slice(0,100)+'”':'Replied to your story'
+      await call('/rooms/'+next.id+'/messages',json({body:context+'\n'+reply}))
+      setStoryReplyDraft('')
+      openRoom({id:next.id,person:author})
+      notify('Story reply sent')
+    }catch(reason){fail(reason)}finally{setStoryReplyBusy(false)}
+  }
   function openRoom(next:Room){
     stickToChatEnd.current=true;initialChatScroll.current=true
     setMessage('');open('Chat',{room:next})
@@ -988,6 +1067,41 @@ export default function App(props:Props){
       const nextRoom={id:next.id,person}
       setRooms(previous=>previous.some(r=>r.id===next.id)?previous:[...previous,nextRoom])
       openRoom(nextRoom)
+    }catch(reason){fail(reason)}
+  }
+  async function openNotification(item:NotificationItem){
+    if(!item.read){
+      try{
+        await call('/notifications/'+item.id+'/read',{method:'PUT'})
+        setNotificationItems(previous=>previous.map(entry=>entry.id===item.id?{...entry,read:true}:entry))
+        setUnread(notificationItems.some(entry=>entry.id!==item.id&&!entry.read))
+      }catch(reason){fail(reason)}
+    }
+    if(!item.entityId)return
+    try{
+      const target=item.entityId
+      if(item.kind==='follow'){
+        showProfile(await call<Person>('/people/'+encodeURIComponent(target)))
+      }else if(item.kind==='message'){
+        const available=await call<Room[]>('/rooms')
+        const conversation=available.find(entry=>entry.id===target)
+        if(conversation)openRoom(conversation)
+        else notify('Conversation unavailable.','error')
+      }else if(target.startsWith('story:')){
+        const [,author,id]=target.split(':')
+        const groups=await call<StoryGroup[]>('/stories')
+        setLiveStories(groups)
+        const group=groups.find(entry=>entry.author.id===author)
+        const index=group?.stories.findIndex(entry=>entry.id===id)??-1
+        if(group&&index>=0){selectOverlay({kind:'story',person:group.author});setStoryIndex(index)}
+        else notify('This story has expired.','error')
+      }else{
+        const parts=target.split(':')
+        const commentTarget=parts[0]==='comment'?parts[2]:undefined
+        const postId=commentTarget?parts[1]:target
+        const post=await call<Post>('/posts/'+encodeURIComponent(postId))
+        selectOverlay({kind:item.kind==='comment'||!!commentTarget?'comments':'post',post,targetId:commentTarget})
+      }
     }catch(reason){fail(reason)}
   }
   async function send(){
@@ -1156,7 +1270,7 @@ export default function App(props:Props){
     <Field label="Search" glyph="search" placeholder="Search people, groups, topics" value={query} onChangeText={setQuery} autoCapitalize="none"/>
     {demo&&!query&&<Card>{section('Trending in your school')}<View style={{...row,flexWrap:'wrap'}}>{['#QuizFriday','#StudyTogether','#WordSprint'].map(tag=><Button key={tag} label={tag} variant="secondary" onPress={()=>setQuery(tag)}/>)}</View></Card>}
     {section(query?'Search results':'Suggested for you')}
-    {searchError?<Empty title="Search unavailable" detail={searchError} action="Try again" onPress={()=>setRetry(n=>n+1)}/>:searching?<Loading/>:displayedPeople.length?displayedPeople.map(person=><Card key={person.id} style={spread}><Pressable accessibilityRole="button" accessibilityLabel={'Open '+displayHandle(person)+' profile'} onPress={()=>showProfile(person)} style={{...row,flex:1}}><Avatar person={person}/><View style={{flex:1}}><PersonName person={person}/><Copy color={theme.muted} size={12}>{person.detail}</Copy></View></Pressable><Button label={follows[person.id]?'Following':'Follow'} variant={follows[person.id]?'secondary':'primary'} onPress={()=>void follow(person)}/></Card>):<Empty title="No results" detail={query?'Try a different name or clear the search.':'Classmates will appear here after they sign up.'}/>}
+    {searchError?<Empty title="Search unavailable" detail={searchError} action="Try again" onPress={()=>setRetry(n=>n+1)}/>:searching?<Loading/>:displayedPeople.length?displayedPeople.map(person=><Card key={person.id} style={spread}><Pressable accessibilityRole="button" accessibilityLabel={'Open '+displayHandle(person)+' profile'} onPress={()=>showProfile(person)} style={{...row,flex:1}}><Avatar person={person}/><View style={{flex:1}}><PersonName person={person}/><Copy color={theme.muted} size={12}>{person.detail}</Copy></View></Pressable><Button label={follows[person.id]?'Following':'followsViewer' in person&&person.followsViewer?'Follow back':'Follow'} variant={follows[person.id]?'secondary':'primary'} onPress={()=>void follow(person)}/></Card>):<Empty title="No results" detail={query?'Try a different name or clear the search.':'Classmates will appear here after they sign up.'}/>}
   </>
   const learning=<Learning featured={featuredLesson} done={completedLessons} onLesson={openLesson} onTimer={()=>open('Study timer')} onProgress={()=>open('Progress')}/>
   const play=<>
@@ -1176,6 +1290,7 @@ export default function App(props:Props){
       <Button label="Video call" leading="vid" variant="secondary" disabled={!chatConnected||!!roomCall.call} onPress={()=>roomCall.start(true)}/>
       {!chatConnected&&<Copy size={12}>Waiting for chat connection…</Copy>}
     </View>}
+    {!demo&&!callMedia&&<Copy color={theme.muted} size={12}>Voice and video calls are available in the installed app build or a supported browser.</Copy>}
     {!demo&&callMedia&&roomCall.call&&<Card>
       <RoomCall key={roomCall.call.id} person={room.person} media={callMedia} call={roomCall.call} accept={roomCall.accept} end={()=>roomCall.end()}/>
     </Card>}
@@ -1217,7 +1332,7 @@ export default function App(props:Props){
             <Button label={photoBusy==='avatar'?'Updating picture…':'Change profile picture'} leading="image" variant="secondary" disabled={!!photoBusy} onPress={()=>void uploadProfilePhoto('avatar')}/>
             <Button label={photoBusy==='cover'?'Updating cover…':'Change cover photo'} variant="secondary" disabled={!!photoBusy} onPress={()=>void uploadProfilePhoto('cover')}/>
           </>}<Button label="Share profile" leading="sh" variant="secondary" onPress={()=>{void props.share?.(sharedLink('profile',profile.id)).then(()=>notify('Profile link ready to share')).catch(fail)}}/><Button label="Settings" leading="settings" variant="secondary" onPress={()=>open('Settings')}/></>:<>
-            <Button label={follows[profile.id]?'Following':'Follow'} disabled={!demo&&!currentStats?.data} onPress={()=>void follow(profile)}/>
+            <Button label={follows[profile.id]?'Following':currentStats?.data?.followsViewer?'Follow back':'Follow'} disabled={!demo&&!currentStats?.data} onPress={()=>void follow(profile)}/>
             <Button label="Message" leading="msg" variant="secondary" onPress={()=>void messagePerson(profile)}/>
             <Button label="Share profile" leading="sh" variant="secondary" onPress={()=>{void props.share?.(sharedLink('profile',profile.id)).then(()=>notify('Profile link ready to share')).catch(fail)}}/>
           </>}
@@ -1263,7 +1378,7 @@ export default function App(props:Props){
     Quiz:<Quiz onBack={goBack}/>,
     Admin:(demo||user.isAdmin)&&<Suspense fallback={<Loading/>}><Admin base={base} token={token}
       sample={demo?{overview:demoOverview,accounts:demoAccounts}:undefined} onSampleChange={changeDemoAccount}/></Suspense>,
-    Notifications:demo&&notifications?<Card><View style={row}><Avatar person={people[1]}/><View style={{flex:1}}><Copy weight={800}>Tobi A. liked your post</Copy><Copy color={theme.muted} size={12}>Today</Copy></View></View><View style={row}><Avatar person={people[4]}/><View style={{flex:1}}><Copy weight={800}>Code Club shared a new post</Copy><Copy color={theme.muted} size={12}>Yesterday</Copy></View></View></Card>:notificationsLoading?<Loading/>:notificationItems.length?<View style={stack}>{notificationItems.map(item=><Pressable key={item.id} accessibilityRole="button" onPress={()=>{if(!item.read){void call('/notifications/'+item.id+'/read',{method:'PUT'});setNotificationItems(previous=>previous.map(value=>value.id===item.id?{...value,read:true}:value));setUnread(previous=>previous&&notificationItems.some(value=>value.id!==item.id&&!value.read))}if(item.kind==='message'&&item.entityId)notify('Open Messages to continue the conversation.')}} style={{...row,alignItems:'flex-start',padding:13,borderRadius:16,borderWidth:1,borderColor:theme.border,backgroundColor:item.read?theme.card:theme.chip}}>{item.actor?<Avatar person={item.actor} size={42}/>:<IconTile name="bell" size={42}/>}<View style={{flex:1,gap:3}}><Copy weight={item.read?600:800}>{item.body}</Copy><Copy size={12} color={theme.muted}>{shortTime(item.created)}</Copy></View></Pressable>)}<Button label="Mark all as read" variant="secondary" onPress={()=>{void call('/notifications/read-all',{method:'PUT'});setNotificationItems(previous=>previous.map(item=>({...item,read:true})));setUnread(false)}}/></View>:<Empty title="You’re all caught up" detail="New activity will appear here."/>,
+    Notifications:demo&&notifications?<Card><View style={row}><Avatar person={people[1]}/><View style={{flex:1}}><Copy weight={800}>Tobi A. liked your post</Copy><Copy color={theme.muted} size={12}>Today</Copy></View></View><View style={row}><Avatar person={people[4]}/><View style={{flex:1}}><Copy weight={800}>Code Club shared a new post</Copy><Copy color={theme.muted} size={12}>Yesterday</Copy></View></View></Card>:notificationsLoading?<Loading/>:notificationItems.length?<View style={stack}>{notificationItems.map(item=><Pressable key={item.id} accessibilityRole="button" onPress={()=>void openNotification(item)} style={{...row,alignItems:'flex-start',padding:13,borderRadius:16,borderWidth:1,borderColor:theme.border,backgroundColor:item.read?theme.card:theme.chip}}>{item.actor?<Avatar person={item.actor} size={42}/>:<IconTile name="bell" size={42}/>}<View style={{flex:1,gap:3}}><Copy weight={item.read?600:800}>{item.body}</Copy><Copy size={12} color={theme.muted}>{shortTime(item.created)}</Copy></View></Pressable>)}<Button label="Mark all as read" variant="secondary" onPress={()=>{void call('/notifications/read-all',{method:'PUT'});setNotificationItems(previous=>previous.map(item=>({...item,read:true})));setUnread(false)}}/></View>:<Empty title="You’re all caught up" detail="New activity will appear here."/>,
   }
   let sheet:React.ReactNode
   if(overlay?.kind==='connections'){
@@ -1274,6 +1389,7 @@ export default function App(props:Props){
   }else if(overlay?.kind==='comments'){
     const list=notes[overlay.post.id]??(demo&&overlay.post.id==='quadratics'?initialComments:[])
     sheet=<Comments key={overlay.post.id} list={list} body={comment} onBody={value=>{commentDraft.current++;setComment(value)}} busy={busy} renderGif={props.renderGif}
+      replyTo={replyTarget} highlightId={overlay.targetId} onReply={item=>{commentDraft.current++;setReplyTarget(item)}} onCancelReply={()=>{commentDraft.current++;setReplyTarget(null)}} onLike={item=>void likeComment(overlay.post.id,item)}
       attachment={commentMedia&&'uri' in commentMedia?{kind:'image',url:commentMedia.uri}:commentMedia??undefined}
       onPreset={value=>{commentDraft.current+=1;setCommentMedia(value)}} onRemove={()=>{commentDraft.current+=1;setCommentMedia(null)}}
       onPhoto={props.pickMedia?()=>void pickCommentPhoto():undefined} onPost={()=>void addComment(overlay.post)}
@@ -1425,6 +1541,13 @@ export default function App(props:Props){
               <Pressable accessibilityRole="button" accessibilityLabel="Next story" onPress={()=>moveStory(1)} style={{width:'25%',height:'100%'}}/>
             </View>
           </View>
+          {!demo&&story.id!==user.id&&liveItem&&<View style={{gap:9}}>
+            <View style={{...row,alignItems:'flex-end'}}>
+              <View style={{flex:1}}><Field label={'Reply to '+displayHandle(story)} placeholder="Send a story reply" value={storyReplyDraft} onChangeText={setStoryReplyDraft} maxLength={500} onSubmitEditing={()=>void replyToStory(story,liveItem)}/></View>
+              <Button label={storyReplyBusy?'Sending…':'Send'} disabled={storyReplyBusy||!storyReplyDraft.trim()} onPress={()=>void replyToStory(story,liveItem)}/>
+            </View>
+            <Button label={liveItem.liked?'Liked · '+(liveItem.likes??0):'Like story · '+(liveItem.likes??0)} variant="secondary" onPress={()=>void likeStory(story,liveItem)}/>
+          </View>}
           {!demo&&story.id===user.id&&!!liveItem&&<View style={{...row,justifyContent:'center'}}>
             <Button label="Add story" variant="secondary" disabled={busy} onPress={()=>selectOverlay({kind:'newStory'})}/>
             <Button label="Delete story" variant="danger" disabled={busy} onPress={()=>void deleteStory(liveItem.id)}/>
