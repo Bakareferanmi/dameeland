@@ -16,6 +16,9 @@ const encoder=new TextEncoder()
 const hex=(bytes:ArrayBuffer|Uint8Array)=>Array.from(bytes instanceof Uint8Array?bytes:new Uint8Array(bytes),n=>n.toString(16).padStart(2,'0')).join('')
 const hash=async(value:string)=>hex(await crypto.subtle.digest('SHA-256',encoder.encode(value)))
 const random=(size:number)=>hex(crypto.getRandomValues(new Uint8Array(size)))
+const resetAlphabet='23456789abcdefghjklmnpqrstuvwxyz'
+const randomResetCode=()=>Array.from(crypto.getRandomValues(new Uint8Array(5)),byte=>resetAlphabet[byte&31]).join('')
+const validResetCode=(code:string)=>/^(?:[2-9a-hj-np-z]{5}|[a-f0-9]{12})$/.test(code)
 const clean=(value:unknown,max:number)=>typeof value==='string'?value.trim().slice(0,max):''
 const mediaUrl=(key:string,url:string)=>new URL('/api/media/'+key,url).href
 const person=(user:PublicAccount,url:string):Person=>({id:user.id,name:user.name,username:user.username??undefined,initials:initials(user.name),role:user.role,color:user.role==='tech'?'#CFE8FF':'#FFD9B8',detail:user.teacher?'Teacher':user.role==='tech'?'Tech creator':'Student',teacher:Boolean(user.teacher),birthday:user.dob?user.dob.slice(5):undefined,verified:user.role==='tech'||Boolean(user.verified),avatar:user.avatar_media?mediaUrl(user.avatar_media,url):undefined,cover:user.cover_media?mediaUrl(user.cover_media,url):undefined})
@@ -61,9 +64,30 @@ async function createNotification(env:Env,ctx:WaitContext,db:D1Database,userId:s
   const devices=(await db.prepare('SELECT id,platform,endpoint,token FROM notification_devices WHERE user_id=?').bind(userId).all<PushDevice>()).results
   if(devices.length)ctx.waitUntil(sendPush(env,db,devices,'dameen',body,entityId))
 }
-async function session(env:Env,account:PublicAccount,url:string){
+function sendAccountEmail(key:string,from:string,to:string,subject:string,text:string,idempotencyKey?:string){
+  return fetch('https://api.resend.com/emails',{
+    method:'POST',
+    headers:{Authorization:'Bearer '+key,'Content-Type':'application/json',...(idempotencyKey?{'Idempotency-Key':idempotencyKey}:{})},
+    body:JSON.stringify({from,to:[to],subject,text}),
+  })
+}
+function queueWelcomeEmail(env:Env,ctx:WaitContext,userId:string){
+  const {DB,RESEND_API_KEY,RECOVERY_FROM}=env
+  if(!RESEND_API_KEY||!RECOVERY_FROM)return
+  ctx.waitUntil((async()=>{
+    const account=await DB.prepare('SELECT email FROM users WHERE id=? AND welcome_email_sent_at IS NULL')
+      .bind(userId).first<{email:string}>()
+    if(!account)return
+    const response=await sendAccountEmail(RESEND_API_KEY,RECOVERY_FROM,account.email,'Welcome to dameen!',
+      'Your account is ready. Set up your profile, find your classmates, and share your first post.\n\nOpen dameen: https://dameen.app', 'dameen/welcome/'+userId)
+    if(!response.ok){console.error('Welcome email delivery rejected',response.status);return}
+    await DB.prepare('UPDATE users SET welcome_email_sent_at=? WHERE id=? AND welcome_email_sent_at IS NULL').bind(now(),userId).run()
+  })().catch(()=>console.error('Welcome email delivery failed')))
+}
+async function session(env:Env,ctx:WaitContext,account:PublicAccount,url:string){
   const token=random(32)
   await env.DB.prepare('INSERT INTO sessions VALUES (?,?,?)').bind(await hash(token),account.id,now()+7*86400000).run()
+  queueWelcomeEmail(env,ctx,account.id)
   return {token,user:viewer(env,account,url)}
 }
 
@@ -115,16 +139,14 @@ app.post('/api/auth/recovery/request',async c=>{
   if(account&&await authAllowed(DB,account.id,'recovery-email',3)){
     let text=account.username?'Your dameen username is @'+account.username+'.':'You can sign in to dameen with this email address.'
     if(kind==='password'){
-      const code=random(6)
+      const code=randomResetCode()
       await DB.prepare(`INSERT INTO password_resets(user_id,code_hash,expires) VALUES (?,?,?)
         ON CONFLICT(user_id) DO UPDATE SET code_hash=excluded.code_hash,expires=excluded.expires`)
         .bind(account.id,await hash(code),now()+15*60000).run()
       text='Your dameen password reset code is '+code.toUpperCase()+'. It expires in 15 minutes. If you did not request this, you can ignore this email.'
     }
-    c.executionCtx.waitUntil(fetch('https://api.resend.com/emails',{
-      method:'POST',headers:{Authorization:'Bearer '+RESEND_API_KEY,'Content-Type':'application/json'},
-      body:JSON.stringify({from:RECOVERY_FROM,to:[email],subject:kind==='password'?'Reset your dameen password':'Your dameen username',text}),
-    }).then(response=>{if(!response.ok)console.error('Recovery email delivery rejected',response.status)})
+    c.executionCtx.waitUntil(sendAccountEmail(RESEND_API_KEY,RECOVERY_FROM,email,kind==='password'?'Reset your dameen password':'Your dameen username',text)
+      .then(response=>{if(!response.ok)console.error('Recovery email delivery rejected',response.status)})
       .catch(()=>console.error('Recovery email delivery failed')))
   }
   c.executionCtx.waitUntil(DB.batch([
@@ -138,10 +160,11 @@ app.post('/api/auth/recovery/reset',async c=>{
   const email=clean(input?.email,254).toLowerCase()
   const code=typeof input?.code==='string'?input.code.trim().toLowerCase():''
   const password=typeof input?.password==='string'?input.password:''
-  if(!emailPattern.test(email)||!/^[a-f0-9]{12}$/.test(code)||password.length<8||password.length>128)
+  if(!emailPattern.test(email)||!validResetCode(code)||password.length<8||password.length>128)
     return c.json({error:'Enter your email, a valid reset code and a password with 8 to 128 characters.'},400)
   const db=c.env.DB
-  if(!await authAllowed(db,c.req.header('CF-Connecting-IP')??'local','recovery-reset',10))
+  if(!await authAllowed(db,c.req.header('CF-Connecting-IP')??'local','recovery-reset',10)
+    ||!await authAllowed(db,email,'recovery-reset-email',8))
     return c.json({error:'Too many attempts. Try again in a few minutes.'},429)
   const codeHash=await hash(code)
   const salt=random(16)
@@ -193,7 +216,7 @@ app.post('/api/auth/:action',async c=>{
     const candidate=await passwordHash(password,account?.salt??'8d039d76714da531')
     if(!account||!equal(candidate,account.password_hash)) return c.json({error:'Email, username or password is incorrect.'},401)
   }
-  return c.json(await session(c.env,account,c.req.url),action==='signup'?201:200)
+  return c.json(await session(c.env,c.executionCtx,account,c.req.url),action==='signup'?201:200)
 })
 
 type GoogleAttempt={username:string|null;dob:string|null;verifier:string;status:string;user_id:string|null;error:string|null}
@@ -280,7 +303,7 @@ app.post('/api/google/exchange',async c=>{
   if(!claimed)return c.json({error:'Google sign-in expired. Please try again.'},410)
   const account=await DB.prepare('SELECT id,name,role,username,verified,teacher,dob,avatar_media,cover_media FROM users WHERE id=?').bind(claimed.user_id).first<PublicAccount>()
   if(!account)return c.json({error:'Account unavailable.'},404)
-  return c.json(await session(c.env,account,c.req.url))
+  return c.json(await session(c.env,c.executionCtx,account,c.req.url))
 })
 app.get('/api/media/:id',async c=>{
   const id=c.req.param('id')
@@ -383,7 +406,11 @@ app.put('/api/notification-preferences',async c=>{
   await c.env.DB.prepare(`INSERT INTO notification_preferences (user_id,messages,follows,comments,reactions,calls,birthdays,announcements,quiet_start,quiet_end,updated) VALUES (?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(user_id) DO UPDATE SET messages=excluded.messages,follows=excluded.follows,comments=excluded.comments,reactions=excluded.reactions,calls=excluded.calls,birthdays=excluded.birthdays,announcements=excluded.announcements,quiet_start=excluded.quiet_start,quiet_end=excluded.quiet_end,updated=excluded.updated`).bind(user,bool(input?.messages),bool(input?.follows),bool(input?.comments),bool(input?.reactions),bool(input?.calls),bool(input?.birthdays),bool(input?.announcements),start,end,now()).run()
   return c.json({ok:true})
 })
-app.get('/api/me',c=>c.json(viewer(c.env,c.get('user'),c.req.url)))
+app.get('/api/me',c=>{
+  const account=c.get('user')
+  queueWelcomeEmail(c.env,c.executionCtx,account.id)
+  return c.json(viewer(c.env,account,c.req.url))
+})
 app.put('/api/me/birthday',async c=>{
   const dob=(await readBody(c.req.raw))?.dob
   if(!validBirthDate(dob))return c.json({error:'Enter a valid date of birth.'},400)

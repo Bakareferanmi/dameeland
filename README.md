@@ -61,14 +61,14 @@ Rebuild and install the native app to see the new display name. The Android pack
 
 ## Account recovery
 
-Apply the D1 migrations, including `0009_password_resets.sql`. Verify a sender domain in Resend and create a key with Sending access for that domain. From the repository root, run these commands and enter the values at the Wrangler prompts.
+Apply the D1 migrations, including `0009_password_resets.sql` and `0017_welcome_email.sql`. Verify a sender domain in Resend and create a key with Sending access for that domain. From the repository root, run these commands and enter the values at the Wrangler prompts.
 
 ```bash
 npx wrangler secret put RESEND_API_KEY --config apps/api/wrangler.jsonc
 npx wrangler secret put RECOVERY_FROM --config apps/api/wrangler.jsonc
 ```
 
-Set `RECOVERY_FROM` to a sender on the verified domain, such as `dameen <accounts@dameen.app>` if `dameen.app` is verified in Resend. For local development, set both values in `apps/api/.dev.vars`. From the login screen, users can request a username reminder or a single-use password reset code by email. Reset codes expire after 15 minutes. A successful password reset ends previous sessions.
+Set `RECOVERY_FROM` to a sender on the verified domain, such as `dameen <accounts@dameen.app>` if `dameen.app` is verified in Resend. For local development, set both values in `apps/api/.dev.vars`. From the login screen, users can request a username reminder or a single-use password reset code by email. Reset codes have five characters and expire after 15 minutes. A successful password reset ends previous sessions. Resend also sends one welcome email per account. New accounts receive it after signup. Existing accounts receive it when they next open the app with an active session or sign in.
 
 ## Admin access
 

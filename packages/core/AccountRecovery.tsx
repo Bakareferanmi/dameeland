@@ -24,7 +24,7 @@ export default function AccountRecovery({base,demoEmail,findDemoAccount,onBack}:
       setSentTo(address)
       setNotice(findDemoAccount
         ?kind==='username'?(account?.user.username?'Your demo username is @'+account.user.username+'.':'Create a demo account first to try username recovery.')
-          :(account?'Use this demo reset code: DAMEE1234567.':'Create a demo account first to try a password reset.')
+          :(account?'Use this demo reset code: DAME7.':'Create a demo account first to try a password reset.')
         :kind==='username'?'If an account matches, we’ll email its username.':'If an account matches, we’ll email a reset code.')
     }catch(reason){setError(reason instanceof Error?reason.message:'Couldn’t request recovery. Try again.')}
     finally{setBusy(false)}
@@ -35,7 +35,7 @@ export default function AccountRecovery({base,demoEmail,findDemoAccount,onBack}:
     try{
       if(findDemoAccount){
         const account=findDemoAccount(sentTo)
-        if(!account||code.trim().toUpperCase()!=='DAMEE1234567')throw new Error('That demo code is invalid.')
+        if(!account||code.trim().toUpperCase()!=='DAME7')throw new Error('That demo code is invalid.')
         account.password=password
       }else await api(base,'/auth/recovery/reset',{method:'POST',body:JSON.stringify({email:sentTo,code,password})})
       setDone(true);setNotice('Password updated. You can log in now.')
