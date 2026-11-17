@@ -3,7 +3,7 @@ import {dailyLesson} from './learningCatalog'
 import {browserCallMedia,RoomCall,useRoomCall,type CallMedia} from './calls'
 import {readCallSignal,type CallSignal} from './callSignal'
 import React,{lazy,Suspense,useCallback,useEffect,useLayoutEffect,useRef,useState} from 'react'
-import {AccessibilityInfo,Animated,BackHandler,Easing,Image,Modal,PanResponder,Platform,Pressable,ScrollView,View,useWindowDimensions,type ViewStyle} from 'react-native'
+import {AccessibilityInfo,Animated,AppState,BackHandler,Easing,Image,Modal,PanResponder,Platform,Pressable,ScrollView,View,useWindowDimensions,type ViewStyle} from 'react-native'
 import {api,birthdayToday,validBirthDate,storyLifetime,capitalizeName,normalizeUsername,usernameHint,validUsername,initialChats,initialComments,initialPosts,initials,lime,me,people,questions,slides,themes,type FollowListKind,type FollowPage,type FollowStats,type Note,type Person,type Post,type BirthdayEntry,type Role,type StoryGroup,type Theme} from './index'
 import {Avatar,Button,Card,Copy,Design,displayHandle,Field,Icon,IconButton,IconTile,Logo,PersonName,ScreenLinks,Segmented,VerifiedBadge,row,spread,stack,useDesign,type Glyph,type IconRendererProps} from './ui'
 import type {ExtraPage} from './FeatureScreens'
@@ -59,7 +59,7 @@ type Props={
   pickMedia?:()=>Promise<Media|null>; renderGif?:GifRenderer; share?:(url:string)=>Promise<void>;
   requestNotifications?:()=>Promise<boolean>; getNotificationDevice?:()=>Promise<{platform:'android'|'ios';token:string}|null>; notifyDevice?:(title:string,body:string)=>Promise<void>;
 }
-type Overlay={kind:'connections';list:FollowListKind;person:Person}|{kind:'comments'|'share'|'post';post:Post}|{kind:'story';person:Person}|{kind:'create'|'wish'|'newStory'|'editProfile'}|{kind:'call';video:boolean;person:Person;ringing?:boolean;incoming?:boolean}
+type Overlay={kind:'connections';list:FollowListKind;person:Person}|{kind:'comments'|'share'|'post';post:Post}|{kind:'story';person:Person}|{kind:'photo';person:Person;photo:'avatar'|'cover'}|{kind:'create'|'wish'|'newStory'|'editProfile'|'editUsername'}|{kind:'call';video:boolean;person:Person;ringing?:boolean;incoming?:boolean}
 type PageEntry={page:Page;profile:Person;room:Room|null;overlays:Overlay[];scrollY:number;lessonId:string}
 const tabs:[Page,Glyph][]=[['Home','home'],['Learn','book'],['Explore','search'],['Play','game']]
 const localRooms=people.filter(p=>p.id in initialChats).map(person=>({id:person.id,person}))
@@ -344,6 +344,7 @@ export default function App(props:Props){
   const [learningError,setLearningError]=useState(false)
   const [learningRetry,setLearningRetry]=useState(0)
   const [profileNameDraft,setProfileNameDraft]=useState('')
+  const [usernameDraft,setUsernameDraft]=useState('')
   const [bioDraft,setBioDraft]=useState('')
   const [voicePlaying,setVoicePlaying]=useState(false)
   const [quietMode,setQuietMode]=useState(false)
@@ -357,6 +358,7 @@ export default function App(props:Props){
   const [photoBusy,setPhotoBusy]=useState<'avatar'|'cover'|null>(null)
   const photoLock=useRef(false)
   const [profileStats,setProfileStats]=useState<{id:string; data?:FollowStats; error?:boolean}|null>(null)
+  const [personalAnalytics,setPersonalAnalytics]=useState<{posts:number;followers:number;following:number;likes:number;comments:number;reposts:number}|null>(null)
   const [presenceById,setPresenceById]=useState<Record<string,Presence>>({})
   const sharedLinkHandled=useRef(false)
   const [statsRefresh,refreshStats]=useState(0)
@@ -551,7 +553,7 @@ export default function App(props:Props){
     const next=queue[index+direction]
     if(!next&&direction===-1)return
     if(next)setSeen(previous=>new Set(previous).add(next.id))
-    setStoryIndex(0)
+    setStoryIndex(direction===-1&&!demo&&next?activeStories[index-1].stories.length-1:0)
     setOverlay(current=>current?.kind==='story'&&current.person.id===storyId?(next?{kind:'story',person:next}:null):current)
   },[storyId,storyIndex,demoOwn,demoStories,user,demo,activeStories])
   useEffect(()=>{
@@ -635,6 +637,24 @@ export default function App(props:Props){
       .catch(()=>{if(!controller.signal.aborted)setProfileStats({id,error:true})})
     return ()=>controller.abort()
   },[base,demo,page,profile.id,statsRefresh,token])
+  useEffect(()=>{
+    if(demo||!token||stage!=='app')return
+    const update=(online:boolean)=>{void api(base,'/me/presence',json({online},'PUT'),token).catch(()=>{})}
+    const active=()=>Platform.OS==='web'?document.visibilityState==='visible':AppState.currentState==='active'
+    update(active())
+    const timer=setInterval(()=>{if(active())update(true)},30000)
+    const native=Platform.OS==='web'?undefined:AppState.addEventListener('change',state=>update(state==='active'))
+    const visibility=()=>{if(Platform.OS==='web')update(active())}
+    if(Platform.OS==='web')document.addEventListener('visibilitychange',visibility)
+    return ()=>{clearInterval(timer);native?.remove();if(Platform.OS==='web')document.removeEventListener('visibilitychange',visibility);update(false)}
+  },[base,demo,stage,token])
+  useEffect(()=>{
+    if(demo||!token||page!=='Profile'||profile.id!==user.id)return
+    let active=true
+    api<NonNullable<typeof personalAnalytics>>(base,'/me/analytics',{},token)
+      .then(data=>{if(active)setPersonalAnalytics(data)}).catch(()=>{})
+    return ()=>{active=false}
+  },[base,demo,token,page,profile.id,user.id,statsRefresh,posts.length])
   const presenceTarget=page==='Chat'?room?.person.id:page==='Profile'?profile.id:undefined
   useEffect(()=>{
     if(demo||!token||!presenceTarget)return
@@ -650,7 +670,7 @@ export default function App(props:Props){
     return ()=>clearTimeout(timer)
   },[voicePlaying])
   const showProfile=(person:Person)=>open('Profile',{profile:demo?demoAccounts.find(account=>account.person.id===person.id)?.person??person:person})
-  const sharedLink=(kind:'profile'|'post',id:string)=>'https://dameen.app/?'+kind+'='+encodeURIComponent(id)
+  const sharedLink=(kind:'profile'|'post',id:string)=>kind==='profile'&&profile.username?'https://dameen.app/u/'+encodeURIComponent(profile.username):'https://dameen.app/?'+kind+'='+encodeURIComponent(id)
   useEffect(()=>{
     if(sharedLinkHandled.current||stage!=='app'||(!demo&&!token)||Platform.OS!=='web')return
     const params=new URLSearchParams(window.location.search)
@@ -670,6 +690,7 @@ export default function App(props:Props){
   },[stage,token,demo])
   const selectOverlay=(value:Overlay)=>{
     if(value.kind==='editProfile'){setProfileNameDraft(user.name);setBioDraft(user.bio??'')}
+    if(value.kind==='editUsername')setUsernameDraft(user.username??'')
     if(value.kind==='newStory'){setStoryMode('Text');setStoryImage(undefined);setStoryMedia(null);setStoryBackground('#4F25D6')}
     if(overlay)overlayHistory.current.push(overlay)
     clearComment()
@@ -795,6 +816,20 @@ export default function App(props:Props){
       modalClose()
       notify('Profile updated')
     }catch(reason){if(session===demoSession.current)fail(reason)}
+    finally{setBusy(false)}
+  }
+  async function saveUsername(){
+    const username=normalizeUsername(usernameDraft)
+    if(busy||!validUsername(username))return
+    setBusy(true)
+    try{
+      const account=demo?{...user,username,usernameNextChangeAt:new Date(Date.now()+3*86400000).toISOString()}:await call<Viewer>('/me/username',json({username},'PUT'))
+      setUser(account)
+      setProfile(previous=>previous.id===account.id?account:previous)
+      setPosts(previous=>previous.map(post=>post.author.id===account.id?{...post,author:account}:post))
+      modalClose()
+      notify('Username updated')
+    }catch(reason){fail(reason)}
     finally{setBusy(false)}
   }
   async function uploadProfilePhoto(kind:'avatar'|'cover'){
@@ -1084,7 +1119,7 @@ export default function App(props:Props){
   </>
   const ownProfile=profile.id===user.id
   const currentStats=profileStats?.id===profile.id?profileStats:undefined
-  const profilePresence=presenceById[profile.id]
+  const profilePresence=ownProfile&&stage==='app'?{online:true,lastSeen:null}:presenceById[profile.id]
   const demoConnections=(id:string,list:FollowListKind)=>{
     const members=[...people,user]
     const outgoing=(person:Person)=>person.id===user.id?Object.keys(follows).filter(key=>follows[key]):sampleFollows[person.id]??[]
@@ -1096,9 +1131,9 @@ export default function App(props:Props){
   const following=demo?demoConnections(profile.id,'following').length:currentStats?.data?.following
   const profileContent=<>
     <Card style={{padding:0,overflow:'hidden'}}>
-      <View style={{height:136,backgroundColor:'#4F25D6'}}>{profile.cover&&<Image accessibilityLabel="Cover photo" source={{uri:profile.cover}} resizeMode="cover" style={{width:'100%',height:'100%'}}/>}</View>
+      <Pressable accessibilityRole="button" accessibilityLabel="View cover photo" onPress={()=>selectOverlay({kind:'photo',person:profile,photo:'cover'})} style={{height:136,backgroundColor:'#4F25D6'}}>{profile.cover&&<Image accessibilityLabel="Cover photo" source={{uri:profile.cover}} resizeMode="cover" style={{width:'100%',height:'100%'}}/>}</Pressable>
       <View style={{padding:18,paddingTop:0,gap:14}}>
-        <View style={{alignSelf:'flex-start',marginTop:-40}}><Avatar person={profile} size={74} ring/></View>
+        <Pressable accessibilityRole="button" accessibilityLabel="View profile picture" onPress={()=>selectOverlay({kind:'photo',person:profile,photo:'avatar'})} style={{alignSelf:'flex-start',marginTop:-40}}><Avatar person={profile} size={74} ring/></Pressable>
         <View style={{gap:4}}><Copy size={27} weight={800}>{displayHandle(profile)}</Copy>{!!profile.bio&&<Copy color={theme.muted}>{profile.bio}</Copy>}{!demo&&<View style={{...row,gap:5}}><View style={{width:7,height:7,borderRadius:4,backgroundColor:profilePresence?.online?'#2FB66D':theme.muted}}/><Copy size={12} color={profilePresence?.online?'#2FB66D':theme.muted}>{profilePresence?.online?'Online':profilePresence?.lastSeen?'Last seen '+shortTime(profilePresence.lastSeen||''):'Offline'}</Copy></View>}</View>
         <View style={{...row,gap:22,borderTopWidth:1,borderColor:theme.border,paddingTop:12}}>
           {([{label:'Followers',count:followers},{label:'Following',count:following}]).map(({label,count})=>
@@ -1110,7 +1145,7 @@ export default function App(props:Props){
         </View>
         {currentStats?.error&&<Button label="Retry profile counts" variant="secondary" onPress={()=>refreshStats(value=>value+1)}/>}
         <View style={{...row,flexWrap:'wrap'}}>
-          {ownProfile?<><Button label="Edit profile" variant="secondary" onPress={()=>selectOverlay({kind:'editProfile'})}/>{props.pickMedia&&<>
+          {ownProfile?<><Button label="Edit profile" variant="secondary" onPress={()=>selectOverlay({kind:'editProfile'})}/><Button label="Change username" variant="secondary" onPress={()=>selectOverlay({kind:'editUsername'})}/>{props.pickMedia&&<>
             <Button label={photoBusy==='avatar'?'Updating picture…':'Change profile picture'} leading="image" variant="secondary" disabled={!!photoBusy} onPress={()=>void uploadProfilePhoto('avatar')}/>
             <Button label={photoBusy==='cover'?'Updating cover…':'Change cover photo'} variant="secondary" disabled={!!photoBusy} onPress={()=>void uploadProfilePhoto('cover')}/>
           </>}<Button label="Share profile" leading="sh" variant="secondary" onPress={()=>{void props.share?.(sharedLink('profile',profile.id)).then(()=>notify('Profile link ready to share')).catch(fail)}}/><Button label="Settings" leading="settings" variant="secondary" onPress={()=>open('Settings')}/></>:<>
@@ -1121,6 +1156,7 @@ export default function App(props:Props){
         </View>
       </View>
     </Card>
+    {ownProfile&&personalAnalytics&&<Card><Copy weight={800} size={18}>Your analytics</Copy><View style={{...row,flexWrap:'wrap',gap:18}}>{([{label:'Posts',value:personalAnalytics.posts},{label:'Likes received',value:personalAnalytics.likes},{label:'Comments received',value:personalAnalytics.comments},{label:'Reposts',value:personalAnalytics.reposts},{label:'Followers',value:personalAnalytics.followers},{label:'Following',value:personalAnalytics.following}]).map(item=><View key={item.label} style={{minWidth:95,gap:2}}><Copy weight={800} size={20}>{item.value.toLocaleString()}</Copy><Copy color={theme.muted} size={12}>{item.label}</Copy></View>)}</View></Card>}
     {profile.role==='tech'&&<Card><View style={row}><IconTile name="code"/><View style={{flex:1}}><Copy weight={800}>Tech creator</Copy></View></View></Card>}
     {section('Posts')}
     {posts.filter(p=>p.author.id===profile.id).map(post=><PostCard key={post.id} post={post} onReact={react} onOverlay={selectOverlay} onProfile={showProfile}/>)}
@@ -1179,6 +1215,16 @@ export default function App(props:Props){
       <Field label="Bio" value={bioDraft} onChangeText={value=>setBioDraft(Array.from(value).slice(0,50).join(''))} multiline/>
       <Copy color={theme.muted} size={12}>{Array.from(bioDraft).length}/50</Copy>
       <Button label={busy?'Saving…':'Save profile'} onPress={()=>void saveProfile()} disabled={busy||!profileNameDraft.trim()}/></>
+  }else if(overlay?.kind==='editUsername'){
+    const next=user.usernameNextChangeAt?Date.parse(user.usernameNextChangeAt):0
+    const waiting=next>Date.now()
+    sheet=<><Field label="Username" value={usernameDraft} onChangeText={value=>setUsernameDraft(normalizeUsername(value))} maxLength={24} autoCapitalize="none" autoCorrect={false}/>
+      <Copy color={theme.muted} size={12}>{waiting?'You can change it again on '+new Date(next).toLocaleDateString()+'.':'You can change your username once every 3 days.'}</Copy>
+      <Button label={busy?'Saving…':'Save username'} onPress={()=>void saveUsername()} disabled={busy||waiting||!validUsername(usernameDraft)||usernameDraft===user.username}/></>
+  }else if(overlay?.kind==='photo'){
+    const url=overlay.photo==='avatar'?overlay.person.avatar:overlay.person.cover
+    sheet=<View style={{alignItems:'center',gap:18}}>{url?<Image accessibilityLabel={overlay.photo==='avatar'?'Profile picture':'Cover photo'} source={{uri:url}} resizeMode="contain" style={{width:'100%',height:Math.min(460,width*1.15)}}/>:overlay.photo==='avatar'?<Avatar person={overlay.person} size={160}/>:<View style={{backgroundColor:'#4F25D6',width:'100%',height:190}}/>}
+      <Copy weight={800}>{displayHandle(overlay.person)}</Copy></View>
   }else if(overlay?.kind==='create'){
     sheet=<><View style={row}><Avatar person={user}/><PersonName person={user}/></View><Field label="What’s happening?" value={draft} onChangeText={setDraft} multiline maxLength={1200} style={{minHeight:106,textAlignVertical:'top'}}/>
       {attachment&&<View style={spread}><Copy size={12}>{attachment.name}</Copy><IconButton name="close" label="Remove image" onPress={()=>setAttachment(null)}/></View>}
@@ -1206,7 +1252,8 @@ export default function App(props:Props){
   const ModalViewport=props.modalViewport??DefaultModalViewport
   const overlayTitle=overlay?.kind==='connections'?(overlay.list==='followers'?'Followers':'Following')
     :overlay?.kind==='call'?(overlay.ringing?'Ringing':overlay.video?'Video call':'Voice call')
-    :overlay&&overlay.kind!=='story'?{editProfile:'Edit profile',comments:'Comments',share:'Share post',post:'Post detail',create:'Create post',wish:'Happy birthday, Zee!',newStory:'Create story'}[overlay.kind]:''
+    :overlay?.kind==='photo'?overlay.photo==='avatar'?'Profile picture':'Cover photo'
+    :overlay&&overlay.kind!=='story'?{editProfile:'Edit profile',editUsername:'Change username',comments:'Comments',share:'Share post',post:'Post detail',create:'Create post',wish:'Happy birthday, Zee!',newStory:'Create story'}[overlay.kind]:''
   const story=overlay?.kind==='story'?(demoAccounts.find(account=>account.person.id===overlay.person.id)?.person??overlay.person):null
   const liveGroup=story&&!demo?activeStories.find(group=>group.author.id===story.id):undefined
   const activeIndex=liveGroup?Math.min(storyIndex,liveGroup.stories.length-1):0
@@ -1289,12 +1336,12 @@ export default function App(props:Props){
             <IconButton name="close" label="Close story" tint="#fff" onPress={modalClose}/>
           </View>
           <View {...storySwipe.panHandlers} style={{flex:1,minHeight:0,justifyContent:'center',gap:16,paddingBottom:16}}>
-            {personalStory?.image&&<LazyImage uri={personalStory.image} alt="Story photo" style={{width:'100%',flex:1,minHeight:0,objectFit:'contain'}}/>}
+            {personalStory?.image&&<Motion key={story.id+':'+activeIndex} reduced={reduced} axis="x" distance={10} style={{flex:1,minHeight:0}}><LazyImage uri={personalStory.image} alt="Story photo" style={{width:'100%',height:'100%',objectFit:'contain'}}/></Motion>}
             {(personalStory?.video||personalStory?.videoPreview)&&(Platform.OS==='web'&&personalStory?.video?React.createElement('video',{src:personalStory.video,controls:true,autoPlay:true,playsInline:true,style:{width:'100%',maxHeight:'70%',borderRadius:16,backgroundColor:'#000'}}):<View style={{...stack,alignItems:'center'}}><IconTile name="play" size={52} color={lime} background="#FFFFFF19"/><Copy color="#fff" weight={800}>VIDEO · 0:10 MAX</Copy></View>)}
-            {!!storyText&&<Copy center color="#fff" weight={800} size={personalStory?.image?18:28}>{storyText}</Copy>}
-            <View style={{position:'absolute',inset:0,flexDirection:'row'}}>
-              <Pressable accessibilityRole="button" accessibilityLabel="Next story" onPress={()=>moveStory(1)} style={{flex:1}}/>
-              <Pressable accessibilityRole="button" accessibilityLabel="Previous story" onPress={()=>moveStory(-1)} style={{flex:1}}/>
+            {!!storyText&&<Motion key={'caption:'+story.id+':'+activeIndex} reduced={reduced} axis="x" distance={10}><Copy center color="#fff" weight={800} size={personalStory?.image?18:28}>{storyText}</Copy></Motion>}
+            <View pointerEvents="box-none" style={{position:'absolute',inset:0,flexDirection:'row',justifyContent:'space-between'}}>
+              <Pressable accessibilityRole="button" accessibilityLabel="Previous story" onPress={()=>moveStory(-1)} style={{width:'25%',height:'100%'}}/>
+              <Pressable accessibilityRole="button" accessibilityLabel="Next story" onPress={()=>moveStory(1)} style={{width:'25%',height:'100%'}}/>
             </View>
           </View>
           {!demo&&story.id===user.id&&!!liveItem&&<View style={{...row,justifyContent:'center'}}>

@@ -62,6 +62,27 @@ test('profile edits, lesson progress, and shared post lookup use saved account d
   await request(path,{status:401})
   assert.equal((await request(path,{token:visitor.token})).id,post.id)
 })
+test('username cooldown, public preview, presence, and personal analytics',async()=>{
+  const account=await create('Profile Owner')
+  const other=await create('Another User')
+  const current=account.username
+  const updated='new_'+randomUUID().replaceAll('-','').slice(0,12)
+  const token=account.token
+  assert.equal((await request('/public/profiles/'+current)).username,current)
+  const changed=await request('/me/username',{token,method:'PUT',body:{username:updated}})
+  assert.equal(changed.username,updated)
+  assert.ok(Date.parse(changed.usernameNextChangeAt)>Date.now()+2*86400000)
+  await request('/public/profiles/'+current,{status:404})
+  assert.equal((await request('/public/profiles/'+updated)).id,account.user.id)
+  await request('/me/username',{token:other.token,method:'PUT',body:{username:updated},status:409})
+  await request('/me/username',{token,method:'PUT',body:{username:'next_'+updated},status:429})
+  await request('/me/presence',{token,method:'PUT',body:{online:true}})
+  assert.equal((await request('/people/'+account.user.id+'/presence',{token:other.token})).online,true)
+  const analytics=await request('/me/analytics',{token})
+  assert.deepEqual(analytics,{posts:0,followers:0,following:0,likes:0,reposts:0,comments:0})
+  await request('/me/presence',{token,method:'PUT',body:{online:false}})
+  assert.equal((await request('/people/'+account.user.id+'/presence',{token:other.token})).online,false)
+})
 test('API preflight allows both production sites and rejects unknown origins',async()=>{
   for(const origin of ['https://dameen.app','https://dameeland.pages.dev','https://untrusted.example']){
     const response=await fetch(base+'/api/health',{

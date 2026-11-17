@@ -9,7 +9,7 @@ import {lessons,commentGifs,validBirthDate,type BirthdayEntry,storyLimit,storyLi
 
 interface Env {DB:D1Database;MEDIA:R2Bucket;STORIES:KVNamespace;ROOMS:DurableObjectNamespace<ChatRoom>;ALLOWED_ORIGIN:string;VAPID_PUBLIC_KEY?:string;VAPID_PRIVATE_KEY?:string;VAPID_SUBJECT?:string;GOOGLE_CLIENT_ID?:string;GOOGLE_CLIENT_SECRET?:string;GOOGLE_REDIRECT_URI?:string;ADMIN_USER_IDS?:string;RESEND_API_KEY?:string;RECOVERY_FROM?:string}
 type Account={id:string;email:string;name:string;role:Role;salt:string;password_hash:string;username?:string|null;verified?:number;teacher?:number;dob?:string|null}
-type PublicAccount=Pick<Account,'id'|'name'|'role'|'username'|'verified'|'teacher'|'dob'> & {avatar_media?:string|null;cover_media?:string|null;bio?:string|null}
+type PublicAccount=Pick<Account,'id'|'name'|'role'|'username'|'verified'|'teacher'|'dob'> & {avatar_media?:string|null;cover_media?:string|null;bio?:string|null;username_changed_at?:number|null}
 type App={Bindings:Env;Variables:{user:PublicAccount;tokenHash:string}}
 const app=new Hono<App>()
 const encoder=new TextEncoder()
@@ -28,7 +28,7 @@ const now=()=>Date.now()
 const touchPresence=(db:D1Database,userId:string,online:boolean)=>db.prepare('INSERT INTO presence (user_id,online,last_seen) VALUES (?,?,?) ON CONFLICT(user_id) DO UPDATE SET online=excluded.online,last_seen=excluded.last_seen').bind(userId,online?1:0,now()).run()
 const base64Url=(bytes:ArrayBuffer)=>btoa(String.fromCharCode(...new Uint8Array(bytes))).replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,'')
 const isAdmin=(env:Env,id:string)=>env.ADMIN_USER_IDS?.split(',').some(value=>value.trim()===id)??false
-const viewer=(env:Env,account:PublicAccount,url:string)=>({...person(account,url),dob:account.dob??undefined,isAdmin:isAdmin(env,account.id)})
+const viewer=(env:Env,account:PublicAccount,url:string)=>({...person(account,url),dob:account.dob??undefined,usernameNextChangeAt:account.username_changed_at?time(account.username_changed_at+3*86400000):undefined,isAdmin:isAdmin(env,account.id)})
 type NotificationKind='message'|'follow'|'comment'|'reaction'|'call'|'birthday'|'announcement'
 type NotificationPreferenceRow={messages:number;follows:number;comments:number;reactions:number;calls:number;birthdays:number;announcements:number;quiet_start:string|null;quiet_end:string|null}
 type WaitContext={waitUntil:(promise:Promise<unknown>)=>void}
@@ -148,6 +148,15 @@ app.use('/api/*',async(c,next)=>{
   return bodyLimit({maxSize,onError:()=>{throw new HTTPException(413,{message:'The request is too large.'})}})(c,next)
 })
 app.get('/api/health',c=>c.json({ok:true}))
+app.get('/api/public/profiles/:username',async c=>{
+  const username=normalizeUsername(c.req.param('username'))
+  if(!validUsername(username))return c.json({error:'Profile unavailable.'},404)
+  const account=await c.env.DB.prepare('SELECT id,name,role,username,verified,teacher,dob,avatar_media,cover_media,bio FROM users WHERE username=? COLLATE NOCASE').bind(username).first<PublicAccount>()
+  if(!account)return c.json({error:'Profile unavailable.'},404)
+  c.header('Cache-Control','public, max-age=60')
+  const profile=person(account,c.req.url)
+  return c.json({id:profile.id,username:profile.username,name:profile.name,bio:profile.bio,avatar:profile.avatar,cover:profile.cover,detail:profile.detail})
+})
 const usernameOf=(value:unknown)=>typeof value==='string'?normalizeUsername(value):''
 const usernameTaken=(db:D1Database,username:string)=>db.prepare('SELECT 1 FROM users WHERE username=? COLLATE NOCASE').bind(username).first()
 app.get('/api/auth/username',async c=>{
@@ -334,7 +343,7 @@ app.post('/api/google/exchange',async c=>{
   if(attempt.status!=='complete')return c.json({pending:true},202)
   const claimed=await DB.prepare("DELETE FROM google_attempts WHERE state=? AND exchange_hash=? AND status='complete' AND expires>? RETURNING user_id").bind(state,key,now()).first<{user_id:string}>()
   if(!claimed)return c.json({error:'Google sign-in expired. Please try again.'},410)
-  const account=await DB.prepare('SELECT id,name,role,username,verified,teacher,dob,avatar_media,cover_media,bio FROM users WHERE id=?').bind(claimed.user_id).first<PublicAccount>()
+  const account=await DB.prepare('SELECT id,name,role,username,verified,teacher,dob,avatar_media,cover_media,bio,username_changed_at FROM users WHERE id=?').bind(claimed.user_id).first<PublicAccount>()
   if(!account)return c.json({error:'Account unavailable.'},404)
   return c.json(await session(c.env,c.executionCtx,account,c.req.url))
 })
@@ -384,7 +393,7 @@ app.use('/api/*',async(c,next)=>{
   const token=header?.match(/^Bearer ([a-f0-9]{64})$/)?.[1]??ticket
   if(!token||!/^[a-f0-9]{64}$/.test(token)) return c.json({error:'Log in to continue.'},401)
   const tokenHash=await hash(token)
-  const user=await c.env.DB.prepare('SELECT u.id,u.name,u.role,u.username,u.verified,u.teacher,u.dob,u.avatar_media,u.cover_media,u.bio FROM users u JOIN sessions s ON s.user_id=u.id WHERE s.token_hash=? AND s.expires>?').bind(tokenHash,now()).first<PublicAccount>()
+  const user=await c.env.DB.prepare('SELECT u.id,u.name,u.role,u.username,u.verified,u.teacher,u.dob,u.avatar_media,u.cover_media,u.bio,u.username_changed_at FROM users u JOIN sessions s ON s.user_id=u.id WHERE s.token_hash=? AND s.expires>?').bind(tokenHash,now()).first<PublicAccount>()
   if(!user) return c.json({error:'Your session has expired. Log in again.'},401)
   c.set('user',user);c.set('tokenHash',tokenHash)
   await next()
@@ -451,10 +460,40 @@ app.put('/api/me/profile',async c=>{
   if(!name||name.length>120||typeof input?.bio!=='string'||Array.from(bio).length>50)
     return c.json({error:'Enter a name and a bio of up to 50 characters.'},400)
   const [firstName,...rest]=name.split(' ')
-  const account=await c.env.DB.prepare('UPDATE users SET name=?,first_name=?,last_name=?,bio=? WHERE id=? RETURNING id,name,role,username,verified,teacher,dob,avatar_media,cover_media,bio')
+  const account=await c.env.DB.prepare('UPDATE users SET name=?,first_name=?,last_name=?,bio=? WHERE id=? RETURNING id,name,role,username,verified,teacher,dob,avatar_media,cover_media,bio,username_changed_at')
     .bind(name,firstName,rest.join(' '),bio,c.get('user').id).first<PublicAccount>()
   if(!account)return c.json({error:'Profile unavailable.'},404)
   return c.json(viewer(c.env,account,c.req.url))
+})
+app.put('/api/me/username',async c=>{
+  const username=usernameOf((await readBody(c.req.raw))?.username)
+  if(!validUsername(username))return c.json({error:usernameHint},400)
+  const current=c.get('user')
+  if(current.username===username)return c.json(viewer(c.env,current,c.req.url))
+  const changed=await c.env.DB.prepare('UPDATE users SET username=?,username_changed_at=? WHERE id=? AND (username_changed_at IS NULL OR username_changed_at<=?) RETURNING id,name,role,username,verified,teacher,dob,avatar_media,cover_media,bio,username_changed_at')
+    .bind(username,now(),current.id,now()-3*86400000).first<PublicAccount>().catch(error=>{
+      if(String(error).includes('UNIQUE constraint failed'))return null
+      throw error
+    })
+  if(changed)return c.json(viewer(c.env,changed,c.req.url))
+  const existing=await c.env.DB.prepare('SELECT username_changed_at FROM users WHERE id=?').bind(current.id).first<{username_changed_at:number|null}>()
+  if(existing?.username_changed_at&&now()-existing.username_changed_at<3*86400000)return c.json({error:'You can change your username again after '+time(existing.username_changed_at+3*86400000)+'.',nextChangeAt:time(existing.username_changed_at+3*86400000)},429)
+  return c.json({error:'That username is taken.'},409)
+})
+app.put('/api/me/presence',async c=>{
+  await touchPresence(c.env.DB,c.get('user').id,(await readBody(c.req.raw))?.online===true)
+  return c.json({ok:true})
+})
+app.get('/api/me/analytics',async c=>{
+  const data=await c.env.DB.prepare(`SELECT
+    (SELECT COUNT(*) FROM posts WHERE author=?1) posts,
+    (SELECT COUNT(*) FROM follows WHERE target=?1) followers,
+    (SELECT COUNT(*) FROM follows WHERE follower=?1) following,
+    (SELECT COUNT(*) FROM reactions r JOIN posts p ON p.id=r.post_id WHERE p.author=?1 AND r.kind='like') likes,
+    (SELECT COUNT(*) FROM reactions r JOIN posts p ON p.id=r.post_id WHERE p.author=?1 AND r.kind='repost') reposts,
+    (SELECT COUNT(*) FROM comments x JOIN posts p ON p.id=x.post_id WHERE p.author=?1) comments`).bind(c.get('user').id).first()
+  c.header('Cache-Control','no-store')
+  return c.json(data)
 })
 app.get('/api/me/lessons',async c=>{
   c.header('Cache-Control','no-store')
@@ -964,8 +1003,7 @@ export class ChatRoom extends DurableObject<Env>{
     }
     if(!peers.length&&signal.kind==='offer')sender.send(JSON.stringify({type:'call',signal:{kind:'unavailable',id:signal.id}}))
   }
-  webSocketClose(sender:WebSocket){const [user]=this.ctx.getTags(sender);if(user)void this.setPresence(user,false)}
-  webSocketError(sender:WebSocket){const [user]=this.ctx.getTags(sender);if(user)void this.setPresence(user,false)}
+  // The active app heartbeat owns the session state. Closing a chat must not mark the app offline.
 
 }
 export default app
