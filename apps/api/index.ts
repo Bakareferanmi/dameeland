@@ -101,17 +101,18 @@ function queueWelcomeEmail(env:Env,ctx:WaitContext,userId:string){
   const {DB,RESEND_API_KEY,RECOVERY_FROM}=env
   if(!RESEND_API_KEY||!RECOVERY_FROM)return
   ctx.waitUntil((async()=>{
-    const account=await DB.prepare('SELECT email FROM users WHERE id=? AND welcome_email_sent_at IS NULL')
-      .bind(userId).first<{email:string}>()
+    const account=await DB.prepare('SELECT email,welcome_email_delivery_key FROM users WHERE id=? AND welcome_email_sent_at IS NULL')
+      .bind(userId).first<{email:string;welcome_email_delivery_key:string}>()
     if(!account)return
     const response=await sendAccountEmail(RESEND_API_KEY,RECOVERY_FROM,account.email,{
       subject:welcomeTitle,
       text:welcomeEmailText,
       html:welcomeEmailHtml,
-      idempotencyKey:'dameen/welcome/'+userId,
+      idempotencyKey:'dameen/welcome/brand-v2/'+userId+'/'+account.welcome_email_delivery_key,
     })
     if(!response.ok){console.error('Welcome email delivery rejected',response.status);return}
-    await DB.prepare('UPDATE users SET welcome_email_sent_at=? WHERE id=? AND welcome_email_sent_at IS NULL').bind(now(),userId).run()
+    await DB.prepare('UPDATE users SET welcome_email_sent_at=? WHERE id=? AND welcome_email_sent_at IS NULL AND welcome_email_delivery_key=?')
+      .bind(now(),userId,account.welcome_email_delivery_key).run()
   })().catch(()=>console.error('Welcome email delivery failed')))
 }
 async function session(env:Env,ctx:WaitContext,account:PublicAccount,url:string){
