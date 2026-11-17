@@ -9,7 +9,7 @@ import './interactions.css'
 const params=new URLSearchParams(location.search)
 const offline=location.protocol==='file:'||document.documentElement.dataset.preview==='true'
 const phone=params.get('view')==='phone'||document.documentElement.dataset.view==='phone'
-const demo=offline||params.get('demo')==='1'
+const demo=offline||(import.meta.env.DEV&&params.get('demo')==='1')
 const initialTheme=params.get('theme')==='dark'||matchMedia('(prefers-color-scheme: dark)').matches?'dark':'light'
 const font=(weight:number)=>({fontFamily:'Plus Jakarta Sans Variable, sans-serif',fontWeight:String(weight)})
 const storageKey='dameeland-session'

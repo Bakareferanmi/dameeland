@@ -3,7 +3,7 @@ import {dailyLesson} from './learningCatalog'
 import {browserCallMedia,RoomCall,useRoomCall,type CallMedia} from './calls'
 import {readCallSignal,type CallSignal} from './callSignal'
 import React,{lazy,Suspense,useCallback,useEffect,useLayoutEffect,useRef,useState} from 'react'
-import {AccessibilityInfo,Animated,AppState,BackHandler,Easing,Image,Modal,PanResponder,Platform,Pressable,ScrollView,View,useWindowDimensions,type ViewStyle} from 'react-native'
+import {AccessibilityInfo,Animated,AppState,BackHandler,Easing,Image,Modal,PanResponder,Platform,Pressable,RefreshControl,ScrollView,View,useWindowDimensions,type ViewStyle} from 'react-native'
 import {api,birthdayToday,validBirthDate,storyLifetime,capitalizeName,normalizeUsername,usernameHint,validUsername,initialChats,initialComments,initialPosts,initials,lime,me,people,questions,slides,themes,type FollowListKind,type FollowPage,type FollowStats,type Note,type Person,type Post,type BirthdayEntry,type Role,type StoryGroup,type Theme} from './index'
 import {Avatar,Button,Card,Copy,Design,displayHandle,Field,Icon,IconButton,IconTile,Logo,PersonName,ScreenLinks,Segmented,VerifiedBadge,row,spread,stack,useDesign,type Glyph,type IconRendererProps} from './ui'
 import type {ExtraPage} from './FeatureScreens'
@@ -174,7 +174,7 @@ function Auth({base,demo,busy,error,submit,onGoogle,onCancelGoogle,googlePending
       {mode==='login'&&<Button label="Forgot password or username?" variant="plain" disabled={busy} onPress={()=>setRecovering(true)}/>}
       <GoogleButton signup={mode==='signup'} disabled={busy||mode==='signup'&&usernameStatus==='taken'} onPress={()=>onGoogle(mode,handle,birthIso(birth))}/>
       {googlePending&&<Button label="Cancel Google sign-in" variant="plain" onPress={onCancelGoogle}/>}
-      <Button label="Explore demo" variant="secondary" onPress={onDemo}/><Copy color={theme.muted} center size={12}>Look around with sample data. Nothing is saved.</Copy>
+      {demo&&<><Button label="Explore demo" variant="secondary" onPress={onDemo}/><Copy color={theme.muted} center size={12}>Look around with sample data. Nothing is saved.</Copy></>}
       {Platform.OS==='web'&&!demo&&React.createElement('a',{href:'/about/',style:{color:theme.ink,textAlign:'center',fontSize:13}},'About dameen')}
       </>}
     </Motion>
@@ -384,6 +384,9 @@ export default function App(props:Props){
   const replyTimers=useRef<ReturnType<typeof setTimeout>[]>([])
   const demoSession=useRef(0)
   const [retry,setRetry]=useState(0)
+  const [refreshing,setRefreshing]=useState(false)
+  const refreshLock=useRef(false)
+  const pullStart=useRef<{x:number;y:number}|null>(null)
   const call=<T,>(path:string,options?:RequestInit)=>api<T>(base,path,options,token)
   const notify=(message:string,tone:ToastMessage['tone']='success')=>setToast({id:uid(),message,tone})
   const dismissToast=(id:string)=>setToast(current=>current?.id===id?null:current)
@@ -737,7 +740,7 @@ export default function App(props:Props){
   async function authenticateWithGoogle(mode:AuthMode,username:string,dob:string){
     if(busy)return
     setError('')
-    if(demo||!props.openGoogle){setError('Google sign-in is available in the connected app. Use Explore demo to continue here.');return}
+    if(demo||!props.openGoogle){setError('Google sign-in is unavailable right now.');return}
     if(mode==='signup'&&!validUsername(username)){setError('Choose a username to sign up with Google. '+usernameHint);return}
     if(mode==='signup'&&!validBirthDate(dob)){setError('Enter your date of birth to sign up with Google.');return}
     setBusy(true)
@@ -987,6 +990,55 @@ export default function App(props:Props){
     }catch(reason){fail(reason)}finally{setBusy(false)}
   }
   const displayedPosts=demo&&followingOnly?posts.filter(p=>p.author.id===user.id||follows[p.author.id]):posts
+  async function refreshPage(){
+    if(refreshLock.current||stage!=='app')return
+    refreshLock.current=true
+    setRefreshing(true)
+    const session=demoSession.current
+    try{
+      if(!demo&&token){
+        if(page==='Home'){
+          const [feed,stories,birthdays]=await Promise.all([
+            api<Post[]>(base,'/feed'+(followingOnly?'?following=1':''),{},token),
+            api<StoryGroup[]>(base,'/stories',{},token),
+            api<BirthdayEntry[]>(base,'/birthdays',{},token),
+          ])
+          if(session===demoSession.current){setPosts(feed);setLiveStories(stories);setBirthdays(birthdays);setFeedError('')}
+        }else if(page==='Explore'){
+          const people=await api<(Person&{following:boolean})[]>(base,'/people?q='+encodeURIComponent(query),{},token)
+          if(session===demoSession.current){setResults(people);setFollows(previous=>({...previous,...Object.fromEntries(people.map(person=>[person.id,person.following]))}));setSearchError('')}
+        }else if(page==='Messages'){
+          const rooms=await api<Room[]>(base,'/rooms',{},token)
+          if(session===demoSession.current)setRooms(rooms)
+        }else if(page==='Chat'&&room){
+          const messages=await api<Note[]>(base,'/rooms/'+room.id+'/messages',{},token)
+          if(session===demoSession.current)setChats(previous=>({...previous,[room.id]:messages}))
+        }else if(page==='Profile'){
+          const [person,stats]=await Promise.all([
+            api<Person|Viewer>(base,profile.id===user.id?'/me':'/people/'+encodeURIComponent(profile.id),{},token),
+            api<FollowStats>(base,'/people/'+encodeURIComponent(profile.id)+'/follow-stats',{},token),
+          ])
+          if(session===demoSession.current){setProfile(person);if(profile.id===user.id)setUser(person as Viewer);setProfileStats({id:profile.id,data:stats});setFollows(previous=>({...previous,[profile.id]:stats.followedByViewer}));refreshStats(value=>value+1)}
+        }else if(page==='Learn'||page==='Lesson'||page==='Progress'){
+          const completed=await api<string[]>(base,'/me/lessons',{},token)
+          if(session===demoSession.current)setCompletedLessons(completed)
+        }else if(page==='Birthdays'){
+          const entries=await api<BirthdayEntry[]>(base,'/birthdays',{},token)
+          if(session===demoSession.current)setBirthdays(entries)
+        }else if(page==='Birthday wall'){
+          const entries=await api<Array<{body:string;created:string;author:Person}>>(base,'/people/'+encodeURIComponent(user.id)+'/birthday-wall',{},token)
+          if(session===demoSession.current)setBirthdayWall(entries)
+        }else if(page==='Settings'){
+          const preferences=await api<{quiet_start?:string|null;quiet_end?:string|null}>(base,'/notification-preferences',{},token)
+          if(session===demoSession.current){setQuietStart(preferences.quiet_start??'');setQuietEnd(preferences.quiet_end??'')}
+        }else if(page==='Notifications'){
+          const notifications=await api<{unread:number;items:NotificationItem[]}>(base,'/notifications',{},token)
+          if(session===demoSession.current){setNotificationItems(notifications.items);setUnread(notifications.unread>0)}
+        }else setRetry(value=>value+1)
+      }
+    }catch(reason){if(session===demoSession.current)fail(reason)}
+    finally{refreshLock.current=false;setRefreshing(false)}
+  }
   const displayedPeople=demo?people.map(person=>demoAccounts.find(account=>account.person.id===person.id)?.person??person).filter(p=>(displayHandle(p)+' '+p.detail).toLowerCase().includes(query.trim().toLowerCase())):results
   const canShare=Boolean(props.share)
   const overlays=overlay?[...overlayHistory.current,overlay]:[]
@@ -1287,6 +1339,18 @@ export default function App(props:Props){
             </View>
           </View>
           <ScrollView key={page==='Chat'?'chat:'+room?.id:page==='Profile'?'profile:'+profile.id:page} ref={scroll} testID="main-scroll" style={{flex:1}} keyboardShouldPersistTaps="handled" keyboardDismissMode="on-drag"
+            refreshControl={Platform.OS==='web'?undefined:<RefreshControl refreshing={refreshing} onRefresh={()=>void refreshPage()} tintColor={theme.purple} colors={[theme.purple]}/>}
+            onTouchStart={event=>{
+              if(Platform.OS!=='web'||pageScroll.current>2)return
+              const touch=event.nativeEvent.touches[0]
+              if(touch)pullStart.current={x:touch.pageX,y:touch.pageY}
+            }}
+            onTouchEnd={event=>{
+              const origin=pullStart.current
+              pullStart.current=null
+              const touch=event.nativeEvent.changedTouches[0]
+              if(Platform.OS==='web'&&origin&&touch&&pageScroll.current<2&&touch.pageY-origin.y>75&&Math.abs(touch.pageX-origin.x)<60)void refreshPage()
+            }}
             scrollEventThrottle={64} onScroll={({nativeEvent})=>{
               const {contentOffset,contentSize,layoutMeasurement}=nativeEvent
               if(!pendingOffset.current){
@@ -1301,6 +1365,7 @@ export default function App(props:Props){
               }else restorePageScroll()
             }}
             contentContainerStyle={{padding:desktop?20:13,gap:16,width:'100%',maxWidth:640,alignSelf:'center'}}>
+            {Platform.OS==='web'&&refreshing&&<Copy center color={theme.muted}>Refreshing…</Copy>}
             <Motion key={page} reduced={reduced} distance={0} style={stack}>{content[page]??<Suspense fallback={<LoadingScreen compact/>}><FeatureScreen key={page} page={page as ExtraPage} open={open} demo={demo} user={user} startQuiz={startQuiz} completed={completedLessons.length>0} wish={()=>selectOverlay({kind:'wish'})} wishes={wishes} incomingCall={()=>selectOverlay({kind:'call',video:false,person:people[0],ringing:true,incoming:true})}/></Suspense>}</Motion></ScrollView>
           {page==='Chat'&&<View style={{...row,padding:10,borderTopWidth:1,borderColor:theme.border,backgroundColor:theme.card}}><View style={{flex:1}}><Field label="Message" placeholder="Write a message" value={message} onChangeText={setMessage} onSubmitEditing={()=>void send()} maxLength={800}/></View><View style={{alignSelf:'flex-end'}}><Button label="Send" trailing="send" disabled={busy||!message.trim()} onPress={()=>void send()}/></View></View>}
           {!desktop&&<View style={{...row,gap:0,justifyContent:'space-around',minHeight:64,paddingHorizontal:6,borderTopWidth:1,borderColor:theme.border,backgroundColor:theme.card}}>{tabs.slice(0,2).map(([name,glyph])=>navButton(name,glyph))}<View style={{width:61,alignItems:'center',marginTop:-13}}><IconButton name="plus" label="Create post" size={26} solid onPress={compose}/></View>{tabs.slice(2).map(([name,glyph])=>navButton(name,glyph))}</View>}
