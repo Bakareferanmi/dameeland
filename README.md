@@ -43,7 +43,7 @@ npm -w @dameeland/mobile run start -- --go --lan
 
 Scan the Metro QR code using Expo Go for SDK 58 on a phone connected to the same network. If LAN access is unavailable, sign into Expo from `apps/mobile` with `npx expo login`, then run `npm -w @dameeland/mobile run start -- --go --tunnel` from the workspace root.
 
-Expo development starts in demo mode by default. Production exports load the existing Worker URL from `apps/mobile/.env.production`. To connect a simulator or physical device to the local API, set `EXPO_PUBLIC_API_URL` in `apps/mobile/.env.local`. Use `http://localhost:8787` for iOS Simulator or `http://10.0.2.2:8787` for the standard Android emulator. For a physical device, use the development machine's LAN address and start Wrangler with `npm -w @dameeland/api run dev -- --ip 0.0.0.0` on a trusted local network.
+The mobile app uses the same live Worker as dameen.app by default. Set `EXPO_PUBLIC_DEMO=1` to start in demo mode. To connect a simulator or physical device to the local API, set `EXPO_PUBLIC_API_URL` in `apps/mobile/.env.local`. Use `http://localhost:8787` for iOS Simulator or `http://10.0.2.2:8787` for the standard Android emulator. For a physical device, use the development machine's LAN address and start Wrangler with `npm -w @dameeland/api run dev -- --ip 0.0.0.0` on a trusted local network.
 
 ## Production deployment
 

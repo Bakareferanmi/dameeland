@@ -72,8 +72,7 @@ export default function App(){
   const theme=useColorScheme()==='dark'?'dark':'light'
   const offline=Platform.OS==='web'&&document.documentElement.dataset.preview==='true'
   const [loaded,error]=useFonts(offline?{}:{PlusJakartaSans_500Medium,PlusJakartaSans_700Bold,PlusJakartaSans_800ExtraBold})
-  const configuredBase=process.env.EXPO_PUBLIC_API_URL
-  const base=configuredBase??(Platform.OS==='android'?'http://10.0.2.2:8787':'http://localhost:8787')
-  const demo=offline||process.env.EXPO_PUBLIC_DEMO==='1'||!configuredBase
+  const base=process.env.EXPO_PUBLIC_API_URL?.trim()||'https://dameeland-api.bakareferanmi96.workers.dev'
+  const demo=offline||process.env.EXPO_PUBLIC_DEMO==='1'
   return <SafeAreaProvider><SafeAreaView style={{flex:1,backgroundColor:theme==='dark'?'#120D1F':'#FAF8FF'}}>{loaded||error?<Dameeland phone={offline} demo={demo} base={base} callMedia={callMedia} renderIcon={HugeiconsIcon} initialTheme={theme} font={error?()=>({}):font} loadToken={loadToken} saveToken={saveToken} openGoogle={openGoogle} modalViewport={Platform.OS==='web'?undefined:NativeModalViewport} pickMedia={pickMedia} renderGif={CommentGif} share={share} requestNotifications={requestNotifications} getNotificationDevice={getNotificationDevice} notifyDevice={notifyDevice}/>:<LoadingScreen/>}</SafeAreaView></SafeAreaProvider>
 }
