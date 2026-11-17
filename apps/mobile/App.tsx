@@ -18,7 +18,7 @@ const font=(weight:number)=>({fontFamily:names[weight as keyof typeof names]??na
 const tokenKey='dameeland-session'
 const loadToken=()=>SecureStore.getItemAsync(tokenKey)
 const saveToken=(value:string|null)=>value?SecureStore.setItemAsync(tokenKey,value):SecureStore.deleteItemAsync(tokenKey)
-const share=async(message:string)=>{await Share.share({message})}
+const share=async(url:string)=>{await Share.share(Platform.OS==='ios'?{url}:{message:url})}
 Notifications.setNotificationHandler({handleNotification:async()=>({shouldShowAlert:true,shouldShowBanner:true,shouldShowList:true,shouldPlaySound:true,shouldSetBadge:true})})
 const requestNotifications=async()=>{
   const current=await Notifications.getPermissionsAsync()

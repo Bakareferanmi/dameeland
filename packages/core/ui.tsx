@@ -96,7 +96,7 @@ export function Avatar({person,size=44,ring=false,seen=false}:{person:Person;siz
   const {theme}=useDesign()
   const radius=person.role==='tech'?size*.28:size/2
   return <View style={ring?{borderWidth:1.5,borderColor:seen?theme.border:theme.purple,borderRadius:radius+4,padding:3}:undefined}>
-    <View style={{width:size,height:size,borderRadius:radius,backgroundColor:person.color,overflow:'hidden',alignItems:'center',justifyContent:'center'}}><Copy color="#1B1233" size={size*.29} weight={800}>{person.initials}</Copy>{person.avatar&&<Image accessibilityLabel={person.name+' profile photo'} source={{uri:person.avatar}} resizeMode="cover" style={{position:'absolute',width:size,height:size}}/>}</View>
+    <View style={{width:size,height:size,borderRadius:radius,backgroundColor:person.color,overflow:'hidden',alignItems:'center',justifyContent:'center'}}><Copy color="#1B1233" size={size*.29} weight={800}>{person.username?person.username.slice(0,2).toUpperCase():person.initials}</Copy>{person.avatar&&<Image accessibilityLabel={displayHandle(person)+' profile photo'} source={{uri:person.avatar}} resizeMode="cover" style={{position:'absolute',width:size,height:size}}/>}</View>
   </View>
 }
 
@@ -105,9 +105,11 @@ export function VerifiedBadge({person}:{person:Person}){
   if(!person.teacher&&!person.verified)return null
   return <View accessibilityLabel={person.teacher?'Verified teacher':'Verified'} style={{backgroundColor:person.teacher?teacherGold:theme.purple,width:16,height:16,borderRadius:8,alignItems:'center',justifyContent:'center'}}><Icon name="check" size={11} color="#fff" strong/></View>
 }
+export const displayHandle=(person:Person)=>person.group?person.name:'@'+(person.username??('member_'+person.id.slice(0,8)))
+
 export function PersonName({person}:{person:Person}){
   return <View style={{...row,gap:5}}>
-    <Copy weight={800}>{person.name}</Copy>
+    <Copy weight={800}>{displayHandle(person)}</Copy>
     <VerifiedBadge person={person}/>
   </View>
 }

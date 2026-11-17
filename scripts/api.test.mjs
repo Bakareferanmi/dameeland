@@ -38,6 +38,30 @@ const openSocket=(path,token,origin)=>new Promise((resolve,reject)=>{
   socket.addEventListener('open',()=>{clearTimeout(timer);resolve(socket)},{once:true})
   socket.addEventListener('error',()=>{clearTimeout(timer);reject(new Error('WebSocket handshake failed'))},{once:true})
 })
+test('profile edits, lesson progress, and shared post lookup use saved account data',async()=>{
+  const account=await create('Dameen Test')
+  const visitor=await create('Dameen Visitor')
+  const token=account.token
+  const bio='📚'.repeat(50)
+  const profile={name:'Dameen Updated',bio}
+  await request('/me/profile',{token,method:'PUT',body:{...profile,bio:bio+'!'},status:400})
+  const saved=await request('/me/profile',{token,method:'PUT',body:profile})
+  assert.equal(saved.name,profile.name)
+  assert.equal(saved.username,account.username)
+  assert.equal((await request('/people/'+account.user.id,{token:visitor.token})).bio,bio)
+  const lesson='/me/lessons/quadratics'
+  await request(lesson,{token,method:'PUT',body:{answer:1},status:400})
+  assert.deepEqual(await request('/me/lessons',{token}),[])
+  for(let attempt=0;attempt<2;attempt++)await request(lesson,{token,method:'PUT',body:{answer:0}})
+  assert.deepEqual(await request('/me/lessons',{token}),['quadratics'])
+  assert.deepEqual(await request('/me/lessons',{token:visitor.token}),[])
+  const form=new FormData()
+  form.append('body','A post opened from a shared link')
+  const post=await request('/posts',{token,method:'POST',form,status:201})
+  const path='/posts/'+post.id
+  await request(path,{status:401})
+  assert.equal((await request(path,{token:visitor.token})).id,post.id)
+})
 test('API preflight allows both production sites and rejects unknown origins',async()=>{
   for(const origin of ['https://dameen.app','https://dameeland.pages.dev','https://untrusted.example']){
     const response=await fetch(base+'/api/health',{

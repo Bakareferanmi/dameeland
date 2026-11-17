@@ -1,9 +1,11 @@
+import {Learning,LearningProgress,StudyLesson} from './Learning'
+import {dailyLesson} from './learningCatalog'
 import {browserCallMedia,RoomCall,useRoomCall,type CallMedia} from './calls'
 import {readCallSignal,type CallSignal} from './callSignal'
 import React,{lazy,Suspense,useCallback,useEffect,useLayoutEffect,useRef,useState} from 'react'
 import {AccessibilityInfo,Animated,BackHandler,Easing,Image,Modal,PanResponder,Platform,Pressable,ScrollView,View,useWindowDimensions,type ViewStyle} from 'react-native'
 import {api,birthdayToday,validBirthDate,storyLifetime,capitalizeName,normalizeUsername,usernameHint,validUsername,initialChats,initialComments,initialPosts,initials,lime,me,people,questions,slides,themes,type FollowListKind,type FollowPage,type FollowStats,type Note,type Person,type Post,type BirthdayEntry,type Role,type StoryGroup,type Theme} from './index'
-import {Avatar,Button,Card,Copy,Design,Field,Icon,IconButton,IconTile,Logo,PersonName,ScreenLinks,Segmented,VerifiedBadge,row,spread,stack,useDesign,type Glyph,type IconRendererProps} from './ui'
+import {Avatar,Button,Card,Copy,Design,displayHandle,Field,Icon,IconButton,IconTile,Logo,PersonName,ScreenLinks,Segmented,VerifiedBadge,row,spread,stack,useDesign,type Glyph,type IconRendererProps} from './ui'
 import type {ExtraPage} from './FeatureScreens'
 import {LoadingScreen} from './LoadingScreen'
 import {GoogleButton} from './GoogleButton'
@@ -54,11 +56,11 @@ type Props={
   openGoogle?:(getUrl:()=>Promise<string>)=>Promise<GoogleWindow>;
   callMedia?:CallMedia;
   modalViewport?:React.ComponentType<{color:string;children:React.ReactNode}>;
-  pickMedia?:()=>Promise<Media|null>; renderGif?:GifRenderer; share?:(text:string)=>Promise<void>;
+  pickMedia?:()=>Promise<Media|null>; renderGif?:GifRenderer; share?:(url:string)=>Promise<void>;
   requestNotifications?:()=>Promise<boolean>; getNotificationDevice?:()=>Promise<{platform:'android'|'ios';token:string}|null>; notifyDevice?:(title:string,body:string)=>Promise<void>;
 }
-type Overlay={kind:'connections';list:FollowListKind;person:Person}|{kind:'comments'|'share'|'post';post:Post}|{kind:'story';person:Person}|{kind:'create'|'wish'|'newStory'}|{kind:'call';video:boolean;person:Person;ringing?:boolean;incoming?:boolean}
-type PageEntry={page:Page;profile:Person;room:Room|null;overlays:Overlay[];scrollY:number}
+type Overlay={kind:'connections';list:FollowListKind;person:Person}|{kind:'comments'|'share'|'post';post:Post}|{kind:'story';person:Person}|{kind:'create'|'wish'|'newStory'|'editProfile'}|{kind:'call';video:boolean;person:Person;ringing?:boolean;incoming?:boolean}
+type PageEntry={page:Page;profile:Person;room:Room|null;overlays:Overlay[];scrollY:number;lessonId:string}
 const tabs:[Page,Glyph][]=[['Home','home'],['Learn','book'],['Explore','search'],['Play','game']]
 const localRooms=people.filter(p=>p.id in initialChats).map(person=>({id:person.id,person}))
 const storyPeople=[people[0],people[3],people[4],people[2],people[1]]
@@ -125,7 +127,7 @@ function Intro({step,onNext,onBack,onSkip,reduced,desktop}:{step:number;onNext:(
     </View>
   </ScrollView>
 }
-function Auth({base,demo,busy,error,submit,onGoogle,onCancelGoogle,googlePending,onDemo,reduced}:{base:string;demo:boolean;busy:boolean;error:string;submit:(mode:'signup'|'login',values:Credentials)=>void;onGoogle:(mode:AuthMode,username:string,dob:string)=>void;onCancelGoogle:()=>void;googlePending:boolean;onDemo:()=>void;reduced:boolean}){
+function Auth({base,demo,busy,error,submit,onGoogle,onCancelGoogle,googlePending,onDemo,reduced,recovering,setRecovering}:{base:string;demo:boolean;busy:boolean;error:string;submit:(mode:'signup'|'login',values:Credentials)=>void;onGoogle:(mode:AuthMode,username:string,dob:string)=>void;onCancelGoogle:()=>void;googlePending:boolean;onDemo:()=>void;reduced:boolean;recovering:boolean;setRecovering:(value:boolean)=>void}){
   const [mode,setMode]=useState<'signup'|'login'>('signup')
   const [firstName,setFirstName]=useState(''),[lastName,setLastName]=useState('')
   const [username,setUsername]=useState('')
@@ -145,7 +147,6 @@ function Auth({base,demo,busy,error,submit,onGoogle,onCancelGoogle,googlePending
   const [email,setEmail]=useState(''),[password,setPassword]=useState('')
   const [birth,setBirth]=useState<BirthDraft>(emptyBirth)
   const [show,setShow]=useState(false)
-  const [recovering,setRecovering]=useState(false)
   const {theme}=useDesign()
   return <ScrollView keyboardShouldPersistTaps="handled" contentContainerStyle={{flexGrow:1,justifyContent:'center',padding:20}}>
     <Motion reduced={reduced} style={{...stack,width:'100%',maxWidth:448,alignSelf:'center'}}>
@@ -174,6 +175,7 @@ function Auth({base,demo,busy,error,submit,onGoogle,onCancelGoogle,googlePending
       <GoogleButton signup={mode==='signup'} disabled={busy||mode==='signup'&&usernameStatus==='taken'} onPress={()=>onGoogle(mode,handle,birthIso(birth))}/>
       {googlePending&&<Button label="Cancel Google sign-in" variant="plain" onPress={onCancelGoogle}/>}
       <Button label="Explore demo" variant="secondary" onPress={onDemo}/><Copy color={theme.muted} center size={12}>Look around with sample data. Nothing is saved.</Copy>
+      {Platform.OS==='web'&&!demo&&React.createElement('a',{href:'/about/',style:{color:theme.ink,textAlign:'center',fontSize:13}},'About dameen')}
       </>}
     </Motion>
   </ScrollView>
@@ -223,7 +225,7 @@ function UploadedMedia({post}:{post:Post}){
 function PostCard({post,onReact,onOverlay,onProfile,detail=false}:{post:Post;detail?:boolean;onReact:(p:Post,k:'like'|'repost')=>void;onOverlay:(o:Overlay)=>void;onProfile:(p:Person)=>void}){
   const {theme}=useDesign()
   return <Card style={{padding:14,gap:9}}>
-    <Pressable accessibilityRole="button" accessibilityLabel={'Open '+post.author.name+' profile'} onPress={()=>onProfile(post.author)} style={row}><Avatar person={post.author} size={40}/><View style={{flex:1}}><PersonName person={post.author}/><Copy color={theme.muted} size={12}>{shortTime(post.time)}</Copy></View></Pressable>
+    <Pressable accessibilityRole="button" accessibilityLabel={'Open '+displayHandle(post.author)+' profile'} onPress={()=>onProfile(post.author)} style={row}><Avatar person={post.author} size={40}/><View style={{flex:1}}><PersonName person={post.author}/><Copy color={theme.muted} size={12}>{shortTime(post.time)}</Copy></View></Pressable>
     {!!post.body&&(detail?<Copy size={15}>{post.body}</Copy>:<Pressable accessibilityRole="button" accessibilityLabel="Open post details" onPress={()=>onOverlay({kind:'post',post})} style={{minHeight:32,justifyContent:'center'}}><Copy size={15}>{post.body}</Copy></Pressable>)}
     {post.media?<UploadedMedia post={post}/>:post.kind&&<PreviewMedia kind={post.kind}/>} 
     <View style={{...row,justifyContent:'space-between',gap:1,borderTopWidth:1,borderColor:theme.border,paddingTop:3}}><IconButton name={post.liked?'heartOn':'heart'} label={post.liked?'Unlike post':'Like post'} active={post.liked} count={post.likes} onPress={()=>onReact(post,'like')}/><IconButton name="cm" label="Comments" count={post.comments} onPress={()=>onOverlay({kind:'comments',post})}/><IconButton name="rp" label={post.reposted?'Undo repost':'Repost'} active={post.reposted} count={post.reposts} onPress={()=>onReact(post,'repost')}/><IconButton name="sh" label="Share post" onPress={()=>onOverlay({kind:'share',post})}/></View>
@@ -254,7 +256,7 @@ function ConnectionList({base,token,profile,list,samples,onProfile}:{base:string
   },[base,token,profile.id,list,cursor,revision,sampleMode])
   const entries=samples??people
   return <>
-    {entries.map(person=><Pressable key={person.id} accessibilityRole="button" accessibilityLabel={'View '+person.name+' profile'} onPress={()=>onProfile(person)} style={{...row,minHeight:52}}>
+    {entries.map(person=><Pressable key={person.id} accessibilityRole="button" accessibilityLabel={'View '+displayHandle(person)+' profile'} onPress={()=>onProfile(person)} style={{...row,minHeight:52}}>
       <Avatar person={person}/><View style={{flex:1}}><PersonName person={person}/><Copy size={12} color={theme.muted}>{person.detail}</Copy></View>
     </Pressable>)}
     {loading&&<Copy color={theme.muted}>Loading people…</Copy>}
@@ -308,6 +310,7 @@ export default function App(props:Props){
   const [starting,setStarting]=useState(true)
   const [stage,setStage]=useState<'intro'|'auth'|'app'|'restore'>(props.loadToken&&!demo?'restore':'intro')
   const [step,setStep]=useState(0)
+  const [recovering,setRecovering]=useState(false)
   const [user,setUser]=useState<Viewer>(me),[token,setToken]=useState('')
   const [page,setPage]=useState<Page>('Home')
   const pageHistory=useRef<PageEntry[]>([])
@@ -336,7 +339,12 @@ export default function App(props:Props){
   const [storyRefresh,setStoryRefresh]=useState(0)
   const [clock,setClock]=useState(()=>Date.now())
   const [wishes,setWishes]=useState<string[]>([])
-  const [lessonComplete,setLessonComplete]=useState(false)
+  const [lessonId,setLessonId]=useState(()=>dailyLesson().id)
+  const [completedLessons,setCompletedLessons]=useState<string[]>([])
+  const [learningError,setLearningError]=useState(false)
+  const [learningRetry,setLearningRetry]=useState(0)
+  const [profileNameDraft,setProfileNameDraft]=useState('')
+  const [bioDraft,setBioDraft]=useState('')
   const [voicePlaying,setVoicePlaying]=useState(false)
   const [quietMode,setQuietMode]=useState(false)
   const [query,setQuery]=useState(''),[results,setResults]=useState<Person[]>([])
@@ -350,7 +358,7 @@ export default function App(props:Props){
   const photoLock=useRef(false)
   const [profileStats,setProfileStats]=useState<{id:string; data?:FollowStats; error?:boolean}|null>(null)
   const [presenceById,setPresenceById]=useState<Record<string,Presence>>({})
-  const profileLinkHandled=useRef(false)
+  const sharedLinkHandled=useRef(false)
   const [statsRefresh,refreshStats]=useState(0)
   const [notes,setNotes]=useState<Record<string,Note[]>>({})
   const [chats,setChats]=useState<Record<string,Note[]>>(demo?initialChats:{})
@@ -578,26 +586,46 @@ export default function App(props:Props){
     setOverlay(null)
     clearComment()
   }
-  function open(next:Page,details?:{profile?:Person;room?:Room}){
-    const sameDestination=next===page&&(!details?.profile||details.profile.id===profile.id)&&(!details?.room||details.room.id===room?.id)
+  function open(next:Page,details?:{profile?:Person;room?:Room;lessonId?:string}){
+    const sameDestination=next===page&&(!details?.profile||details.profile.id===profile.id)&&(!details?.room||details.room.id===room?.id)&&(!details?.lessonId||details.lessonId===lessonId)
     const isTab=tabs.some(([tab])=>tab===next)
     if(sameDestination&&!overlay){
       if(isTab)scroll.current?.scrollTo({y:0,animated:!reduced})
       return
     }
-    if(isTab)pageHistory.current=[]
-    else pageHistory.current.push({page,profile,room,scrollY:pageScroll.current,overlays:overlay?[...overlayHistory.current,overlay]:[]})
+    pageHistory.current.push({page,profile,room,lessonId,scrollY:pageScroll.current,overlays:overlay?[...overlayHistory.current,overlay]:[]})
     if(overlay)dismissOverlays()
     if(details?.profile)setProfile(details.profile)
     if(details?.room)setRoom(details.room)
+    if(details?.lessonId)setLessonId(details.lessonId)
     changePage(next,isTab?scrollOffsets.current[next]??0:0)
   }
   const startQuiz=()=>open('Quiz')
+  const featuredLesson=dailyLesson(clock)
+  const openLesson=(id:string)=>open('Lesson',{lessonId:id})
+  useEffect(()=>{
+    if(demo||!token)return
+    const controller=new AbortController()
+    setLearningError(false)
+    api<string[]>(base,'/me/lessons',{signal:controller.signal},token)
+      .then(ids=>{if(!controller.signal.aborted)setCompletedLessons(previous=>[...new Set([...previous,...ids])])})
+      .catch(()=>{if(!controller.signal.aborted)setLearningError(true)})
+    return ()=>controller.abort()
+  },[base,demo,token,learningRetry])
+  async function completeLesson(id:string,answer:number){
+    const session=demoSession.current
+    if(!demo)await call('/me/lessons/'+encodeURIComponent(id),json({answer},'PUT'))
+    if(session===demoSession.current)setCompletedLessons(current=>current.includes(id)?current:[...current,id])
+  }
+
   useEffect(()=>{
     if(demo||!token||page!=='Profile')return
     const id=profile.id
     const controller=new AbortController()
     setProfileStats(previous=>previous?.id===id&&previous.data?previous:null)
+    if(id!==user.id)void api<Person>(base,'/people/'+encodeURIComponent(id),{signal:controller.signal},token)
+      .then(person=>{if(!controller.signal.aborted)setProfile(previous=>previous.id===id?person:previous)})
+      .catch(()=>{})
     api<FollowStats>(base,'/people/'+encodeURIComponent(id)+'/follow-stats',{signal:controller.signal},token)
       .then(data=>{
         if(controller.signal.aborted)return
@@ -622,16 +650,26 @@ export default function App(props:Props){
     return ()=>clearTimeout(timer)
   },[voicePlaying])
   const showProfile=(person:Person)=>open('Profile',{profile:demo?demoAccounts.find(account=>account.person.id===person.id)?.person??person:person})
-  const profileLink=(person:Person)=>'https://dameen.app/?profile='+encodeURIComponent(person.id)
+  const sharedLink=(kind:'profile'|'post',id:string)=>'https://dameen.app/?'+kind+'='+encodeURIComponent(id)
   useEffect(()=>{
-    if(profileLinkHandled.current||stage!=='app'||(!demo&&!token)||Platform.OS!=='web')return
-    const id=new URLSearchParams(window.location.search).get('profile')
-    if(!id)return
-    profileLinkHandled.current=true
-    if(demo){const match=demoAccounts.find(account=>account.person.id===id)?.person??people.find(person=>person.id===id);if(match)showProfile(match);return}
-    call<Person>('/people/'+encodeURIComponent(id)).then(showProfile).catch(()=>notify('This profile is no longer available.'))
+    if(sharedLinkHandled.current||stage!=='app'||(!demo&&!token)||Platform.OS!=='web')return
+    const params=new URLSearchParams(window.location.search)
+    const postId=params.get('post')
+    const profileId=params.get('profile')
+    if(!postId&&!profileId)return
+    sharedLinkHandled.current=true
+    if(postId){
+      const request=demo?Promise.resolve(initialPosts.find(post=>post.id===postId)):call<Post>('/posts/'+encodeURIComponent(postId))
+      void request.then(post=>{if(post)selectOverlay({kind:'post',post});else notify('This post is unavailable.','error')})
+        .catch(()=>notify('This post is unavailable.','error'))
+    }else if(profileId){
+      const request=demo?Promise.resolve(people.find(person=>person.id===profileId)):call<Person>('/people/'+encodeURIComponent(profileId))
+      void request.then(person=>{if(person)showProfile(person);else notify('This profile is unavailable.','error')})
+        .catch(()=>notify('This profile is unavailable.','error'))
+    }
   },[stage,token,demo])
   const selectOverlay=(value:Overlay)=>{
+    if(value.kind==='editProfile'){setProfileNameDraft(user.name);setBioDraft(user.bio??'')}
     if(value.kind==='newStory'){setStoryMode('Text');setStoryImage(undefined);setStoryMedia(null);setStoryBackground('#4F25D6')}
     if(overlay)overlayHistory.current.push(overlay)
     clearComment()
@@ -717,7 +755,7 @@ export default function App(props:Props){
       scrollOffsets.current={};pendingOffset.current=null;setToast(null)
       roomCall.end();pageHistory.current=[];dismissOverlays();setToken('');setUser(me);setPage('Home');setStage('auth');setError('')
       setPosts(props.demo?initialPosts:[]);setNotes({});setChats(props.demo?initialChats:{});setFollows({});setProfileStats(null)
-      setRooms(props.demo?localRooms:[]);setRoom(null);setDraft('');setAttachment(null);clearComment();setMessage('');setSeen(new Set());setOwnStory(null);setDemoEntered(false);setBirthdays([]);setBirthdayWall([]);setWishedBirthdays(new Set());setLiveStories([]);setStoryIndex(0);setStoryMedia(null);setWishes([]);setLessonComplete(false);setVoicePlaying(false);setQuietMode(false);setFollowingOnly(false)
+      setRooms(props.demo?localRooms:[]);setRoom(null);setDraft('');setAttachment(null);clearComment();setMessage('');setSeen(new Set());setOwnStory(null);setDemoEntered(false);setBirthdays([]);setBirthdayWall([]);setWishedBirthdays(new Set());setLiveStories([]);setStoryIndex(0);setStoryMedia(null);setWishes([]);setCompletedLessons([]);setLearningError(false);setVoicePlaying(false);setQuietMode(false);setFollowingOnly(false)
     }catch(reason){fail(reason)}
   }
   async function react(post:Post,kind:'like'|'repost'){
@@ -741,6 +779,23 @@ export default function App(props:Props){
       }
       setFollows(previous=>({...previous,[person.id]:active}))
     }catch(reason){fail(reason)}finally{pending.current.delete(key)}
+  }
+  async function saveProfile(){
+    if(busy||!profileNameDraft.trim()||Array.from(bioDraft.trim()).length>50)return
+    const session=demoSession.current
+    setBusy(true)
+    try{
+      const input={name:profileNameDraft.trim(),bio:bioDraft.trim()}
+      const account=demo?{...user,...input}:await call<Viewer>('/me/profile',json(input,'PUT'))
+      if(session!==demoSession.current)return
+      setUser(account)
+      setProfile(previous=>previous.id===account.id?account:previous)
+      setPosts(previous=>previous.map(post=>post.author.id===account.id?{...post,author:account}:post))
+      if(demo)welcomeAccounts.forEach((entry,email)=>{if(entry.user.id===account.id)welcomeAccounts.set(email,{...entry,user:account})})
+      modalClose()
+      notify('Profile updated')
+    }catch(reason){if(session===demoSession.current)fail(reason)}
+    finally{setBusy(false)}
   }
   async function uploadProfilePhoto(kind:'avatar'|'cover'){
     if(!props.pickMedia||profile.id!==user.id||photoLock.current)return
@@ -896,42 +951,69 @@ export default function App(props:Props){
       }
     }catch(reason){fail(reason)}finally{setBusy(false)}
   }
-  const goBack=()=>{
-    const previous=pageHistory.current.pop()
-    if(!previous){changePage('Home',scrollOffsets.current.Home??0);return}
-    setProfile(previous.profile)
+  const displayedPosts=demo&&followingOnly?posts.filter(p=>p.author.id===user.id||follows[p.author.id]):posts
+  const displayedPeople=demo?people.map(person=>demoAccounts.find(account=>account.person.id===person.id)?.person??person).filter(p=>(displayHandle(p)+' '+p.detail).toLowerCase().includes(query.trim().toLowerCase())):results
+  const canShare=Boolean(props.share)
+  const overlays=overlay?[...overlayHistory.current,overlay]:[]
+  const restoreOverlays=(items:Overlay[])=>{
+    overlayHistory.current=items.slice(0,-1)
+    setOverlay(items.at(-1)??null)
+    clearComment()
+  }
+  const modalClose=()=>restoreOverlays(overlays.slice(0,-1))
+  const pageDepth=pageHistory.current.reduce((depth,entry)=>depth+entry.overlays.length+1,0)
+  const navigationDepth=stage==='app'?pageDepth+overlays.length:stage==='auth'?step+1+Number(recovering):step
+  const backToDepth=(target:number)=>{
+    if(stage==='intro'){setStep(target);return}
+    if(stage==='auth'){
+      setRecovering(false)
+      if(target<=step){setStep(target);setStage('intro')}
+      return
+    }
+    if(stage!=='app')return
+    const stack=pageHistory.current
+    let depth=pageDepth+overlays.length
+    let layers=overlays
+    let previous:PageEntry|undefined
+    while(depth>target){
+      if(layers.length)layers=layers.slice(0,-1)
+      else{
+        const entry=stack.pop()
+        if(!entry)break
+        previous=entry
+        layers=entry.overlays
+      }
+      depth--
+    }
+    restoreOverlays(layers)
+    if(!previous)return
+    setProfile(previous.profile.id===user.id?user:previous.profile)
     setRoom(previous.room)
-    overlayHistory.current=previous.overlays.slice(0,-1)
-    setOverlay(previous.overlays.at(-1)??null)
+    setLessonId(previous.lessonId)
     if(previous.page==='Chat'){
       stickToChatEnd.current=false
       initialChatScroll.current=false
     }
     changePage(previous.page,previous.scrollY)
   }
+  const goBack=()=>backToDepth(Math.max(0,navigationDepth-1))
   useEffect(()=>{
-    if(Platform.OS!=='android'||stage!=='app'||overlay||(!pageHistory.current.length&&page==='Home'))return
-    const subscription=BackHandler.addEventListener('hardwareBackPress',()=>{if(roomCall.call)roomCall.end();else goBack();return true})
+    if(Platform.OS!=='android')return
+    const subscription=BackHandler.addEventListener('hardwareBackPress',()=>{
+      if(overlay)return false // Native Modal handles this through onRequestClose.
+      if(roomCall.call){roomCall.end();return true}
+      if(navigationDepth>0){goBack();return true}
+      return false
+    })
     return ()=>subscription.remove()
   })
-
-  const displayedPosts=demo&&followingOnly?posts.filter(p=>p.author.id===user.id||follows[p.author.id]):posts
-  const displayedPeople=demo?people.map(person=>demoAccounts.find(account=>account.person.id===person.id)?.person??person).filter(p=>(p.name+' '+p.detail).toLowerCase().includes(query.trim().toLowerCase())):results
-  const canShare=Boolean(props.share)
-  const overlayDepth=overlay?overlayHistory.current.length+1:0
-  const closeToDepth=(depth:number)=>{
-    const previous=depth>0?overlayHistory.current[depth-1]:null
-    overlayHistory.current=overlayHistory.current.slice(0,Math.max(0,depth-1))
-    setOverlay(previous??null)
-    clearComment()
-  }
-  const modalClose=()=>closeToDepth(overlayDepth-1)
-  useBrowserModalBack(overlayDepth,closeToDepth)
+  useBrowserModalBack(navigationDepth,backToDepth)
   const compose=()=>selectOverlay({kind:'create'})
   const section=(title:string)=> <Copy size={19} weight={800}>{title}</Copy>
   const failure=<Empty title="Couldn’t connect" detail={feedError} action="Try again" onPress={()=>setRetry(n=>n+1)}/>
   const navButton=(name:Page,glyph:Glyph)=>{
-    const active=page===name||name==='Messages'&&page==='Chat'||tabs.some(([tab])=>tab===name)&&pageHistory.current[0]?.page===name
+    const nearestTab=pageHistory.current.filter(entry=>tabs.some(([tab])=>entry.page===tab)).at(-1)?.page
+    const active=page===name||name==='Messages'&&page==='Chat'||!tabs.some(([tab])=>page===tab)&&nearestTab===name
     const color=active?theme.ink:theme.muted
     return <Pressable accessibilityRole="button" accessibilityLabel={name} accessibilityState={{selected:active}} key={name} onPress={()=>open(name)}
       style={({pressed})=>({...row,flexDirection:desktop?'row':'column',justifyContent:desktop?'flex-start':'center',minHeight:desktop?48:54,flex:desktop?0:1,paddingHorizontal:desktop?12:0,gap:desktop?12:3,borderRadius:13,backgroundColor:desktop&&active?theme.chip:'transparent',opacity:pressed?.68:1})}>
@@ -971,17 +1053,9 @@ export default function App(props:Props){
     <Field label="Search" glyph="search" placeholder="Search people, groups, topics" value={query} onChangeText={setQuery} autoCapitalize="none"/>
     {demo&&!query&&<Card>{section('Trending in your school')}<View style={{...row,flexWrap:'wrap'}}>{['#QuizFriday','#StudyTogether','#WordSprint'].map(tag=><Button key={tag} label={tag} variant="secondary" onPress={()=>setQuery(tag)}/>)}</View></Card>}
     {section(query?'Search results':'Suggested for you')}
-    {searchError?<Empty title="Search unavailable" detail={searchError} action="Try again" onPress={()=>setRetry(n=>n+1)}/>:searching?<Loading/>:displayedPeople.length?displayedPeople.map(person=><Card key={person.id} style={spread}><Pressable accessibilityRole="button" accessibilityLabel={'Open '+person.name+' profile'} onPress={()=>showProfile(person)} style={{...row,flex:1}}><Avatar person={person}/><View style={{flex:1}}><PersonName person={person}/><Copy color={theme.muted} size={12}>{person.detail}</Copy></View></Pressable><Button label={follows[person.id]?'Following':'Follow'} variant={follows[person.id]?'secondary':'primary'} onPress={()=>void follow(person)}/></Card>):<Empty title="No results" detail={query?'Try a different name or clear the search.':'Classmates will appear here after they sign up.'}/>}
+    {searchError?<Empty title="Search unavailable" detail={searchError} action="Try again" onPress={()=>setRetry(n=>n+1)}/>:searching?<Loading/>:displayedPeople.length?displayedPeople.map(person=><Card key={person.id} style={spread}><Pressable accessibilityRole="button" accessibilityLabel={'Open '+displayHandle(person)+' profile'} onPress={()=>showProfile(person)} style={{...row,flex:1}}><Avatar person={person}/><View style={{flex:1}}><PersonName person={person}/><Copy color={theme.muted} size={12}>{person.detail}</Copy></View></Pressable><Button label={follows[person.id]?'Following':'Follow'} variant={follows[person.id]?'secondary':'primary'} onPress={()=>void follow(person)}/></Card>):<Empty title="No results" detail={query?'Try a different name or clear the search.':'Classmates will appear here after they sign up.'}/>}
   </>
-  const learning=<>
-    <FeatureCard glyph="bolt" title="Daily challenge" description="Solve 3 quick questions" action="Start" onPress={startQuiz}/>
-    <ScreenLinks items={ [['Lesson','book'],['Study timer','bolt'],['Progress','check'],...(demo?[['Teacher dashboard','grp'] as const]:[])] } open={open}/>
-    {section('Your subjects')}
-    {([{name:'Mathematics',value:72,glyph:'maths'},{name:'English',value:48,glyph:'type'},{name:'Digital Technologies',value:60,glyph:'code'}] as const).map(({name,value,glyph})=><Card key={name}>
-      <View style={row}><IconTile name={glyph}/><View style={{flex:1}}><Copy weight={800}>{name}</Copy></View><Copy size={12} weight={800} color={theme.ink}>{demo?value:0}%</Copy></View>
-      <Meter percent={demo?value:0}/>
-    </Card>)}
-  </>
+  const learning=<Learning featured={featuredLesson} done={completedLessons} onLesson={openLesson} onTimer={()=>open('Study timer')} onProgress={()=>open('Progress')}/>
   const play=<>
     <FeatureCard glyph="trophy" title="Quiz Duel" description="Race through questions and win XP." action="Play quiz" onPress={startQuiz}/>
     <ScreenLinks items={ [['Games','game'],...(demo?[['Leaderboard','trophy'] as const,['Rewards','gift'] as const]:[])] } open={open}/>
@@ -990,7 +1064,7 @@ export default function App(props:Props){
   const inbox=<>
     <Segmented options={['Chats','Groups','Requests']} selected={inboxTab} onSelect={setInboxTab}/>
     {demo&&inboxTab==='Chats'&&<Card>{section('Active now')}<View style={row}>{[people[0],people[1],people[2]].map(person=><Pressable key={person.id} accessibilityRole="button" accessibilityLabel={'Message '+person.name} onPress={()=>void messagePerson(person)}><Avatar person={person} ring size={42}/></Pressable>)}</View></Card>}
-    {feedError?failure:loading?<Loading/>:roomList.length?roomList.map(r=><Pressable key={r.id} accessibilityRole="button" accessibilityLabel={'Open conversation with '+r.person.name} onPress={()=>openRoom(r)}><Card style={row}><Avatar person={r.person} size={50}/><View style={{flex:1}}><PersonName person={r.person}/><Copy color={theme.muted} size={12}>{chats[r.id]?.at(-1)?.body??'Open conversation'}</Copy></View></Card></Pressable>):<Empty title={inboxTab==='Chats'?'No messages yet':inboxTab==='Groups'?'No groups yet':'No message requests'} detail={inboxTab==='Chats'?'Find a classmate and start a chat.':inboxTab==='Groups'?'Group conversations are available in the preview.':'New requests will appear here.'} action={inboxTab==='Chats'?'Find people':undefined} onPress={()=>open('Explore')}/>}
+    {feedError?failure:loading?<Loading/>:roomList.length?roomList.map(r=><Pressable key={r.id} accessibilityRole="button" accessibilityLabel={'Open conversation with '+displayHandle(r.person)} onPress={()=>openRoom(r)}><Card style={row}><Avatar person={r.person} size={50}/><View style={{flex:1}}><PersonName person={r.person}/><Copy color={theme.muted} size={12}>{chats[r.id]?.at(-1)?.body??'Open conversation'}</Copy></View></Card></Pressable>):<Empty title={inboxTab==='Chats'?'No messages yet':inboxTab==='Groups'?'No groups yet':'No message requests'} detail={inboxTab==='Chats'?'Find a classmate and start a chat.':inboxTab==='Groups'?'Group conversations are available in the preview.':'New requests will appear here.'} action={inboxTab==='Chats'?'Find people':undefined} onPress={()=>open('Explore')}/>}
   </>
   const chat=room&&<>
     <Card style={spread}><View style={{...row,flex:1}}><Avatar person={room.person}/><View style={{flex:1}}><PersonName person={room.person}/><View style={{...row,gap:5}}>{!demo&&<View style={{width:7,height:7,borderRadius:4,backgroundColor:presenceById[room.person.id]?.online?'#2FB66D':theme.muted}}/>}<Copy color={presenceById[room.person.id]?.online?'#2FB66D':theme.muted} size={12}>{demo?'Active now':presenceById[room.person.id]?.online?'Online':presenceById[room.person.id]?.lastSeen?'Last seen '+shortTime(presenceById[room.person.id]?.lastSeen||''):'Offline'}</Copy></View></View></View>{demo&&<View style={{...row,gap:0}}><IconButton name="ph" label="Voice call" onPress={()=>selectOverlay({kind:'call',video:false,person:room.person})}/><IconButton name="vid" label="Video call" onPress={()=>selectOverlay({kind:'call',video:true,person:room.person})}/></View>}</Card>
@@ -1025,7 +1099,7 @@ export default function App(props:Props){
       <View style={{height:136,backgroundColor:'#4F25D6'}}>{profile.cover&&<Image accessibilityLabel="Cover photo" source={{uri:profile.cover}} resizeMode="cover" style={{width:'100%',height:'100%'}}/>}</View>
       <View style={{padding:18,paddingTop:0,gap:14}}>
         <View style={{alignSelf:'flex-start',marginTop:-40}}><Avatar person={profile} size={74} ring/></View>
-        <View style={{gap:4}}><Copy size={27} weight={800}>{profile.name}</Copy>{profile.username&&<Copy color={theme.ink}>@{profile.username}</Copy>}{!demo&&<View style={{...row,gap:5}}><View style={{width:7,height:7,borderRadius:4,backgroundColor:profilePresence?.online?'#2FB66D':theme.muted}}/><Copy size={12} color={profilePresence?.online?'#2FB66D':theme.muted}>{profilePresence?.online?'Online':profilePresence?.lastSeen?'Last seen '+shortTime(profilePresence.lastSeen||''):'Offline'}</Copy></View>}</View>
+        <View style={{gap:4}}><Copy size={27} weight={800}>{displayHandle(profile)}</Copy>{!!profile.bio&&<Copy color={theme.muted}>{profile.bio}</Copy>}{!demo&&<View style={{...row,gap:5}}><View style={{width:7,height:7,borderRadius:4,backgroundColor:profilePresence?.online?'#2FB66D':theme.muted}}/><Copy size={12} color={profilePresence?.online?'#2FB66D':theme.muted}>{profilePresence?.online?'Online':profilePresence?.lastSeen?'Last seen '+shortTime(profilePresence.lastSeen||''):'Offline'}</Copy></View>}</View>
         <View style={{...row,gap:22,borderTopWidth:1,borderColor:theme.border,paddingTop:12}}>
           {([{label:'Followers',count:followers},{label:'Following',count:following}]).map(({label,count})=>
             <Pressable key={label} accessibilityRole="button" accessibilityLabel={'View '+label.toLowerCase()+(count===undefined?'':' ('+count+')')} onPress={()=>selectOverlay({kind:'connections',list:label==='Followers'?'followers':'following',person:profile})} style={{gap:2,minWidth:72,minHeight:48}}>
@@ -1036,13 +1110,13 @@ export default function App(props:Props){
         </View>
         {currentStats?.error&&<Button label="Retry profile counts" variant="secondary" onPress={()=>refreshStats(value=>value+1)}/>}
         <View style={{...row,flexWrap:'wrap'}}>
-          {ownProfile?<>{props.pickMedia&&<>
+          {ownProfile?<><Button label="Edit profile" variant="secondary" onPress={()=>selectOverlay({kind:'editProfile'})}/>{props.pickMedia&&<>
             <Button label={photoBusy==='avatar'?'Updating picture…':'Change profile picture'} leading="image" variant="secondary" disabled={!!photoBusy} onPress={()=>void uploadProfilePhoto('avatar')}/>
             <Button label={photoBusy==='cover'?'Updating cover…':'Change cover photo'} variant="secondary" disabled={!!photoBusy} onPress={()=>void uploadProfilePhoto('cover')}/>
-          </>}<Button label="Share profile" leading="sh" variant="secondary" onPress={()=>{void props.share?.('Follow '+profile.name+' on dameen: '+profileLink(profile)).then(()=>notify('Profile link ready to share')).catch(fail)}}/><Button label="Settings" leading="settings" variant="secondary" onPress={()=>open('Settings')}/></>:<>
+          </>}<Button label="Share profile" leading="sh" variant="secondary" onPress={()=>{void props.share?.(sharedLink('profile',profile.id)).then(()=>notify('Profile link ready to share')).catch(fail)}}/><Button label="Settings" leading="settings" variant="secondary" onPress={()=>open('Settings')}/></>:<>
             <Button label={follows[profile.id]?'Following':'Follow'} disabled={!demo&&!currentStats?.data} onPress={()=>void follow(profile)}/>
             <Button label="Message" leading="msg" variant="secondary" onPress={()=>void messagePerson(profile)}/>
-            <Button label="Share profile" leading="sh" variant="secondary" onPress={()=>{void props.share?.('Follow '+profile.name+' on dameen: '+profileLink(profile)).then(()=>notify('Profile link ready to share')).catch(fail)}}/>
+            <Button label="Share profile" leading="sh" variant="secondary" onPress={()=>{void props.share?.(sharedLink('profile',profile.id)).then(()=>notify('Profile link ready to share')).catch(fail)}}/>
           </>}
         </View>
       </View>
@@ -1080,6 +1154,8 @@ export default function App(props:Props){
   }
   const content:Partial<Record<Page,React.ReactNode>>={
     Home:home,Explore:explore,Learn:learning,Play:play,Messages:inbox,Chat:chat,Profile:profileContent,Settings:settings,
+    Lesson:<StudyLesson key={lessonId} id={lessonId} done={completedLessons.includes(lessonId)} onComplete={completeLesson}/>,
+    Progress:<LearningProgress done={completedLessons} error={learningError} retry={()=>setLearningRetry(n=>n+1)} open={openLesson}/>,
     Quiz:<Quiz onBack={goBack}/>,
     Admin:(demo||user.isAdmin)&&<Suspense fallback={<Loading/>}><Admin base={base} token={token}
       sample={demo?{overview:demoOverview,accounts:demoAccounts}:undefined} onSampleChange={changeDemoAccount}/></Suspense>,
@@ -1098,6 +1174,11 @@ export default function App(props:Props){
       onPreset={value=>{commentDraft.current+=1;setCommentMedia(value)}} onRemove={()=>{commentDraft.current+=1;setCommentMedia(null)}}
       onPhoto={props.pickMedia?()=>void pickCommentPhoto():undefined} onPost={()=>void addComment(overlay.post)}
       onProfile={showProfile}/>
+  }else if(overlay?.kind==='editProfile'){
+    sheet=<><Field label="Real name" value={profileNameDraft} onChangeText={setProfileNameDraft} maxLength={120} autoCapitalize="words"/>
+      <Field label="Bio" value={bioDraft} onChangeText={value=>setBioDraft(Array.from(value).slice(0,50).join(''))} multiline/>
+      <Copy color={theme.muted} size={12}>{Array.from(bioDraft).length}/50</Copy>
+      <Button label={busy?'Saving…':'Save profile'} onPress={()=>void saveProfile()} disabled={busy||!profileNameDraft.trim()}/></>
   }else if(overlay?.kind==='create'){
     sheet=<><View style={row}><Avatar person={user}/><PersonName person={user}/></View><Field label="What’s happening?" value={draft} onChangeText={setDraft} multiline maxLength={1200} style={{minHeight:106,textAlignVertical:'top'}}/>
       {attachment&&<View style={spread}><Copy size={12}>{attachment.name}</Copy><IconButton name="close" label="Remove image" onPress={()=>setAttachment(null)}/></View>}
@@ -1115,7 +1196,7 @@ export default function App(props:Props){
       <Button label={busy?'Sharing…':'Share story'} disabled={!valid||busy} onPress={()=>{if(!demo){void shareStory();return}setOwnStory({text:comment.trim(),image:storyMode==='Photo'?storyImage:undefined,videoPreview:storyMode==='Video',posted:Date.now(),background:storyMode==='Text'?storyBackground:undefined});modalClose();notify('Story shared in the preview. It disappears after 12 hours.')}}/>
     </>
   }else if(overlay?.kind==='share'){
-    sheet=<><Copy>{overlay.post.body||'Image post'}</Copy>{canShare&&<Button label="Share post text" onPress={()=>{void props.share?.(overlay.post.body).then(()=>{modalClose();notify('Post text ready to share')}).catch(fail)}}/>}</>
+    sheet=<><Copy>{overlay.post.body||'Image post'}</Copy>{canShare&&<Button label="Share post link" onPress={()=>{void props.share?.(sharedLink('post',overlay.post.id)).then(()=>{modalClose();notify('Post link ready to share')}).catch(fail)}}/>}</>
   }else if(overlay?.kind==='wish'){
     sheet=<><Avatar person={people[2]} size={65}/><Field label="Write a birthday wish" value={comment} onChangeText={setComment} maxLength={300}/><Button label="Send wish" disabled={!comment.trim()} variant="fun" onPress={()=>{setWishes(previous=>[...previous,comment.trim()]);modalClose();notify('Birthday wish sent in the preview')}}/></>
   }else if(overlay?.kind==='call'&&overlay.ringing){
@@ -1125,7 +1206,7 @@ export default function App(props:Props){
   const ModalViewport=props.modalViewport??DefaultModalViewport
   const overlayTitle=overlay?.kind==='connections'?(overlay.list==='followers'?'Followers':'Following')
     :overlay?.kind==='call'?(overlay.ringing?'Ringing':overlay.video?'Video call':'Voice call')
-    :overlay&&overlay.kind!=='story'?{comments:'Comments',share:'Share post',post:'Post detail',create:'Create post',wish:'Happy birthday, Zee!',newStory:'Create story'}[overlay.kind]:''
+    :overlay&&overlay.kind!=='story'?{editProfile:'Edit profile',comments:'Comments',share:'Share post',post:'Post detail',create:'Create post',wish:'Happy birthday, Zee!',newStory:'Create story'}[overlay.kind]:''
   const story=overlay?.kind==='story'?(demoAccounts.find(account=>account.person.id===overlay.person.id)?.person??overlay.person):null
   const liveGroup=story&&!demo?activeStories.find(group=>group.author.id===story.id):undefined
   const activeIndex=liveGroup?Math.min(storyIndex,liveGroup.stories.length-1):0
@@ -1134,7 +1215,7 @@ export default function App(props:Props){
   const storyPosted=demo?(story?.id===user.id?demoOwn?.posted:story?demoPosted[story.id]:undefined):liveItem?Date.parse(liveItem.created):undefined
   const storyText=demo?personalStory?.text??(story?.id==='ada'?'Study session after school. Bring your notes!':story?.id==='bello'?'Maths test is on Friday. Revise quadratics!':story?.id==='code'?'Code Club meets on Friday!':'See you at quiz night!'):liveItem?.text??''
   return <Design.Provider value={{theme,font,reduced,renderIcon:props.renderIcon}}><View style={{flex:1,backgroundColor:theme.bg,width:'100%'}}>
-    {starting||stage==='restore'?<LoadingScreen/>:stage==='intro'?<Intro desktop={desktop} step={step} reduced={reduced} onSkip={()=>setStage('auth')} onNext={()=>step===2?setStage('auth'):setStep(step+1)} onBack={()=>setStep(step-1)}/>:stage==='auth'?<Auth base={base} demo={demo} busy={busy} error={error} submit={authenticate} onGoogle={(mode,username,dob)=>void authenticateWithGoogle(mode,username,dob)} onCancelGoogle={()=>googleRequest.current?.abort()} googlePending={googlePending} onDemo={()=>{setDemoEntered(true);setPosts(initialPosts);setChats(initialChats);setRooms(localRooms);setUnread(true);setUser(me);setPage('Home');setStage('app')}} reduced={reduced}/>:
+    {starting||stage==='restore'?<LoadingScreen/>:stage==='intro'?<Intro desktop={desktop} step={step} reduced={reduced} onSkip={()=>setStage('auth')} onNext={()=>step===2?setStage('auth'):setStep(step+1)} onBack={()=>setStep(step-1)}/>:stage==='auth'?<Auth base={base} demo={demo} busy={busy} error={error} submit={authenticate} onGoogle={(mode,username,dob)=>void authenticateWithGoogle(mode,username,dob)} onCancelGoogle={()=>googleRequest.current?.abort()} googlePending={googlePending} onDemo={()=>{setDemoEntered(true);setPosts(initialPosts);setChats(initialChats);setRooms(localRooms);setUnread(true);setUser(me);setPage('Home');setStage('app')}} reduced={reduced} recovering={recovering} setRecovering={setRecovering}/>:
       <View style={{flex:1,flexDirection:'row',width:'100%',maxWidth:1360,alignSelf:'center'}}>
         {desktop&&<View style={{width:222,borderRightWidth:1,borderColor:theme.border,padding:18,gap:5,backgroundColor:theme.card}}>
           <View style={{minHeight:64,justifyContent:'center',marginBottom:14}}><Logo size={40}/></View>
@@ -1173,12 +1254,12 @@ export default function App(props:Props){
               }else restorePageScroll()
             }}
             contentContainerStyle={{padding:desktop?20:13,gap:16,width:'100%',maxWidth:640,alignSelf:'center'}}>
-            <Motion key={page} reduced={reduced} distance={0} style={stack}>{content[page]??<Suspense fallback={<LoadingScreen compact/>}><FeatureScreen key={page} page={page as ExtraPage} open={open} demo={demo} user={user} startQuiz={startQuiz} completed={lessonComplete} markComplete={()=>setLessonComplete(true)} wish={()=>selectOverlay({kind:'wish'})} wishes={wishes} incomingCall={()=>selectOverlay({kind:'call',video:false,person:people[0],ringing:true,incoming:true})}/></Suspense>}</Motion></ScrollView>
+            <Motion key={page} reduced={reduced} distance={0} style={stack}>{content[page]??<Suspense fallback={<LoadingScreen compact/>}><FeatureScreen key={page} page={page as ExtraPage} open={open} demo={demo} user={user} startQuiz={startQuiz} completed={completedLessons.length>0} wish={()=>selectOverlay({kind:'wish'})} wishes={wishes} incomingCall={()=>selectOverlay({kind:'call',video:false,person:people[0],ringing:true,incoming:true})}/></Suspense>}</Motion></ScrollView>
           {page==='Chat'&&<View style={{...row,padding:10,borderTopWidth:1,borderColor:theme.border,backgroundColor:theme.card}}><View style={{flex:1}}><Field label="Message" placeholder="Write a message" value={message} onChangeText={setMessage} onSubmitEditing={()=>void send()} maxLength={800}/></View><View style={{alignSelf:'flex-end'}}><Button label="Send" trailing="send" disabled={busy||!message.trim()} onPress={()=>void send()}/></View></View>}
           {!desktop&&<View style={{...row,gap:0,justifyContent:'space-around',minHeight:64,paddingHorizontal:6,borderTopWidth:1,borderColor:theme.border,backgroundColor:theme.card}}>{tabs.slice(0,2).map(([name,glyph])=>navButton(name,glyph))}<View style={{width:61,alignItems:'center',marginTop:-13}}><IconButton name="plus" label="Create post" size={26} solid onPress={compose}/></View>{tabs.slice(2).map(([name,glyph])=>navButton(name,glyph))}</View>}
         </View>
         {rail&&<ScrollView style={{flex:1,maxWidth:324,borderLeftWidth:1,borderColor:theme.border}} contentContainerStyle={{padding:17,paddingTop:20,gap:15}}>
-          <FeatureCard glyph="bolt" title="Daily challenge" description="Three quick maths questions." action="Start challenge" onPress={startQuiz} compact/>
+          <FeatureCard glyph="bolt" title="Daily challenge" description={featuredLesson.title} action="Start lesson" onPress={()=>openLesson(featuredLesson.id)} compact/>
           {demo&&<>
             <Card>
               <View style={row}><IconTile name="grp"/>{section('Study room')}</View>
@@ -1202,7 +1283,7 @@ export default function App(props:Props){
           <View accessibilityLabel={`Story ${activeIndex+1} of ${liveGroup?.stories.length??1}`} style={{...row,gap:7}}><View style={{...row,flex:1,gap:4}}>{Array.from({length:liveGroup?.stories.length??1},(_,index)=><View key={index} style={{flex:1,height:3,borderRadius:3,backgroundColor:index<=activeIndex?lime:'rgba(255,255,255,.35)'}}/>)}</View><Copy color="#fff" size={11} weight={800}>{activeIndex+1}/{liveGroup?.stories.length??1}</Copy></View>
           <View style={spread}>
             <View style={{...row,flex:1}}><Avatar person={story} size={40}/><View style={{flex:1,gap:2}}>
-              <View style={{...row,gap:5}}><Copy color="#fff" weight={800}>{story.name}</Copy><VerifiedBadge person={story}/></View>
+              <View style={{...row,gap:5}}><Copy color="#fff" weight={800}>{displayHandle(story)}</Copy><VerifiedBadge person={story}/></View>
               {storyPosted!==undefined&&<Copy color="#fff" size={11}>{storyLeft(storyPosted+storyLifetime-clock)} · disappears after 12 hours</Copy>}
             </View></View>
             <IconButton name="close" label="Close story" tint="#fff" onPress={modalClose}/>

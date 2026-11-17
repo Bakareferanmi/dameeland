@@ -28,7 +28,7 @@ export function birthdayToday(birthday:string|undefined,at=new Date()){
   return birthday==='02-29'&&!leap(at.getFullYear())&&monthDay(at)==='02-28'
 }
 export type BirthdayEntry = {person:Person;wished:boolean;daysUntil?:number}
-export type Person = {id:string; name:string; initials:string; role:Role; color:string; detail:string; verified?:boolean; teacher?:boolean; group?:boolean; birthday?:string; dob?:string; avatar?:string; cover?:string; username?:string}
+export type Person = {id:string; name:string; initials:string; role:Role; color:string; detail:string; verified?:boolean; teacher?:boolean; group?:boolean; birthday?:string; dob?:string; avatar?:string; cover?:string; username?:string; bio?:string}
 export type Viewer = Person & {isAdmin?:boolean}
 export type AdminAccount = {person:Person;email:string;created:number|null;independentlyVerified:boolean}
 export type AdminActivity = {id:string;name:string;kind:'signup'|'post'|'comment';created:number;excerpt?:string}
@@ -63,10 +63,10 @@ export type CommentAttachment =
 export type Note = {id:string; author:Person; body:string; attachment?:CommentAttachment}
 export const me:Person = {id:'you',name:'You',initials:'YO',role:'student',color:lime,detail:'Student'}
 export const people:Person[] = [
-  {id:'ada',name:'Ada O.',initials:'AO',role:'student',color:'#FFD9B8',detail:'SS2 · Student',verified:true},
-  {id:'tobi',name:'Tobi A.',initials:'TB',role:'tech',color:'#CFE8FF',detail:'Tech · Code Club',verified:true,birthday:monthDay(new Date())},
-  {id:'zee',name:'Zee K.',initials:'ZK',role:'student',color:'#FFE9A8',detail:'Student'},
-  {id:'bello',name:'Mr. Bello',initials:'MB',role:'student',color:'#E9E0FF',detail:'Maths teacher',teacher:true},
+  {id:'ada',username:'ada',name:'Ada O.',initials:'AO',role:'student',color:'#FFD9B8',detail:'SS2 · Student',verified:true},
+  {id:'tobi',username:'tobi',name:'Tobi A.',initials:'TB',role:'tech',color:'#CFE8FF',detail:'Tech · Code Club',verified:true,birthday:monthDay(new Date())},
+  {id:'zee',username:'zee',name:'Zee K.',initials:'ZK',role:'student',color:'#FFE9A8',detail:'Student'},
+  {id:'bello',username:'bello',name:'Mr. Bello',initials:'MB',role:'student',color:'#E9E0FF',detail:'Maths teacher',teacher:true},
   {id:'code',name:'Code Club',initials:'CC',role:'tech',color:lime,detail:'Tech · School club',verified:true,group:true},
   {id:'maths',name:'SS2 Maths Club',initials:'SS',role:'tech',color:'#FFD6E8',detail:'Group · 24 members',group:true},
   {id:'squad',name:'JS Study Squad',initials:'JS',role:'tech',color:'#FFE9A8',detail:'Group · 112 members',group:true},
@@ -104,3 +104,5 @@ export async function api<T>(base:string,path:string,options:RequestInit={},toke
   if(!response.ok) throw new Error(result.error ?? 'Something went wrong. Try again.')
   return result as unknown as T
 }
+
+export {lessons,dailyLesson,subjects,type Subject} from './learningCatalog'

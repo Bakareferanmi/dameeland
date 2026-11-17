@@ -2,7 +2,7 @@ import React,{useEffect,useRef,useState} from 'react'
 import {Animated,Image,Pressable,ScrollView,View,Platform} from 'react-native'
 import {commentGifs,commentStickers,type CommentAttachment,type Note,type Person} from './index'
 import {gifImages} from './commentGifs'
-import {Avatar,Button,Copy,Field,Icon,IconButton,PersonName,row,spread,useDesign} from './ui'
+import {Avatar,Button,Copy,displayHandle,Field,Icon,IconButton,PersonName,row,spread,useDesign} from './ui'
 
 export type GifRenderer=React.ComponentType<{uri:string;label:string;animate:boolean}>
 type Preset=Exclude<CommentAttachment,{kind:'image'}>
@@ -27,7 +27,7 @@ function CommentEntry({item,onProfile,renderGif}:{item:Note;onProfile:(person:Pe
   const progress=useRef(new Animated.Value(reduced?1:0)).current
   useEffect(()=>{if(reduced){progress.setValue(1);return}Animated.timing(progress,{toValue:1,duration:220,useNativeDriver:Platform.OS!=='web',isInteraction:false}).start()},[progress,reduced])
   return <Animated.View style={{...row,alignItems:'flex-start',opacity:progress,transform:[{translateY:progress.interpolate({inputRange:[0,1],outputRange:[8,0]})}]}}>
-    <Pressable accessibilityRole="button" accessibilityLabel={'Open '+item.author.name+' profile'} onPress={()=>onProfile(item.author)} hitSlop={4} style={{minWidth:40,minHeight:40,justifyContent:'center',alignItems:'center'}}><Avatar person={item.author} size={36}/></Pressable>
+    <Pressable accessibilityRole="button" accessibilityLabel={'Open '+displayHandle(item.author)+' profile'} onPress={()=>onProfile(item.author)} hitSlop={4} style={{minWidth:40,minHeight:40,justifyContent:'center',alignItems:'center'}}><Avatar person={item.author} size={36}/></Pressable>
     <View style={{flex:1,gap:5}}><Pressable accessibilityRole="button" onPress={()=>onProfile(item.author)} style={{alignSelf:'flex-start',minHeight:24,justifyContent:'center'}}><PersonName person={item.author}/></Pressable>{!!item.body&&<Copy>{item.body}</Copy>}{item.attachment&&<CommentMedia attachment={item.attachment} renderGif={renderGif}/>}</View>
   </Animated.View>
 }

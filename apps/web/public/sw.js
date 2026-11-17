@@ -1,11 +1,27 @@
-const CACHE_NAME='dameeland-shell-v2'
+const CACHE_NAME='dameeland-shell-v3'
 self.addEventListener('install',event=>{event.waitUntil(caches.open(CACHE_NAME).then(cache=>cache.addAll(['/','/manifest.webmanifest'])).then(()=>self.skipWaiting()))})
 self.addEventListener('activate',event=>{
-  event.waitUntil(caches.delete('dameeland-shell-v1').then(()=>self.clients.claim()))
+  event.waitUntil(caches.keys().then(keys=>Promise.all(keys.filter(key=>key.startsWith('dameeland-shell-')&&key!==CACHE_NAME).map(key=>caches.delete(key)))).then(()=>self.clients.claim()))
 })
 self.addEventListener('fetch',event=>{
-  if(event.request.method!=='GET'||new URL(event.request.url).origin!==self.location.origin)return
-  event.respondWith(caches.match(event.request).then(cached=>cached||fetch(event.request).then(response=>{const copy=response.clone();caches.open(CACHE_NAME).then(cache=>cache.put(event.request,copy));return response})))
+  const request=event.request
+  const url=new URL(request.url)
+  if(request.method!=='GET'||url.origin!==self.location.origin||url.pathname.startsWith('/api/'))return
+  if(request.mode==='navigate'){
+    event.respondWith(fetch(request).catch(async()=>{
+      const cache=await caches.open(CACHE_NAME)
+      return await cache.match(url.pathname)||await cache.match('/')||Response.error()
+    }))
+    return
+  }
+  if(!url.pathname.startsWith('/assets/'))return
+  event.respondWith(caches.open(CACHE_NAME).then(async cache=>{
+    const cached=await cache.match(request)
+    if(cached)return cached
+    const response=await fetch(request)
+    if(response.ok)await cache.put(request,response.clone())
+    return response
+  }))
 })
 self.addEventListener('push',event=>{
   let payload={title:'dameen',body:'You have new activity.',entityId:null}

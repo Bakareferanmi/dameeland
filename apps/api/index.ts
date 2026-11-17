@@ -5,11 +5,11 @@ import {bodyLimit} from 'hono/body-limit'
 import {HTTPException} from 'hono/http-exception'
 import {DurableObject} from 'cloudflare:workers'
 import * as webpush from 'web-push'
-import {commentGifs,validBirthDate,type BirthdayEntry,storyLimit,storyLifetime,type Story,type StoryGroup,commentStickers,capitalizeName,initials,normalizeUsername,usernameHint,validUsername,type AdminAccount,type AdminActivity,type AdminDay,type AdminOverview,type CommentAttachment,type FollowPage,type FollowStats,type Person,type Role} from '@dameeland/core'
+import {lessons,commentGifs,validBirthDate,type BirthdayEntry,storyLimit,storyLifetime,type Story,type StoryGroup,commentStickers,capitalizeName,initials,normalizeUsername,usernameHint,validUsername,type AdminAccount,type AdminActivity,type AdminDay,type AdminOverview,type CommentAttachment,type FollowPage,type FollowStats,type Person,type Role} from '@dameeland/core'
 
 interface Env {DB:D1Database;MEDIA:R2Bucket;STORIES:KVNamespace;ROOMS:DurableObjectNamespace<ChatRoom>;ALLOWED_ORIGIN:string;VAPID_PUBLIC_KEY?:string;VAPID_PRIVATE_KEY?:string;VAPID_SUBJECT?:string;GOOGLE_CLIENT_ID?:string;GOOGLE_CLIENT_SECRET?:string;GOOGLE_REDIRECT_URI?:string;ADMIN_USER_IDS?:string;RESEND_API_KEY?:string;RECOVERY_FROM?:string}
 type Account={id:string;email:string;name:string;role:Role;salt:string;password_hash:string;username?:string|null;verified?:number;teacher?:number;dob?:string|null}
-type PublicAccount=Pick<Account,'id'|'name'|'role'|'username'|'verified'|'teacher'|'dob'> & {avatar_media?:string|null;cover_media?:string|null}
+type PublicAccount=Pick<Account,'id'|'name'|'role'|'username'|'verified'|'teacher'|'dob'> & {avatar_media?:string|null;cover_media?:string|null;bio?:string|null}
 type App={Bindings:Env;Variables:{user:PublicAccount;tokenHash:string}}
 const app=new Hono<App>()
 const encoder=new TextEncoder()
@@ -21,7 +21,7 @@ const randomResetCode=()=>Array.from(crypto.getRandomValues(new Uint8Array(5)),b
 const validResetCode=(code:string)=>/^(?:[2-9a-hj-np-z]{5}|[a-f0-9]{12})$/.test(code)
 const clean=(value:unknown,max:number)=>typeof value==='string'?value.trim().slice(0,max):''
 const mediaUrl=(key:string,url:string)=>new URL('/api/media/'+key,url).href
-const person=(user:PublicAccount,url:string):Person=>({id:user.id,name:user.name,username:user.username??undefined,initials:initials(user.name),role:user.role,color:user.role==='tech'?'#CFE8FF':'#FFD9B8',detail:user.teacher?'Teacher':user.role==='tech'?'Tech creator':'Student',teacher:Boolean(user.teacher),birthday:user.dob?user.dob.slice(5):undefined,verified:user.role==='tech'||Boolean(user.verified),avatar:user.avatar_media?mediaUrl(user.avatar_media,url):undefined,cover:user.cover_media?mediaUrl(user.cover_media,url):undefined})
+const person=(user:PublicAccount,url:string):Person=>({id:user.id,name:user.name,username:user.username??undefined,bio:user.bio??undefined,initials:initials(user.name),role:user.role,color:user.role==='tech'?'#CFE8FF':'#FFD9B8',detail:user.teacher?'Teacher':user.role==='tech'?'Tech creator':'Student',teacher:Boolean(user.teacher),birthday:user.dob?user.dob.slice(5):undefined,verified:user.role==='tech'||Boolean(user.verified),avatar:user.avatar_media?mediaUrl(user.avatar_media,url):undefined,cover:user.cover_media?mediaUrl(user.cover_media,url):undefined})
 const readBody=async(request:Request)=>request.json<Record<string,unknown>>().catch(()=>null)
 const time=(date:number)=>new Date(date).toISOString()
 const now=()=>Date.now()
@@ -334,7 +334,7 @@ app.post('/api/google/exchange',async c=>{
   if(attempt.status!=='complete')return c.json({pending:true},202)
   const claimed=await DB.prepare("DELETE FROM google_attempts WHERE state=? AND exchange_hash=? AND status='complete' AND expires>? RETURNING user_id").bind(state,key,now()).first<{user_id:string}>()
   if(!claimed)return c.json({error:'Google sign-in expired. Please try again.'},410)
-  const account=await DB.prepare('SELECT id,name,role,username,verified,teacher,dob,avatar_media,cover_media FROM users WHERE id=?').bind(claimed.user_id).first<PublicAccount>()
+  const account=await DB.prepare('SELECT id,name,role,username,verified,teacher,dob,avatar_media,cover_media,bio FROM users WHERE id=?').bind(claimed.user_id).first<PublicAccount>()
   if(!account)return c.json({error:'Account unavailable.'},404)
   return c.json(await session(c.env,c.executionCtx,account,c.req.url))
 })
@@ -384,7 +384,7 @@ app.use('/api/*',async(c,next)=>{
   const token=header?.match(/^Bearer ([a-f0-9]{64})$/)?.[1]??ticket
   if(!token||!/^[a-f0-9]{64}$/.test(token)) return c.json({error:'Log in to continue.'},401)
   const tokenHash=await hash(token)
-  const user=await c.env.DB.prepare('SELECT u.id,u.name,u.role,u.username,u.verified,u.teacher,u.dob,u.avatar_media,u.cover_media FROM users u JOIN sessions s ON s.user_id=u.id WHERE s.token_hash=? AND s.expires>?').bind(tokenHash,now()).first<PublicAccount>()
+  const user=await c.env.DB.prepare('SELECT u.id,u.name,u.role,u.username,u.verified,u.teacher,u.dob,u.avatar_media,u.cover_media,u.bio FROM users u JOIN sessions s ON s.user_id=u.id WHERE s.token_hash=? AND s.expires>?').bind(tokenHash,now()).first<PublicAccount>()
   if(!user) return c.json({error:'Your session has expired. Log in again.'},401)
   c.set('user',user);c.set('tokenHash',tokenHash)
   await next()
@@ -444,6 +444,33 @@ app.get('/api/me',c=>{
   queueWelcomeEmail(c.env,c.executionCtx,account.id)
   return c.json(viewer(c.env,account,c.req.url))
 })
+app.put('/api/me/profile',async c=>{
+  const input=await readBody(c.req.raw)
+  const name=typeof input?.name==='string'?input.name.trim().replace(/\s+/g,' '):''
+  const bio=typeof input?.bio==='string'?input.bio.trim():''
+  if(!name||name.length>120||typeof input?.bio!=='string'||Array.from(bio).length>50)
+    return c.json({error:'Enter a name and a bio of up to 50 characters.'},400)
+  const [firstName,...rest]=name.split(' ')
+  const account=await c.env.DB.prepare('UPDATE users SET name=?,first_name=?,last_name=?,bio=? WHERE id=? RETURNING id,name,role,username,verified,teacher,dob,avatar_media,cover_media,bio')
+    .bind(name,firstName,rest.join(' '),bio,c.get('user').id).first<PublicAccount>()
+  if(!account)return c.json({error:'Profile unavailable.'},404)
+  return c.json(viewer(c.env,account,c.req.url))
+})
+app.get('/api/me/lessons',async c=>{
+  c.header('Cache-Control','no-store')
+  const {results}=await c.env.DB.prepare('SELECT lesson_id FROM lesson_progress WHERE user_id=? ORDER BY completed_at DESC')
+    .bind(c.get('user').id).all<{lesson_id:string}>()
+  return c.json(results.map(row=>row.lesson_id))
+})
+app.put('/api/me/lessons/:id',async c=>{
+  const lesson=lessons.find(item=>item.id===c.req.param('id'))
+  if(!lesson)return c.json({error:'Lesson unavailable.'},404)
+  const input=await readBody(c.req.raw)
+  if(input?.answer!==lesson.answer)return c.json({error:'Try the practice question again.'},400)
+  await c.env.DB.prepare('INSERT INTO lesson_progress (user_id,lesson_id,completed_at) VALUES (?,?,?) ON CONFLICT DO NOTHING')
+    .bind(c.get('user').id,lesson.id,now()).run()
+  return c.json({ok:true})
+})
 app.put('/api/me/birthday',async c=>{
   const dob=(await readBody(c.req.raw))?.dob
   if(!validBirthDate(dob))return c.json({error:'Enter a valid date of birth.'},400)
@@ -459,7 +486,7 @@ app.get('/api/birthdays',async c=>{
   const window=birthdayWindow()
   const days=[...new Set([...window.map(day=>day.md),window.some(day=>day.md==='02-28')?'02-29':''].filter(Boolean))]
   const {results}=await c.env.DB.prepare(`
-    SELECT id,name,role,username,verified,teacher,dob,avatar_media,cover_media FROM users
+    SELECT id,name,role,username,verified,teacher,dob,avatar_media,cover_media,bio FROM users
     WHERE substr(dob,6,5) IN (${days.map(()=>'?').join(',')}) AND (id=? OR id IN (SELECT target FROM follows WHERE follower=?))
     LIMIT 40
   `).bind(...days,me.id,me.id).all<PublicAccount>()
@@ -470,12 +497,12 @@ app.get('/api/birthdays',async c=>{
 })
 app.get('/api/people/:id/birthday-wall',async c=>{
   const year=new Date().getUTCFullYear()
-  const {results}=await c.env.DB.prepare(`SELECT w.body,w.created,u.id,u.name,u.role,u.username,u.verified,u.teacher,u.dob,u.avatar_media,u.cover_media FROM birthday_wishes w JOIN users u ON u.id=w.sender WHERE w.recipient=? AND w.year IN (?,?) ORDER BY w.created DESC LIMIT 100`).bind(c.req.param('id'),year,year-1).all<PublicAccount&{body:string;created:number}>()
+  const {results}=await c.env.DB.prepare(`SELECT w.body,w.created,u.id,u.name,u.role,u.username,u.verified,u.teacher,u.dob,u.avatar_media,u.cover_media,u.bio FROM birthday_wishes w JOIN users u ON u.id=w.sender WHERE w.recipient=? AND w.year IN (?,?) ORDER BY w.created DESC LIMIT 100`).bind(c.req.param('id'),year,year-1).all<PublicAccount&{body:string;created:number}>()
   return c.json(results.map(item=>({body:item.body,created:time(item.created),author:person(item,c.req.url)})))
 })
 app.post('/api/people/:id/birthday-wish',async c=>{
   const me=c.get('user'),db=c.env.DB
-  const target=await db.prepare('SELECT id,name,role,username,verified,teacher,dob,avatar_media,cover_media FROM users WHERE id=?').bind(c.req.param('id')).first<PublicAccount>()
+  const target=await db.prepare('SELECT id,name,role,username,verified,teacher,dob,avatar_media,cover_media,bio FROM users WHERE id=?').bind(c.req.param('id')).first<PublicAccount>()
   if(!target||target.id===me.id)return c.json({error:'Profile unavailable.'},404)
   const day=birthdayWindow().find(item=>item.md===target.dob?.slice(5)||item.md==='02-28'&&target.dob?.slice(5)==='02-29')
   if(!target.dob||!day)return c.json({error:'It is not '+target.name.split(' ')[0]+'’s birthday today.'},400)
@@ -558,7 +585,7 @@ app.get('/api/admin/accounts',async c=>{
   const q=clean(c.req.query('q'),100).toLowerCase().replace(/^@/,'')
   const cursor=clean(c.req.query('cursor'),64)
   const {results}=await c.env.DB.prepare(`
-    SELECT id,name,email,role,username,verified,teacher,dob,avatar_media,cover_media,created FROM users
+    SELECT id,name,email,role,username,verified,teacher,dob,avatar_media,cover_media,bio,created FROM users
     WHERE id>? AND (instr(lower(name),?)>0 OR instr(username,?)>0 OR instr(email,?)>0)
     ORDER BY id LIMIT 26
   `).bind(cursor,q,q,q).all<AdminUserRow>()
@@ -570,7 +597,7 @@ app.put('/api/admin/accounts/:id',async c=>{
   if(payload.teacher!==undefined&&typeof payload.teacher!=='boolean')return c.json({error:'Choose a valid teacher status.'},400)
   const account=await c.env.DB.prepare(`
     UPDATE users SET role=?,verified=?,teacher=COALESCE(?,teacher) WHERE id=?
-    RETURNING id,name,email,role,username,verified,teacher,dob,avatar_media,cover_media,created
+    RETURNING id,name,email,role,username,verified,teacher,dob,avatar_media,cover_media,bio,created
   `).bind(payload.role,Number(payload.verified),payload.teacher===undefined?null:Number(payload.teacher),c.req.param('id')).first<AdminUserRow>()
   if(!account)return c.json({error:'Account unavailable.'},404)
   return c.json(adminAccount(account,c.req.url))
@@ -597,7 +624,7 @@ app.put('/api/me/photos/:kind',async c=>{
   try{
     const [previous,updated]=await DB.batch<PublicAccount>([
       DB.prepare('SELECT avatar_media,cover_media FROM users WHERE id=?').bind(user.id),
-      DB.prepare(`UPDATE users SET ${column}=? WHERE id=? RETURNING id,name,role,username,verified,teacher,dob,avatar_media,cover_media`).bind(key,user.id),
+      DB.prepare(`UPDATE users SET ${column}=? WHERE id=? RETURNING id,name,role,username,verified,teacher,dob,avatar_media,cover_media,bio`).bind(key,user.id),
     ])
     const account=updated.results[0]
     if(!account)throw new Error('Profile unavailable.')
@@ -609,7 +636,7 @@ app.put('/api/me/photos/:kind',async c=>{
 app.get('/api/stories',async c=>{
   const me=c.get('user')
   const {results}=await c.env.DB.prepare(`
-    SELECT id,name,role,username,verified,teacher,dob,avatar_media,cover_media FROM users
+    SELECT id,name,role,username,verified,teacher,dob,avatar_media,cover_media,bio FROM users
     WHERE id=?1 OR id IN (SELECT target FROM follows WHERE follower=?1 LIMIT 40)
   `).bind(me.id).all<PublicAccount>()
   const at=now()
@@ -664,11 +691,8 @@ app.post('/api/logout',async c=>{
   return c.json({ok:true})
 })
 type PostRow=PublicAccount&{post_id:string;body:string;created:number;media:string|null;media_kind:'image'|'video'|null;likes:number;liked:number;comments:number;reposts:number;reposted:number;rank_score:number}
-app.get('/api/feed',async c=>{
-  const id=c.get('user').id
-  const following=c.req.query('following')==='1'
-  const {results}=await c.env.DB.prepare(`
-    SELECT u.id,u.name,u.role,u.username,u.verified,u.teacher,u.dob,u.avatar_media,u.cover_media,p.id post_id,p.body,p.created,p.media,p.media_kind,
+const postProjection=`
+    SELECT u.id,u.name,u.role,u.username,u.verified,u.teacher,u.dob,u.avatar_media,u.cover_media,u.bio,p.id post_id,p.body,p.created,p.media,p.media_kind,
     (SELECT COUNT(*) FROM reactions r WHERE r.post_id=p.id AND kind='like') likes,
     EXISTS(SELECT 1 FROM reactions r WHERE r.post_id=p.id AND r.user_id=? AND kind='like') liked,
     (SELECT COUNT(*) FROM comments x WHERE x.post_id=p.id) comments,
@@ -680,11 +704,24 @@ app.get('/api/feed',async c=>{
       (SELECT COUNT(*) FROM reactions r WHERE r.post_id=p.id AND kind='repost') * 7
     ) / (1 + ((strftime('%s','now') * 1000 - p.created) / 3600000.0) / 12.0) rank_score
     FROM posts p JOIN users u ON u.id=p.author
+`
+const postView=(r:PostRow,url:string)=>({id:r.post_id,author:person(r,url),body:r.body,time:time(r.created),likes:r.likes,liked:Boolean(r.liked),comments:r.comments,reposts:r.reposts,reposted:Boolean(r.reposted),kind:r.media_kind??undefined,media:r.media?new URL('/api/media/'+r.media,url).href:undefined})
+app.get('/api/feed',async c=>{
+  const id=c.get('user').id
+  const following=c.req.query('following')==='1'
+  const {results}=await c.env.DB.prepare(`${postProjection}
     WHERE ?=0 OR p.author=? OR EXISTS(SELECT 1 FROM follows WHERE follower=? AND target=p.author)
     ORDER BY CASE WHEN ?=1 THEN p.created ELSE rank_score END DESC LIMIT 60
   `).bind(id,id,Number(following),id,id,Number(following)).all<PostRow>()
   c.header('Cache-Control','private, max-age=15, stale-while-revalidate=30')
-  return c.json(results.map(r=>({id:r.post_id,author:person(r,c.req.url),body:r.body,time:time(r.created),likes:r.likes,liked:Boolean(r.liked),comments:r.comments,reposts:r.reposts,reposted:Boolean(r.reposted),kind:r.media_kind??undefined,media:r.media?new URL('/api/media/'+r.media,c.req.url).href:undefined})))
+  return c.json(results.map(r=>postView(r,c.req.url)))
+})
+app.get('/api/posts/:id',async c=>{
+  const id=c.get('user').id
+  const post=await c.env.DB.prepare(`${postProjection} WHERE p.id=?`).bind(id,id,c.req.param('id')).first<PostRow>()
+  if(!post)return c.json({error:'Post unavailable.'},404)
+  c.header('Cache-Control','no-store')
+  return c.json(postView(post,c.req.url))
 })
 app.post('/api/posts',async c=>{
   const db=c.env.DB
@@ -739,7 +776,7 @@ function commentAttachment(row:Pick<CommentRow,'media'|'gif'|'sticker'>,url:stri
 }
 app.get('/api/posts/:id/comments',async c=>{
   const {results}=await c.env.DB.prepare(`
-    SELECT u.id,u.name,u.role,u.username,u.verified,u.teacher,u.dob,u.avatar_media,u.cover_media,x.id note_id,x.body,x.media,x.gif,x.sticker
+    SELECT u.id,u.name,u.role,u.username,u.verified,u.teacher,u.dob,u.avatar_media,u.cover_media,u.bio,x.id note_id,x.body,x.media,x.gif,x.sticker
     FROM comments x JOIN users u ON u.id=x.author WHERE post_id=? ORDER BY x.created LIMIT 100
   `).bind(c.req.param('id')).all<CommentRow>()
   return c.json(results.map(r=>({...note(r,c.req.url),attachment:commentAttachment(r,c.req.url)})))
@@ -783,7 +820,7 @@ app.get('/api/people',async c=>{
   const user=c.get('user').id
   const q=clean(c.req.query('q'),60).toLowerCase()
   const {results}=await c.env.DB.prepare(`
-    SELECT id,name,role,username,verified,teacher,dob,avatar_media,cover_media,
+    SELECT id,name,role,username,verified,teacher,dob,avatar_media,cover_media,bio,
       EXISTS(SELECT 1 FROM follows WHERE follower=? AND target=u.id) following,
       (SELECT COUNT(*) FROM follows f1 JOIN follows f2 ON f1.target=f2.target WHERE f1.follower=? AND f2.follower=u.id) mutuals,
       (SELECT COUNT(*) FROM posts p WHERE p.author=u.id) post_count
@@ -795,7 +832,7 @@ app.get('/api/people',async c=>{
   return c.json(results.map(r=>({...person(r,c.req.url),following:Boolean(r.following)})))
 })
 app.get('/api/people/:id',async c=>{
-  const account=await c.env.DB.prepare('SELECT id,name,role,username,verified,teacher,dob,avatar_media,cover_media FROM users WHERE id=?').bind(c.req.param('id')).first<PublicAccount>()
+  const account=await c.env.DB.prepare('SELECT id,name,role,username,verified,teacher,dob,avatar_media,cover_media,bio FROM users WHERE id=?').bind(c.req.param('id')).first<PublicAccount>()
   if(!account)return c.json({error:'Profile unavailable.'},404)
   return c.json(person(account,c.req.url))
 })
@@ -825,7 +862,7 @@ app.get('/api/people/:id/connections/:kind',async c=>{
   const source=kind==='followers'?'target':'follower'
   const destination=kind==='followers'?'follower':'target'
   const {results}=await db.prepare(`
-    SELECT u.id,u.name,u.role,u.username,u.verified,u.teacher,u.dob,u.avatar_media,u.cover_media FROM follows f
+    SELECT u.id,u.name,u.role,u.username,u.verified,u.teacher,u.dob,u.avatar_media,u.cover_media,u.bio FROM follows f
     JOIN users u ON u.id=f.${destination}
     WHERE f.${source}=? AND f.${destination}>? ORDER BY f.${destination} LIMIT 31
   `).bind(id,cursor).all<PublicAccount>()
@@ -849,7 +886,7 @@ app.put('/api/people/:id/follow',async c=>{
 const member=(db:D1Database,room:string,user:string)=>db.prepare('SELECT id FROM rooms WHERE id=? AND (first_user=? OR second_user=?)').bind(room,user,user).first()
 app.get('/api/rooms',async c=>{
   const user=c.get('user').id
-  const {results}=await c.env.DB.prepare('SELECT r.id room,u.id,u.name,u.role,u.username,u.verified,u.teacher,u.dob,u.avatar_media,u.cover_media FROM rooms r JOIN users u ON u.id=CASE WHEN first_user=? THEN second_user ELSE first_user END WHERE first_user=? OR second_user=? LIMIT 60').bind(user,user,user).all<PublicAccount&{room:string}>()
+  const {results}=await c.env.DB.prepare('SELECT r.id room,u.id,u.name,u.role,u.username,u.verified,u.teacher,u.dob,u.avatar_media,u.cover_media,u.bio FROM rooms r JOIN users u ON u.id=CASE WHEN first_user=? THEN second_user ELSE first_user END WHERE first_user=? OR second_user=? LIMIT 60').bind(user,user,user).all<PublicAccount&{room:string}>()
   return c.json(results.map(r=>({id:r.room,person:person(r,c.req.url)})))
 })
 app.post('/api/rooms',async c=>{
@@ -865,7 +902,7 @@ app.post('/api/rooms',async c=>{
 app.get('/api/rooms/:id/messages',async c=>{
   const room=c.req.param('id')
   if(!await member(c.env.DB,room,c.get('user').id)) return c.json({error:'Conversation unavailable.'},404)
-  const {results}=await c.env.DB.prepare('SELECT u.id,u.name,u.role,u.username,u.verified,u.teacher,u.dob,u.avatar_media,u.cover_media,m.id note_id,m.body FROM messages m JOIN users u ON u.id=m.author WHERE room=? ORDER BY m.created DESC LIMIT 100').bind(room).all<NoteRow>()
+  const {results}=await c.env.DB.prepare('SELECT u.id,u.name,u.role,u.username,u.verified,u.teacher,u.dob,u.avatar_media,u.cover_media,u.bio,m.id note_id,m.body FROM messages m JOIN users u ON u.id=m.author WHERE room=? ORDER BY m.created DESC LIMIT 100').bind(room).all<NoteRow>()
   return c.json(results.reverse().map(r=>note(r,c.req.url)))
 })
 app.post('/api/rooms/:id/messages',async c=>{
