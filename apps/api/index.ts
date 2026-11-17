@@ -64,13 +64,39 @@ async function createNotification(env:Env,ctx:WaitContext,db:D1Database,userId:s
   const devices=(await db.prepare('SELECT id,platform,endpoint,token FROM notification_devices WHERE user_id=?').bind(userId).all<PushDevice>()).results
   if(devices.length)ctx.waitUntil(sendPush(env,db,devices,'dameen',body,entityId))
 }
-function sendAccountEmail(key:string,from:string,to:string,subject:string,text:string,idempotencyKey?:string){
+function sendAccountEmail(key:string,from:string,to:string,message:{subject:string;text:string;html?:string;idempotencyKey?:string}){
+  const {idempotencyKey,...content}=message
   return fetch('https://api.resend.com/emails',{
     method:'POST',
     headers:{Authorization:'Bearer '+key,'Content-Type':'application/json',...(idempotencyKey?{'Idempotency-Key':idempotencyKey}:{})},
-    body:JSON.stringify({from,to:[to],subject,text}),
+    body:JSON.stringify({from,to:[to],...content}),
   })
 }
+const welcomeTitle='Welcome to dameen!'
+const welcomeIntro='Your account is ready. Set up your profile, find your classmates, and share your first post.'
+const welcomeFounders='Damiland Tech Club and BeepeeLabs'
+const welcomeSite='https://dameen.app'
+const welcomeEmailText=[welcomeTitle,'',welcomeIntro,'','Open dameen: '+welcomeSite,'',welcomeFounders,'Founders of dameen'].join('\n')
+const welcomeEmailHtml=`<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"></head>
+<body style="margin:0;background:#faf8ff;font-family:Arial,sans-serif;color:#20162f">
+  <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="background:#faf8ff">
+    <tr><td align="center" style="padding:24px 12px">
+      <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="max-width:520px;background:#fff;border:1px solid #e9e0ff;border-radius:16px">
+        <tr><td style="padding:28px;font-size:16px;line-height:1.55">
+          <img src="${welcomeSite}/og-image.png" alt="dameen logo" width="64" height="64" style="display:block;border-radius:14px">
+          <h1 style="margin:18px 0 8px;font-size:28px;line-height:1.2">${welcomeTitle}</h1>
+          <p style="margin:0 0 22px">${welcomeIntro}</p>
+          <p style="margin:0 0 24px"><a href="${welcomeSite}" style="display:inline-block;padding:10px 16px;background:#6a35f0;color:#fff;border-radius:8px;font-weight:bold;text-decoration:none">Open dameen</a></p>
+          <p style="margin:0;padding-top:18px;border-top:1px solid #e9e0ff"><strong>${welcomeFounders}</strong><br>Founders of dameen</p>
+        </td></tr>
+      </table>
+    </td></tr>
+  </table>
+</body>
+</html>`
+
 function queueWelcomeEmail(env:Env,ctx:WaitContext,userId:string){
   const {DB,RESEND_API_KEY,RECOVERY_FROM}=env
   if(!RESEND_API_KEY||!RECOVERY_FROM)return
@@ -78,8 +104,12 @@ function queueWelcomeEmail(env:Env,ctx:WaitContext,userId:string){
     const account=await DB.prepare('SELECT email FROM users WHERE id=? AND welcome_email_sent_at IS NULL')
       .bind(userId).first<{email:string}>()
     if(!account)return
-    const response=await sendAccountEmail(RESEND_API_KEY,RECOVERY_FROM,account.email,'Welcome to dameen!',
-      'Your account is ready. Set up your profile, find your classmates, and share your first post.\n\nOpen dameen: https://dameen.app', 'dameen/welcome/'+userId)
+    const response=await sendAccountEmail(RESEND_API_KEY,RECOVERY_FROM,account.email,{
+      subject:welcomeTitle,
+      text:welcomeEmailText,
+      html:welcomeEmailHtml,
+      idempotencyKey:'dameen/welcome/'+userId,
+    })
     if(!response.ok){console.error('Welcome email delivery rejected',response.status);return}
     await DB.prepare('UPDATE users SET welcome_email_sent_at=? WHERE id=? AND welcome_email_sent_at IS NULL').bind(now(),userId).run()
   })().catch(()=>console.error('Welcome email delivery failed')))
@@ -145,7 +175,9 @@ app.post('/api/auth/recovery/request',async c=>{
         .bind(account.id,await hash(code),now()+15*60000).run()
       text='Your dameen password reset code is '+code.toUpperCase()+'. It expires in 15 minutes. If you did not request this, you can ignore this email.'
     }
-    c.executionCtx.waitUntil(sendAccountEmail(RESEND_API_KEY,RECOVERY_FROM,email,kind==='password'?'Reset your dameen password':'Your dameen username',text)
+    c.executionCtx.waitUntil(sendAccountEmail(RESEND_API_KEY,RECOVERY_FROM,email,{
+      subject:kind==='password'?'Reset your dameen password':'Your dameen username',text,
+    })
       .then(response=>{if(!response.ok)console.error('Recovery email delivery rejected',response.status)})
       .catch(()=>console.error('Recovery email delivery failed')))
   }
