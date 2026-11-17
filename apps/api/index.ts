@@ -168,7 +168,7 @@ app.post('/api/auth/recovery/request',async c=>{
   if(!await authAllowed(DB,ip,'recovery-request',10))return c.json({error:'Too many requests. Try again in a few minutes.'},429)
   const account=await DB.prepare('SELECT id,username FROM users WHERE email=?').bind(email).first<{id:string;username:string|null}>()
   if(account&&await authAllowed(DB,account.id,'recovery-email',3)){
-    let text=account.username?'Your dameen username is @'+account.username+'.':'You can sign in to dameen with this email address.'
+    let text=account.username?'Your dameen username is '+account.username+'.':'You can sign in to dameen with this email address.'
     if(kind==='password'){
       const code=randomResetCode()
       await DB.prepare(`INSERT INTO password_resets(user_id,code_hash,expires) VALUES (?,?,?)

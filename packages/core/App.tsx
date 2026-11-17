@@ -167,7 +167,7 @@ function Auth({base,demo,busy,error,submit,onGoogle,onCancelGoogle,googlePending
         </View>
       </View>}
       {mode==='signup'&&<BirthdayFields value={birth} onChange={setBirth} note="Your date of birth lets friends wish you a happy birthday. Only the day and month are shown to others."/>}
-      <Field label={mode==='signup'?'Email':'Email or username'} placeholder={mode==='signup'?'you@example.com':'Email address or @username'} value={email} onChangeText={setEmail} keyboardType={mode==='signup'?'email-address':'default'} autoCapitalize="none" autoCorrect={false} autoComplete={mode==='signup'?'email':'username'} maxLength={254}/>
+      <Field label={mode==='signup'?'Email':'Email or username'} placeholder={mode==='signup'?'you@example.com':'Email address or username'} value={email} onChangeText={setEmail} keyboardType={mode==='signup'?'email-address':'default'} autoCapitalize="none" autoCorrect={false} autoComplete={mode==='signup'?'email':'username'} maxLength={254}/>
       <Field label="Password" placeholder="Create a password" value={password} onChangeText={setPassword} secureTextEntry={!show} autoCapitalize="none" action={show?'eyeOff':'eye'} actionLabel={show?'Hide password':'Show password'} onAction={()=>setShow(!show)}/>
       {!!error&&<View accessibilityRole="alert"><Copy color={theme.ink}>{error}</Copy></View>}
       <Button label={busy?'Please wait…':mode==='signup'?'Sign up':'Log in'} disabled={busy||mode==='signup'&&usernameStatus==='taken'} onPress={()=>submit(mode,{firstName,lastName,username:handle,email,password,dob:birthIso(birth)})}/>

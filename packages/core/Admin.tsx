@@ -102,7 +102,7 @@ export default function Admin({base,token,sample,onSampleChange}:{base:string;to
       </>:tab==='Accounts'&&<>
         {accounts?.length?accounts.map(account=><Card key={account.person.id}>
           <View style={row}><Avatar person={account.person}/><View style={{flex:1}}><PersonName person={account.person}/>
-            <Copy size={12} color={theme.muted}>{account.person.username?'@'+account.person.username+' · ':''}{account.person.teacher?'Teacher':account.person.role==='tech'?'Tech creator':'Student'}</Copy>
+            <Copy size={12} color={theme.muted}>{account.person.username?account.person.username+' · ':''}{account.person.teacher?'Teacher':account.person.role==='tech'?'Tech creator':'Student'}</Copy>
             {!!account.email&&<Copy size={12} color={theme.muted}>{account.email}</Copy>}
           </View></View>
           <View style={{...row,flexWrap:'wrap'}}>
