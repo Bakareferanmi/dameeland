@@ -1,4 +1,4 @@
-# dameeland
+# dameen
 
 A student social and learning app. The TypeScript npm workspace contains a React + Vite site, a React Native + Expo app, a Hono Worker and a shared design and product layer.
 
@@ -43,7 +43,20 @@ npm -w @dameeland/mobile run start -- --go --lan
 
 Scan the Metro QR code using Expo Go for SDK 58 on a phone connected to the same network. If LAN access is unavailable, sign into Expo from `apps/mobile` with `npx expo login`, then run `npm -w @dameeland/mobile run start -- --go --tunnel` from the workspace root.
 
-Expo starts in demo mode by default. To connect a simulator or physical device to the local API, set `EXPO_PUBLIC_API_URL` in `apps/mobile/.env.local`. Use `http://localhost:8787` for iOS Simulator or `http://10.0.2.2:8787` for the standard Android emulator. For a physical device, use the development machine's LAN address and start Wrangler with `npm -w @dameeland/api run dev -- --ip 0.0.0.0` on a trusted local network.
+Expo development starts in demo mode by default. Production exports load the existing Worker URL from `apps/mobile/.env.production`. To connect a simulator or physical device to the local API, set `EXPO_PUBLIC_API_URL` in `apps/mobile/.env.local`. Use `http://localhost:8787` for iOS Simulator or `http://10.0.2.2:8787` for the standard Android emulator. For a physical device, use the development machine's LAN address and start Wrangler with `npm -w @dameeland/api run dev -- --ip 0.0.0.0` on a trusted local network.
+
+## Production deployment
+
+Deploy the API and web app from the repository root while signed into the existing Cloudflare account.
+
+```bash
+npx wrangler deploy --config apps/api/wrangler.jsonc
+npm run deploy:web
+```
+
+In Cloudflare, open **Workers & Pages → dameeland → Custom domains** and add `dameen.app`. Wait for the domain to show **Active**. This attaches the site to the existing Pages project. The Worker accepts both the custom domain and the existing Pages URL for API requests and chat. Google sign-in continues to use the registered Worker callback. Browser sessions are tied to the site's origin, so users coming from the Pages URL sign in again on `dameen.app`.
+
+Rebuild and install the native app to see the new display name. The Android package and iOS bundle identifier are preserved so updates keep the existing app identity.
 
 ## Account recovery
 
@@ -82,8 +95,6 @@ Apply migration `0008_reaction_analytics.sql` to enable 7- and 30-day analytics.
 - The local API persists accounts and sessions, posts, comments, idempotent likes and reposts, follows and direct message history in D1. R2 stores image attachments. One Durable Object per conversation broadcasts new messages to authorized participants.
 - Learn opens a chapter-based maths lesson, the progress dashboard, and a working study timer. Play opens Quiz Duel, the games hub, and the sample leaderboard and rewards. Home opens the events and birthday screens. The preview’s Settings page links to the screen states, design system, and logo board.
 - The teacher dashboard, focus room, social events, birthdays, rewards, stories, group conversations and call screens use local preview data. The app renders the call, voice-note and video story interfaces as simulations. The lesson uses written sample chapters. Preview actions are held in memory, and some reset when you leave the screen. Live audio/video, shared classroom records and cross-device progress still require backend or media integration.
-
-The Wrangler configuration uses a placeholder database ID and a local origin. Set up production bindings and access controls before opening it to students.
 
 ## Startup and lazy loading
 

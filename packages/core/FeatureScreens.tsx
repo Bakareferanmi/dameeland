@@ -103,7 +103,7 @@ function Games({startQuiz}:{startQuiz:()=>void}){
 function DesignBoard({logoOnly=false}:{logoOnly?:boolean}){
   const {theme}=useDesign()
   return <>
-    <Card><Copy size={20} weight={800}>dameeland mark</Copy><View style={row}><Logo size={72}/><View style={{backgroundColor:'#4F25D6',borderRadius:12,padding:8}}><Logo size={72} variant="inverse"/></View></View></Card>
+    <Card><Copy size={20} weight={800}>dameen mark</Copy><View style={row}><Logo size={72}/><View style={{backgroundColor:'#4F25D6',borderRadius:12,padding:8}}><Logo size={72} variant="inverse"/></View></View></Card>
     {!logoOnly&&<Card>
       <Copy size={22} weight={800}>Plus Jakarta Sans</Copy><Copy>Body text, avatar shapes, and brand colours</Copy>
       <View style={row}><Avatar person={people[0]}/><Avatar person={people[1]}/></View>

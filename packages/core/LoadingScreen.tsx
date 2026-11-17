@@ -34,7 +34,7 @@ export function LoadingScreen({compact=false}:{compact?:boolean}){
     return ()=>animation.stop()
   },[animate,pulse])
   const translateX=look.interpolate({inputRange:[-1,1],outputRange:[-5,5]})
-  return <View testID="dameeland-loading" accessibilityRole="progressbar" accessibilityLabel="Loading dameeland" accessibilityState={{busy:true}}
+  return <View testID="dameeland-loading" accessibilityRole="progressbar" accessibilityLabel="Loading dameen" accessibilityState={{busy:true}}
     style={{flex:compact?undefined:1,minHeight:compact?208:0,alignItems:'center',justifyContent:'center',backgroundColor:'#4F25D6',borderRadius:compact?20:0}}>
     <Animated.View style={{width:logoSize,height:logoSize,transform:[{scale:pulse}]}} accessibilityElementsHidden importantForAccessibility="no-hide-descendants">
       <Image source={{uri:art.loadingLogo}} resizeMode="contain" style={{width:logoSize,height:logoSize}}/>

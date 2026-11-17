@@ -116,7 +116,7 @@ export function Logo({variant='brand',size=40}:{variant?:'brand'|'inverse';size?
   const {theme}=useDesign()
   const uri=variant==='inverse'||theme===themes.dark?art.limeLogo:art.purpleLogo
   return <Image
-    accessibilityLabel="dameeland"
+    accessibilityLabel="dameen"
     source={{uri}}
     resizeMode="contain"
     style={{width:size,height:size,flexShrink:0}}

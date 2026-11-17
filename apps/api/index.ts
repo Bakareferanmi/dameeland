@@ -59,7 +59,7 @@ async function createNotification(env:Env,ctx:WaitContext,db:D1Database,userId:s
   if(pref&&kind!=='call'&&quietNow(pref.quiet_start,pref.quiet_end))return
   await db.prepare('INSERT INTO notifications (id,user_id,actor_id,kind,entity_id,body,group_key,created) VALUES (?,?,?,?,?,?,?,?)').bind(crypto.randomUUID(),userId,actorId??null,kind,entityId??null,body,groupKey??null,now()).run()
   const devices=(await db.prepare('SELECT id,platform,endpoint,token FROM notification_devices WHERE user_id=?').bind(userId).all<PushDevice>()).results
-  if(devices.length)ctx.waitUntil(sendPush(env,db,devices,'dameeland',body,entityId))
+  if(devices.length)ctx.waitUntil(sendPush(env,db,devices,'dameen',body,entityId))
 }
 async function session(env:Env,account:PublicAccount,url:string){
   const token=random(32)
@@ -82,7 +82,11 @@ async function authAllowed(db:D1Database,ip:string,flow:string,maxAttempts=25){
     .bind(await hash(flow+':'+ip+':'+window),(window+1)*600000).first<number>('attempts')
   return (limit??0)<=maxAttempts
 }
-app.use('/api/*',async(c,next)=>cors({origin:[c.env.ALLOWED_ORIGIN,'http://127.0.0.1:5173'],allowMethods:['GET','POST','PUT','DELETE','OPTIONS'],allowHeaders:['Authorization','Content-Type']})(c,next))
+const allowedOrigins=(env:Env)=>[
+  ...env.ALLOWED_ORIGIN.split(',').map(origin=>origin.trim()).filter(Boolean),
+  'http://127.0.0.1:5173',
+]
+app.use('/api/*',async(c,next)=>cors({origin:allowedOrigins(c.env),allowMethods:['GET','POST','PUT','DELETE','OPTIONS'],allowHeaders:['Authorization','Content-Type']})(c,next))
 app.use('/api/*',async(c,next)=>{
   if(c.req.method!=='POST'&&c.req.method!=='PUT')return next()
   const maxSize=c.req.path==='/api/posts'||c.req.path==='/api/stories'?30000000:c.req.path.startsWith('/api/me/photos/')||/^\/api\/posts\/[^/]+\/comments$/.test(c.req.path)?5300000:8192
@@ -109,17 +113,17 @@ app.post('/api/auth/recovery/request',async c=>{
   if(!await authAllowed(DB,ip,'recovery-request',10))return c.json({error:'Too many requests. Try again in a few minutes.'},429)
   const account=await DB.prepare('SELECT id,username FROM users WHERE email=?').bind(email).first<{id:string;username:string|null}>()
   if(account&&await authAllowed(DB,account.id,'recovery-email',3)){
-    let text=account.username?'Your dameeland username is @'+account.username+'.':'You can sign in to dameeland with this email address.'
+    let text=account.username?'Your dameen username is @'+account.username+'.':'You can sign in to dameen with this email address.'
     if(kind==='password'){
       const code=random(6)
       await DB.prepare(`INSERT INTO password_resets(user_id,code_hash,expires) VALUES (?,?,?)
         ON CONFLICT(user_id) DO UPDATE SET code_hash=excluded.code_hash,expires=excluded.expires`)
         .bind(account.id,await hash(code),now()+15*60000).run()
-      text='Your dameeland password reset code is '+code.toUpperCase()+'. It expires in 15 minutes. If you did not request this, you can ignore this email.'
+      text='Your dameen password reset code is '+code.toUpperCase()+'. It expires in 15 minutes. If you did not request this, you can ignore this email.'
     }
     c.executionCtx.waitUntil(fetch('https://api.resend.com/emails',{
       method:'POST',headers:{Authorization:'Bearer '+RESEND_API_KEY,'Content-Type':'application/json'},
-      body:JSON.stringify({from:RECOVERY_FROM,to:[email],subject:kind==='password'?'Reset your dameeland password':'Your dameeland username',text}),
+      body:JSON.stringify({from:RECOVERY_FROM,to:[email],subject:kind==='password'?'Reset your dameen password':'Your dameen username',text}),
     }).then(response=>{if(!response.ok)console.error('Recovery email delivery rejected',response.status)})
       .catch(()=>console.error('Recovery email delivery failed')))
   }
@@ -221,8 +225,8 @@ app.get('/api/google/callback',async c=>{
   c.header('Referrer-Policy','no-referrer')
   const state=c.req.query('state')??''
   const complete=(ok:boolean)=>c.html(ok
-    ?'<title>dameeland</title><p>Google sign-in completed. Return to dameeland to continue.</p>'
-    :'<title>dameeland</title><p>Google sign-in did not complete. Return to dameeland for details.</p>',ok?200:400)
+    ?'<title>dameen</title><p>Google sign-in completed. Return to dameen to continue.</p>'
+    :'<title>dameen</title><p>Google sign-in did not complete. Return to dameen for details.</p>',ok?200:400)
   if(!/^[a-f0-9]{48}$/.test(state)||!GOOGLE_CLIENT_ID||!GOOGLE_CLIENT_SECRET||!GOOGLE_REDIRECT_URI)return complete(false)
   const attempt=await DB.prepare("UPDATE google_attempts SET status='processing' WHERE state=? AND status='pending' AND expires>? RETURNING verifier,username,dob").bind(state,now()).first<GoogleAttempt>()
   if(!attempt)return complete(false)
@@ -246,7 +250,7 @@ app.get('/api/google/callback',async c=>{
     let account=await DB.prepare('SELECT id FROM users WHERE google_sub=?').bind(sub).first<{id:string}>()
     if(!account){
       if(await DB.prepare('SELECT id FROM users WHERE email=?').bind(email).first())return fail('An account already uses this email. Log in with your password.')
-      if(!attempt.username)return fail('No Google account found on dameeland. Choose Sign up first.')
+      if(!attempt.username)return fail('No Google account found on dameen. Choose Sign up first.')
       const first=capitalizeName(clean(info.given_name,60)),last=capitalizeName(clean(info.family_name,60))
       if(!first||!last)return fail('Add a first and last name to your Google profile or sign up with email.')
       await DB.prepare('INSERT INTO users(id,email,name,role,salt,password_hash,first_name,last_name,google_sub,username,dob) VALUES (?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT DO NOTHING')
@@ -821,7 +825,8 @@ app.get('/api/rooms/:id/socket',async c=>{
   const user=c.get('user').id
   if(!await member(c.env.DB,room,user)) return c.json({error:'Conversation unavailable.'},404)
   if(c.req.header('Upgrade')?.toLowerCase()!=='websocket') return c.json({error:'WebSocket required.'},426)
-  if(c.req.header('Origin')&&!new Set([c.env.ALLOWED_ORIGIN,'http://127.0.0.1:5173']).has(c.req.header('Origin')!)) return c.json({error:'Origin unavailable.'},403)
+  const origin=c.req.header('Origin')
+  if(origin&&!allowedOrigins(c.env).includes(origin)) return c.json({error:'Origin unavailable.'},403)
   await touchPresence(c.env.DB,user,true)
   return c.env.ROOMS.getByName(room).fetch('https://room.internal/socket',{headers:{Upgrade:'websocket','X-Room-User':user}})
 })

@@ -29,11 +29,35 @@ const oneMessage=socket=>new Promise((resolve,reject)=>{
   const timer=setTimeout(()=>reject(new Error('Timed out waiting for Durable Object broadcast')),5000)
   socket.addEventListener('message',event=>{clearTimeout(timer);resolve(JSON.parse(event.data))},{once:true})
 })
-const openSocket=(path,token)=>new Promise((resolve,reject)=>{
-  const socket=new WebSocket(base.replace(/^http/,'ws')+'/api'+path,['dameeland','ticket.'+token])
+const openSocket=(path,token,origin)=>new Promise((resolve,reject)=>{
+  const socket=new WebSocket(base.replace(/^http/,'ws')+'/api'+path,{
+    protocols:['dameeland','ticket.'+token],
+    headers:origin?{Origin:origin}:{},
+  })
   const timer=setTimeout(()=>{socket.close();reject(new Error('WebSocket handshake timed out'))},5000)
   socket.addEventListener('open',()=>{clearTimeout(timer);resolve(socket)},{once:true})
   socket.addEventListener('error',()=>{clearTimeout(timer);reject(new Error('WebSocket handshake failed'))},{once:true})
+})
+test('API preflight allows both production sites and rejects unknown origins',async()=>{
+  for(const origin of ['https://dameen.app','https://dameeland.pages.dev','https://untrusted.example']){
+    const response=await fetch(base+'/api/health',{
+      method:'OPTIONS',
+      headers:{Origin:origin,'Access-Control-Request-Method':'GET','Access-Control-Request-Headers':'Authorization'},
+    })
+    assert.equal(response.status,204)
+    assert.equal(response.headers.get('Access-Control-Allow-Origin'),origin==='https://untrusted.example'?null:origin)
+  }
+})
+test('chat WebSockets allow both production sites and native clients',async()=>{
+  const ada=await create('Ada Qa')
+  const tobi=await create('Tobi Qa')
+  const room=await request('/rooms',{token:ada.token,method:'POST',body:{target:tobi.user.id}})
+  const path='/rooms/'+room.id+'/socket'
+  await assert.rejects(openSocket(path,tobi.token,'https://untrusted.example'),/handshake failed/)
+  for(const origin of ['https://dameen.app','https://dameeland.pages.dev',undefined]){
+    const socket=await openSocket(path,tobi.token,origin)
+    socket.close()
+  }
 })
 test('local Worker persists accounts, social activity, media, and private realtime chat',async()=>{
   await request('/health')

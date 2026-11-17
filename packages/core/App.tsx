@@ -622,7 +622,7 @@ export default function App(props:Props){
     return ()=>clearTimeout(timer)
   },[voicePlaying])
   const showProfile=(person:Person)=>open('Profile',{profile:demo?demoAccounts.find(account=>account.person.id===person.id)?.person??person:person})
-  const profileLink=(person:Person)=>'https://dameeland.pages.dev/?profile='+encodeURIComponent(person.id)
+  const profileLink=(person:Person)=>'https://dameen.app/?profile='+encodeURIComponent(person.id)
   useEffect(()=>{
     if(profileLinkHandled.current||stage!=='app'||(!demo&&!token)||Platform.OS!=='web')return
     const id=new URLSearchParams(window.location.search).get('profile')
@@ -1039,10 +1039,10 @@ export default function App(props:Props){
           {ownProfile?<>{props.pickMedia&&<>
             <Button label={photoBusy==='avatar'?'Updating picture…':'Change profile picture'} leading="image" variant="secondary" disabled={!!photoBusy} onPress={()=>void uploadProfilePhoto('avatar')}/>
             <Button label={photoBusy==='cover'?'Updating cover…':'Change cover photo'} variant="secondary" disabled={!!photoBusy} onPress={()=>void uploadProfilePhoto('cover')}/>
-          </>}<Button label="Share profile" leading="sh" variant="secondary" onPress={()=>{void props.share?.('Follow '+profile.name+' on dameeland: '+profileLink(profile)).then(()=>notify('Profile link ready to share')).catch(fail)}}/><Button label="Settings" leading="settings" variant="secondary" onPress={()=>open('Settings')}/></>:<>
+          </>}<Button label="Share profile" leading="sh" variant="secondary" onPress={()=>{void props.share?.('Follow '+profile.name+' on dameen: '+profileLink(profile)).then(()=>notify('Profile link ready to share')).catch(fail)}}/><Button label="Settings" leading="settings" variant="secondary" onPress={()=>open('Settings')}/></>:<>
             <Button label={follows[profile.id]?'Following':'Follow'} disabled={!demo&&!currentStats?.data} onPress={()=>void follow(profile)}/>
             <Button label="Message" leading="msg" variant="secondary" onPress={()=>void messagePerson(profile)}/>
-            <Button label="Share profile" leading="sh" variant="secondary" onPress={()=>{void props.share?.('Follow '+profile.name+' on dameeland: '+profileLink(profile)).then(()=>notify('Profile link ready to share')).catch(fail)}}/>
+            <Button label="Share profile" leading="sh" variant="secondary" onPress={()=>{void props.share?.('Follow '+profile.name+' on dameen: '+profileLink(profile)).then(()=>notify('Profile link ready to share')).catch(fail)}}/>
           </>}
         </View>
       </View>
@@ -1054,7 +1054,7 @@ export default function App(props:Props){
   </>
   const settings=<>
     <Card>{section('Appearance')}<View style={row}>{(['light','dark','system'] as const).map(mode=><Button key={mode} label={mode[0].toUpperCase()+mode.slice(1)} variant={appearance===mode?'primary':'secondary'} onPress={()=>setAppearance(mode)}/>)}</View></Card>
-    <Card>{section('Notifications')}<Button label={notifications?'In-app notifications on':'In-app notifications off'} variant="secondary" onPress={()=>{setNotifications(!notifications);setUnread(!notifications&&demo)}}/>{props.requestNotifications&&<Button label={deviceNotifications==='granted'?'Device notifications enabled':'Enable device notifications'} variant="secondary" disabled={deviceNotifications==='granted'} onPress={()=>void enableDeviceNotifications()}/>} {!demo&&<><View style={{...row,alignItems:'flex-start'}}><View style={{flex:1}}><Field label="Quiet hours start" placeholder="22:00" value={quietStart} onChangeText={setQuietStart} maxLength={5}/></View><View style={{flex:1}}><Field label="Quiet hours end" placeholder="07:00" value={quietEnd} onChangeText={setQuietEnd} maxLength={5}/></View></View><Button label="Save notification preferences" variant="secondary" onPress={()=>void saveNotificationPreferences()}/></>}<Copy size={12} color={theme.muted}>{deviceNotifications==='denied'?'Allow notifications in your browser or phone settings, then try again.':'Get alerts for messages and activity when dameeland is in the background.'}</Copy></Card>
+    <Card>{section('Notifications')}<Button label={notifications?'In-app notifications on':'In-app notifications off'} variant="secondary" onPress={()=>{setNotifications(!notifications);setUnread(!notifications&&demo)}}/>{props.requestNotifications&&<Button label={deviceNotifications==='granted'?'Device notifications enabled':'Enable device notifications'} variant="secondary" disabled={deviceNotifications==='granted'} onPress={()=>void enableDeviceNotifications()}/>} {!demo&&<><View style={{...row,alignItems:'flex-start'}}><View style={{flex:1}}><Field label="Quiet hours start" placeholder="22:00" value={quietStart} onChangeText={setQuietStart} maxLength={5}/></View><View style={{flex:1}}><Field label="Quiet hours end" placeholder="07:00" value={quietEnd} onChangeText={setQuietEnd} maxLength={5}/></View></View><Button label="Save notification preferences" variant="secondary" onPress={()=>void saveNotificationPreferences()}/></>}<Copy size={12} color={theme.muted}>{deviceNotifications==='denied'?'Allow notifications in your browser or phone settings, then try again.':'Get alerts for messages and activity when dameen is in the background.'}</Copy></Card>
     {demo&&<Card>{section('Privacy and safety')}<Copy color={theme.muted}>Try the activity status control in this preview.</Copy><Button label={quietMode?'Show my activity status':'Hide my activity status'} variant="secondary" onPress={()=>setQuietMode(!quietMode)}/></Card>}
     {demo&&<ScreenLinks items={ [['Screen states','settings'],['Design system','image'],['Logo board','image']] } open={open}/>}
     {(demo||user.isAdmin)&&<Button label="Admin dashboard" leading="settings" variant="secondary" onPress={()=>open('Admin')}/>}
