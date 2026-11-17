@@ -60,7 +60,7 @@ export type CommentAttachment =
   | {kind:'image';url:string}
   | {kind:'gif';id:keyof typeof commentGifs}
   | {kind:'sticker';id:keyof typeof commentStickers}
-export type Note = {id:string; author:Person; body:string; attachment?:CommentAttachment;parentId?:string;replyTo?:string;likes?:number;liked?:boolean}
+export type Note = {id:string; author:Person; body:string; attachment?:CommentAttachment;parentId?:string;replyTo?:string;likes?:number;liked?:boolean;readAt?:string}
 export const me:Person = {id:'you',name:'You',initials:'YO',role:'student',color:lime,detail:'Student'}
 export const people:Person[] = [
   {id:'ada',username:'ada',name:'Ada O.',initials:'AO',role:'student',color:'#FFD9B8',detail:'SS2 · Student',verified:true},

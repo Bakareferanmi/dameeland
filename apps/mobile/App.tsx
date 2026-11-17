@@ -21,6 +21,7 @@ const saveToken=(value:string|null)=>value?SecureStore.setItemAsync(tokenKey,val
 const share=async(url:string)=>{await Share.share(Platform.OS==='ios'?{url}:{message:url})}
 Notifications.setNotificationHandler({handleNotification:async()=>({shouldShowAlert:true,shouldShowBanner:true,shouldShowList:true,shouldPlaySound:true,shouldSetBadge:true})})
 const requestNotifications=async()=>{
+  if(Platform.OS==='android')await Notifications.setNotificationChannelAsync('calls',{name:'Incoming calls',importance:Notifications.AndroidImportance.MAX,sound:'default',vibrationPattern:[0,500,250,500]})
   const current=await Notifications.getPermissionsAsync()
   if(current.granted)return true
   const next=await Notifications.requestPermissionsAsync()

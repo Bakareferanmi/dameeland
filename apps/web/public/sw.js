@@ -24,9 +24,9 @@ self.addEventListener('fetch',event=>{
   }))
 })
 self.addEventListener('push',event=>{
-  let payload={title:'dameen',body:'You have new activity.',entityId:null,notificationId:null}
+  let payload={title:'dameen',body:'You have new activity.',entityId:null,notificationId:null,kind:null}
   try{if(event.data)payload={...payload,...event.data.json()}}catch{}
-  event.waitUntil(self.registration.showNotification(payload.title,{body:payload.body,icon:'/icon-192.png',badge:'/icon-192.png',tag:payload.notificationId?'dameeland-'+payload.notificationId:'dameeland-activity',data:{notificationId:payload.notificationId}}))
+  event.waitUntil(self.registration.showNotification(payload.title,{body:payload.body,icon:'/icon-192.png',badge:'/icon-192.png',requireInteraction:payload.kind==='call',tag:payload.notificationId?'dameeland-'+payload.notificationId:'dameeland-activity',data:{notificationId:payload.notificationId}}))
 })
 self.addEventListener('notificationclick',event=>{
   event.notification.close()

@@ -87,11 +87,11 @@ export async function waitForCallIce(state:()=>string,subscribe:(listener:()=>vo
 
 type ActiveCall={
   id:string;video:boolean;offer?:string;peer?:CallPeer;local?:CallStream;remote?:CallStream;
-  state:'incoming'|'preparing'|'ringing'|'connecting'|'connected';timer?:ReturnType<typeof setTimeout>
+  state:'incoming'|'preparing'|'calling'|'ringing'|'connecting'|'connected';timer?:ReturnType<typeof setTimeout>
 }
 const stop=(stream?:CallStream)=>stream?.getTracks().forEach(track=>track.stop())
 
-export function useRoomCall(media:CallMedia|undefined,roomKey:string|undefined,send:(signal:CallSignal)=>boolean,notify:(message:string)=>void){
+export function useRoomCall(media:CallMedia|undefined,roomKey:string|undefined,send:(signal:CallSignal)=>boolean|Promise<boolean>,notify:(message:string)=>void){
   const current=useRef<ActiveCall|null>(null)
   const [call,setCall]=useState<ActiveCall|null>(null)
   const update=(active:ActiveCall)=>{if(current.current===active)setCall({...active})}
@@ -104,7 +104,7 @@ export function useRoomCall(media:CallMedia|undefined,roomKey:string|undefined,s
   function end(message?:string,signal=true){
     const active=current.current
     if(!active)return
-    if(signal)send({kind:'end',id:active.id})
+    if(signal)void send({kind:'end',id:active.id})
     clear()
     if(message)notify(message)
   }
@@ -138,10 +138,10 @@ export function useRoomCall(media:CallMedia|undefined,roomKey:string|undefined,s
       const sdp=peer.getLocalDescription()?.sdp
       if(!sdp)throw new Error('Couldn’t prepare the call.')
       const outgoing:CallSignal=active.offer?{kind:'answer',id:active.id,sdp}:{kind:'offer',id:active.id,video:active.video,sdp}
-      if(!send(outgoing))throw new Error('Chat is reconnecting. Try the call again.')
+      if(!await send(outgoing))throw new Error('Couldn’t reach the other person. Try the call again.')
       if(current.current?.state!=='connected'){
-        active.state=active.offer?'connecting':'ringing';update(active)
-        timeout(active,active.offer?'The call couldn’t connect.':'No answer yet.',35000)
+        active.state=active.offer?'connecting':'calling';update(active)
+        timeout(active,active.offer?'The call couldn’t connect.':'No answer yet.',65000)
       }
     }catch(reason){
       if(current.current===active)end(reason instanceof Error?reason.message:'Couldn’t access call media.')
@@ -169,8 +169,12 @@ export function useRoomCall(media:CallMedia|undefined,roomKey:string|undefined,s
       return
     }
     if(!active||active.id!==signal.id)return
+    if(signal.kind==='ringing'){
+      if(active.state==='calling'){active.state='ringing';update(active)}
+      return
+    }
     if(signal.kind==='answer'){
-      if(active.state!=='ringing'||!active.peer)return
+      if((active.state!=='calling'&&active.state!=='ringing')||!active.peer)return
       active.state='connecting';update(active)
       timeout(active,'The call couldn’t connect directly.',25000)
       try{await active.peer.setRemoteDescription({type:'answer',sdp:signal.sdp})}
@@ -182,7 +186,7 @@ export function useRoomCall(media:CallMedia|undefined,roomKey:string|undefined,s
   return {call,start,receive,end,accept:()=>{const active=current.current;if(active?.state==='incoming')void connect(active)}}
 }
 
-const callLabels={incoming:'Incoming call',preparing:'Starting call…',ringing:'Ringing…',connecting:'Connecting…',connected:'Connected'}
+const callLabels={incoming:'Incoming call',preparing:'Starting call…',calling:'Calling…',ringing:'Ringing…',connecting:'Connecting…',connected:'Connected'}
 export function RoomCall({person,media,call,accept,end}:{person:Person;media:CallMedia;call:ActiveCall;accept:()=>void;end:()=>void}){
   const [muted,setMuted]=useState(false)
   const [cameraOff,setCameraOff]=useState(false)

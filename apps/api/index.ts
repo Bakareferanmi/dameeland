@@ -39,18 +39,18 @@ const quietNow=(start:string|null,end:string|null)=>{
   return start<=end?current>=start&&current<end:current>=start||current<end
 }
 type PushDevice={id:string;platform:string;endpoint:string|null;token:string|null}
-async function sendPush(env:Env,db:D1Database,devices:PushDevice[],title:string,body:string,entityId?:string,notificationId?:string){
+async function sendPush(env:Env,db:D1Database,devices:PushDevice[],title:string,body:string,entityId?:string,notificationId?:string,kind?:NotificationKind){
   const dead:string[]=[]
   if(env.VAPID_PUBLIC_KEY&&env.VAPID_PRIVATE_KEY&&env.VAPID_SUBJECT){
     webpush.setVapidDetails(env.VAPID_SUBJECT,env.VAPID_PUBLIC_KEY,env.VAPID_PRIVATE_KEY)
     await Promise.all(devices.filter(device=>device.endpoint&&device.platform!=='android'&&device.platform!=='ios').map(async device=>{
-      try{await webpush.sendNotification({endpoint:device.endpoint!,keys:JSON.parse(device.token??'{}')},JSON.stringify({title,body,entityId,notificationId}))}
+      try{await webpush.sendNotification({endpoint:device.endpoint!,keys:JSON.parse(device.token??'{}')},JSON.stringify({title,body,entityId,notificationId,kind}))}
       catch(error){const status=error instanceof webpush.WebPushError?error.statusCode:0;if(status===404||status===410)dead.push(device.id)}
     }))
   }
   const expo=devices.filter(device=>device.token?.startsWith('ExponentPushToken['))
   if(expo.length){
-    const response=await fetch('https://exp.host/--/api/v2/push/send',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(expo.map(device=>({to:device.token,title,body,data:{entityId,notificationId},sound:'default'})))})
+    const response=await fetch('https://exp.host/--/api/v2/push/send',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(expo.map(device=>({to:device.token,title,body,data:{entityId,notificationId,kind},sound:'default',priority:kind==='call'?'high':'normal',...(kind==='call'&&device.platform==='android'?{channelId:'calls'}:{})})))})
     if(response.ok){const result=await response.json<{data?:Array<{status:string;details?:{error?:string}}>}>();result.data?.forEach((item,index)=>{if(item.status==='error'&&item.details?.error==='DeviceNotRegistered')dead.push(expo[index].id)})}
   }
   if(dead.length)await db.prepare('DELETE FROM notification_devices WHERE id IN ('+dead.map(()=>'?').join(',')+')').bind(...dead).run()
@@ -65,7 +65,7 @@ async function createNotification(env:Env,ctx:WaitContext,db:D1Database,userId:s
   const devices=(await db.prepare('SELECT id,platform,endpoint,token FROM notification_devices WHERE user_id=?').bind(userId).all<PushDevice>()).results
   if(devices.length&&!muted){
     const actor=actorId?await db.prepare('SELECT username FROM users WHERE id=?').bind(actorId).first<{username:string}>():null
-    ctx.waitUntil(sendPush(env,db,devices,'dameen',actor?.username?actor.username+' '+body:body,entityId,notificationId))
+    ctx.waitUntil(sendPush(env,db,devices,kind==='call'?'Incoming call':'dameen',actor?.username?actor.username+' '+body:body,entityId,notificationId,kind))
   }
 }
 function sendAccountEmail(key:string,from:string,to:string,message:{subject:string;text:string;html?:string;idempotencyKey?:string}){
@@ -558,7 +558,7 @@ app.post('/api/people/:id/birthday-wish',async c=>{
   const room=await db.prepare('SELECT id FROM rooms WHERE first_user=? AND second_user=?').bind(first,second).first<{id:string}>()
   if(!room)return c.json({error:'Could not send your wish.'},500)
   const message={id:crypto.randomUUID(),author:person(me,c.req.url),body}
-  await db.prepare('INSERT INTO messages VALUES (?,?,?,?,?)').bind(message.id,room.id,me.id,message.body,now()).run()
+  await db.prepare('INSERT INTO messages (id,room,author,body,created) VALUES (?,?,?,?,?)').bind(message.id,room.id,me.id,message.body,now()).run()
   await createNotification(c.env,c.executionCtx,db,target.id,me.id,'birthday',target.id,me.name+' sent you a birthday wish','birthday:'+target.id+':'+day.year)
   c.executionCtx.waitUntil(c.env.ROOMS.getByName(room.id).fetch('https://room.internal/notify',{method:'POST',body:JSON.stringify(message)}))
   return c.json({ok:true,room:room.id},201)
@@ -984,8 +984,18 @@ app.post('/api/rooms',async c=>{
 app.get('/api/rooms/:id/messages',async c=>{
   const room=c.req.param('id')
   if(!await member(c.env.DB,room,c.get('user').id)) return c.json({error:'Conversation unavailable.'},404)
-  const {results}=await c.env.DB.prepare('SELECT u.id,u.name,u.role,u.username,u.verified,u.teacher,u.dob,u.avatar_media,u.cover_media,u.bio,m.id note_id,m.body FROM messages m JOIN users u ON u.id=m.author WHERE room=? ORDER BY m.created DESC LIMIT 100').bind(room).all<NoteRow>()
-  return c.json(results.reverse().map(r=>note(r,c.req.url)))
+  const {results}=await c.env.DB.prepare('SELECT u.id,u.name,u.role,u.username,u.verified,u.teacher,u.dob,u.avatar_media,u.cover_media,u.bio,m.id note_id,m.body,m.read_at FROM messages m JOIN users u ON u.id=m.author WHERE room=? ORDER BY m.created DESC LIMIT 100').bind(room).all<NoteRow&{read_at:number|null}>()
+  return c.json(results.reverse().map(r=>({...note(r,c.req.url),readAt:r.read_at?time(r.read_at):undefined})))
+})
+app.put('/api/rooms/:id/read',async c=>{
+  const room=c.req.param('id'),user=c.get('user').id
+  if(!await member(c.env.DB,room,user))return c.json({error:'Conversation unavailable.'},404)
+  const at=now()
+  const {results}=await c.env.DB.prepare('UPDATE messages SET read_at=? WHERE room=? AND author!=? AND read_at IS NULL RETURNING id').bind(at,room,user).all<{id:string}>()
+  const ids=results.map(item=>item.id)
+  const readAt=time(at)
+  if(ids.length)c.executionCtx.waitUntil(c.env.ROOMS.getByName(room).fetch('https://room.internal/notify',{method:'POST',body:JSON.stringify({type:'read',ids,readAt})}))
+  return c.json({ids,readAt})
 })
 app.post('/api/rooms/:id/messages',async c=>{
   const room=c.req.param('id'), author=c.get('user')
@@ -993,11 +1003,60 @@ app.post('/api/rooms/:id/messages',async c=>{
   const body=clean((await readBody(c.req.raw))?.body,800)
   if(!body) return c.json({error:'Enter a message.'},400)
   const message={id:crypto.randomUUID(),author:person(author,c.req.url),body}
-  await c.env.DB.prepare('INSERT INTO messages VALUES (?,?,?,?,?)').bind(message.id,room,author.id,body,now()).run()
+  await c.env.DB.prepare('INSERT INTO messages (id,room,author,body,created) VALUES (?,?,?,?,?)').bind(message.id,room,author.id,body,now()).run()
   const other=await c.env.DB.prepare('SELECT CASE WHEN first_user=? THEN second_user ELSE first_user END target FROM rooms WHERE id=?').bind(author.id,room).first<{target:string}>()
   if(other)await createNotification(c.env,c.executionCtx,c.env.DB,other.target,author.id,'message',room,'sent you a message','room:'+room)
   c.executionCtx.waitUntil(c.env.ROOMS.getByName(room).fetch('https://room.internal/notify',{method:'POST',body:JSON.stringify(message)}))
   return c.json(message,201)
+})
+type CallRow={id:string;room:string;caller:string;callee:string;video:number;offer:string;answer:string|null;state:'offered'|'ringing'|'answered'|'ended'|'declined';created:number;expires:number}
+const callState=(row:CallRow)=>row.expires<now()&&row.state!=='answered'?'ended':row.state
+app.post('/api/rooms/:id/calls',async c=>{
+  const room=c.req.param('id'),user=c.get('user').id
+  const signal=readCallSignal((await readBody(c.req.raw))?.signal)
+  if(!signal||signal.kind!=='offer')return c.json({error:'Invalid call offer.'},400)
+  const peer=await c.env.DB.prepare('SELECT CASE WHEN first_user=? THEN second_user ELSE first_user END target FROM rooms WHERE id=? AND (first_user=? OR second_user=?)').bind(user,room,user,user).first<{target:string}>()
+  if(!peer)return c.json({error:'Conversation unavailable.'},404)
+  const at=now()
+  const result=await c.env.DB.prepare('INSERT INTO calls (id,room,caller,callee,video,offer,state,created,expires) VALUES (?,?,?,?,?,? ,\'offered\',?,?) ON CONFLICT DO NOTHING').bind(signal.id,room,user,peer.target,Number(signal.video),signal.sdp,at,at+65000).run()
+  if(!result.meta.changes)return c.json({error:'Call already started.'},409)
+  await createNotification(c.env,c.executionCtx,c.env.DB,peer.target,user,'call','call:'+signal.id,signal.video?'is video calling you':'is voice calling you')
+  return c.json({id:signal.id,state:'offered',expires:time(at+65000)},201)
+})
+app.get('/api/calls/incoming',async c=>{
+  const {results}=await c.env.DB.prepare(`SELECT x.id,x.room,x.caller,x.callee,x.video,x.offer,x.answer,x.state,x.created,x.expires,
+    u.name,u.role,u.username,u.verified,u.teacher,u.dob,u.avatar_media,u.cover_media,u.bio
+    FROM calls x JOIN users u ON u.id=x.caller
+    WHERE x.callee=? AND x.state IN ('offered','ringing') AND x.expires>? ORDER BY x.created DESC LIMIT 3`).bind(c.get('user').id,now()).all<CallRow&PublicAccount>()
+  c.header('Cache-Control','no-store')
+  return c.json(results.map(r=>({id:r.id,room:r.room,person:person({...r,id:r.caller},c.req.url),video:Boolean(r.video),offer:r.offer,state:r.state,expires:time(r.expires)})))
+})
+app.get('/api/calls/:id',async c=>{
+  const row=await c.env.DB.prepare('SELECT * FROM calls WHERE id=? AND (caller=? OR callee=?)').bind(c.req.param('id'),c.get('user').id,c.get('user').id).first<CallRow>()
+  if(!row)return c.json({error:'Call unavailable.'},404)
+  c.header('Cache-Control','no-store')
+  return c.json({id:row.id,room:row.room,state:callState(row),video:Boolean(row.video),offer:row.callee===c.get('user').id?row.offer:undefined,answer:row.caller===c.get('user').id?row.answer:undefined,expires:time(row.expires)})
+})
+app.put('/api/calls/:id/ringing',async c=>{
+  const user=c.get('user').id,id=c.req.param('id')
+  const result=await c.env.DB.prepare("UPDATE calls SET state='ringing' WHERE id=? AND callee=? AND state='offered' AND expires>? ").bind(id,user,now()).run()
+  const call=await c.env.DB.prepare('SELECT state,callee,expires FROM calls WHERE id=?').bind(id).first<Pick<CallRow,'state'|'callee'|'expires'>>()
+  if(call?.callee!==user||call.expires<=now()||!['ringing','answered'].includes(call.state))return c.json({error:'Call unavailable.'},404)
+  return c.json({state:call.state,acknowledged:Boolean(result.meta.changes)})
+})
+app.put('/api/calls/:id/answer',async c=>{
+  const signal=readCallSignal((await readBody(c.req.raw))?.signal)
+  if(!signal||signal.kind!=='answer'||signal.id!==c.req.param('id'))return c.json({error:'Invalid call answer.'},400)
+  const result=await c.env.DB.prepare("UPDATE calls SET answer=?,state='answered' WHERE id=? AND callee=? AND state IN ('offered','ringing') AND expires>?").bind(signal.sdp,signal.id,c.get('user').id,now()).run()
+  if(!result.meta.changes)return c.json({error:'Call unavailable.'},404)
+  return c.json({state:'answered'})
+})
+app.put('/api/calls/:id/end',async c=>{
+  const user=c.get('user').id,id=c.req.param('id')
+  const row=await c.env.DB.prepare('SELECT caller,callee,state FROM calls WHERE id=? AND (caller=? OR callee=?)').bind(id,user,user).first<Pick<CallRow,'caller'|'callee'|'state'>>()
+  if(!row)return c.json({error:'Call unavailable.'},404)
+  await c.env.DB.prepare('UPDATE calls SET state=? WHERE id=? AND state NOT IN (\'ended\',\'declined\')').bind(user===row.callee&&row.state!=='answered'?'declined':'ended',id).run()
+  return c.json({ok:true})
 })
 app.get('/api/rooms/:id/socket',async c=>{
   const room=c.req.param('id')

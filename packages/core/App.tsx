@@ -27,6 +27,8 @@ type AuthMode='signup'|'login'
 type Credentials={firstName:string;lastName:string;username:string;email:string;password:string;dob:string}
 type NotificationItem={id:string;kind:string;entityId?:string;body:string;created:string;read:boolean;actor?:Person}
 type Presence={online:boolean;lastSeen:string|null}
+type IncomingCall={id:string;room:string;person:Person;video:boolean;offer:string;state:string;expires:string}
+type CallStatus={id:string;room:string;state:string;answer?:string;offer?:string;expires:string}
 type BirthDraft={day:string;month:string;year:string}
 const emptyBirth:BirthDraft={day:'',month:'',year:''}
 const digits=(value:string,max:number)=>value.replace(/\D/g,'').slice(0,max)
@@ -71,6 +73,7 @@ const demoPosted:Record<string,number>={ada:Date.now()-2*hour,bello:Date.now()-4
 const storyLeft=(ms:number)=>{const minutes=Math.max(1,Math.ceil(ms/60000));return minutes>=60?Math.floor(minutes/60)+'h '+(minutes%60)+'m left':minutes+'m left'}
 const uid=()=>Date.now().toString(36)+Math.random().toString(36).slice(2)
 const json=(body:unknown,method='POST')=>({method,body:JSON.stringify(body)})
+const foreground=()=>Platform.OS==='web'?document.visibilityState==='visible':AppState.currentState==='active'
 const vapidBytes=(value:string)=>Uint8Array.from(atob(value.replace(/-/g,'+').replace(/_/g,'/')+'='.repeat((4-value.length%4)%4)),char=>char.charCodeAt(0))
 const errorMessage=(error:unknown)=>error instanceof Error?error.message:'Something went wrong. Try again.'
 const demoUsernameTaken=(username:string)=>people.some(person=>person.id===username)||[...welcomeAccounts.values()].some(account=>account.user.username===username)
@@ -536,30 +539,81 @@ export default function App(props:Props){
     return ()=>{active=false;clearInterval(interval)}
   },[base,demo,stage,token])
   const roomId=room?.id
-  const chatSocket=useRef<WebSocket|null>(null)
-  const [chatConnected,setChatConnected]=useState(false)
+  const [pendingIncoming,setPendingIncoming]=useState<IncomingCall|null>(null)
+  const incomingHandled=useRef(new Set<string>())
+  const answeredCall=useRef('')
   const webCallMedia=React.useMemo(browserCallMedia,[])
   const callMedia=props.callMedia??webCallMedia
-  const sendCall=(signal:CallSignal)=>{
-    const socket=chatSocket.current
-    if(socket?.readyState!==WebSocket.OPEN)return false
-    try{socket.send(JSON.stringify({type:'call',signal}));return true}catch{return false}
+  const sendCall=async(signal:CallSignal)=>{
+    try{
+      if(signal.kind==='offer'){
+        if(!roomId)return false
+        await call('/rooms/'+roomId+'/calls',json({signal}))
+      }else if(signal.kind==='answer')await call('/calls/'+signal.id+'/answer',json({signal},'PUT'))
+      else if(signal.kind!=='ringing')await call('/calls/'+signal.id+'/end',{method:'PUT'})
+      return true
+    }catch(reason){if(signal.kind==='offer'||signal.kind==='answer')fail(reason);return false}
   }
   const roomCall=useRoomCall(callMedia,page==='Chat'?roomId:undefined,sendCall,message=>notify(message))
   const receiveCall=useRef(roomCall.receive)
   receiveCall.current=roomCall.receive
+  async function handleIncoming(item:IncomingCall){
+    if(!callMedia||incomingHandled.current.has(item.id)||roomCall.call)return
+    incomingHandled.current.add(item.id)
+    try{
+      await call('/calls/'+item.id+'/ringing',{method:'PUT'})
+      setPendingIncoming(item)
+      if(page!=='Chat'||roomId!==item.room)openRoom({id:item.room,person:item.person})
+    }catch{incomingHandled.current.delete(item.id)}
+  }
+  useEffect(()=>{
+    if(demo||!token||stage!=='app'||!callMedia)return
+    let active=true
+    const check=()=>{
+      if(!foreground()||roomCall.call||pendingIncoming)return
+      void api<IncomingCall[]>(base,'/calls/incoming',{},token).then(items=>{if(active&&items[0])void handleIncoming(items[0])}).catch(()=>{})
+    }
+    check()
+    const interval=setInterval(check,4000)
+    const resumed=AppState.addEventListener('change',state=>{if(state==='active')check()})
+    const visible=()=>{if(foreground())check()}
+    if(Platform.OS==='web')document.addEventListener('visibilitychange',visible)
+    return ()=>{active=false;clearInterval(interval);resumed.remove();if(Platform.OS==='web')document.removeEventListener('visibilitychange',visible)}
+  },[base,demo,token,stage,callMedia,roomCall.call?.id,pendingIncoming?.id,page,roomId])
+  useEffect(()=>{
+    if(!pendingIncoming||page!=='Chat'||roomId!==pendingIncoming.room||!callMedia)return
+    void receiveCall.current({kind:'offer',id:pendingIncoming.id,video:pendingIncoming.video,sdp:pendingIncoming.offer})
+    setPendingIncoming(null)
+  },[pendingIncoming,page,roomId,callMedia])
+  useEffect(()=>{
+    const activeCall=roomCall.call
+    if(demo||!token||!activeCall||page!=='Chat')return
+    let active=true
+    const check=()=>api<CallStatus>(base,'/calls/'+activeCall.id,{},token).then(status=>{
+      if(!active)return
+      if(status.state==='ended'||status.state==='declined'){
+        void receiveCall.current({kind:status.state==='declined'?'busy':'end',id:activeCall.id})
+      }else if(status.state==='ringing'&&activeCall.state==='calling'){
+        void receiveCall.current({kind:'ringing',id:activeCall.id})
+      }else if(status.answer&&answeredCall.current!==activeCall.id){
+        answeredCall.current=activeCall.id
+        void receiveCall.current({kind:'answer',id:activeCall.id,sdp:status.answer})
+      }
+    }).catch(()=>{})
+    void check()
+    const interval=setInterval(check,activeCall.state==='connected'?5000:2000)
+    return ()=>{active=false;clearInterval(interval)}
+  },[base,demo,token,page,roomCall.call?.id,roomCall.call?.state])
   useEffect(()=>{
     if(demo||!token||page!=='Chat'||!roomId)return
     let active=true
     const endpoint=base||((typeof window!=='undefined'&&window.location?.origin)||'')
     const url=endpoint.replace(/^http/,'ws').replace(/\/$/,'')+'/api/rooms/'+roomId+'/socket'
     const refresh=()=>api<Note[]>(base,'/rooms/'+roomId+'/messages',{},token)
-      .then(data=>{if(active){setChats(previous=>({...previous,[roomId]:[...data,...(previous[roomId]??[]).filter(m=>!data.some(n=>n.id===m.id))].slice(-100)}));setFeedError('')}})
+      .then(data=>{if(active){setChats(previous=>({...previous,[roomId]:[...data,...(previous[roomId]??[]).filter(m=>!data.some(n=>n.id===m.id))].slice(-100)}));setFeedError('');if(foreground())void api(base,'/rooms/'+roomId+'/read',{method:'PUT'},token).catch(()=>{})}})
       .catch(reason=>{if(active)setFeedError(errorMessage(reason))})
     const socket=new WebSocket(url,['dameeland','ticket.'+token])
-    chatSocket.current=socket
-    socket.onopen=()=>{if(active){setChatConnected(true);void refresh()}}
-    socket.onclose=()=>{if(active)setChatConnected(false)}
+    socket.onopen=()=>{if(active)void refresh()}
     socket.onmessage=event=>{
       if(!active)return
       let data
@@ -569,14 +623,25 @@ export default function App(props:Props){
         if(signal)void receiveCall.current(signal)
         return
       }
+      if(data?.type==='read'&&Array.isArray(data.ids)&&typeof data.readAt==='string'){
+        const ids=new Set<string>(data.ids)
+        setChats(previous=>({...previous,[roomId]:(previous[roomId]??[]).map(item=>ids.has(item.id)?{...item,readAt:data.readAt}:item)}))
+        return
+      }
       const item=data as Note
       setChats(previous=>({...previous,[roomId]:[...(previous[roomId]??[]).filter(m=>m.id!==item.id),item]}))
-      if(item.author.id!==user.id)void props.notifyDevice?.(item.author.name,'New message: '+item.body)
+      if(item.author.id!==user.id){
+        if(foreground())void api(base,'/rooms/'+roomId+'/read',{method:'PUT'},token).catch(()=>{})
+        void props.notifyDevice?.(item.author.name,'New message: '+item.body)
+      }
     }
     void refresh()
     const poll=setInterval(()=>{if(socket.readyState!==WebSocket.OPEN)void refresh()},3500)
     const heartbeat=setInterval(()=>{if(socket.readyState===WebSocket.OPEN)socket.send(JSON.stringify({type:'presence'}))},30000)
-    return ()=>{active=false;setChatConnected(false);clearInterval(poll);clearInterval(heartbeat);if(chatSocket.current===socket)chatSocket.current=null;socket.close()}
+    const resumed=AppState.addEventListener('change',state=>{if(state==='active')void refresh()})
+    const visible=()=>{if(foreground())void refresh()}
+    if(Platform.OS==='web')document.addEventListener('visibilitychange',visible)
+    return ()=>{active=false;clearInterval(poll);clearInterval(heartbeat);resumed.remove();if(Platform.OS==='web')document.removeEventListener('visibilitychange',visible);socket.close()}
   },[base,demo,token,page,roomId])
   useEffect(()=>{
     if(demo||!token||page!=='Home')return
@@ -1082,6 +1147,10 @@ export default function App(props:Props){
       const target=item.entityId
       if(item.kind==='follow'){
         showProfile(await call<Person>('/people/'+encodeURIComponent(target)))
+      }else if(item.kind==='call'){
+        const pending=(await call<IncomingCall[]>('/calls/incoming')).find(entry=>'call:'+entry.id===target)
+        if(pending)await handleIncoming(pending)
+        else notify('This call has ended.','error')
       }else if(item.kind==='message'){
         const available=await call<Room[]>('/rooms')
         const conversation=available.find(entry=>entry.id===target)
@@ -1283,12 +1352,13 @@ export default function App(props:Props){
     {demo&&inboxTab==='Chats'&&<Card>{section('Active now')}<View style={row}>{[people[0],people[1],people[2]].map(person=><Pressable key={person.id} accessibilityRole="button" accessibilityLabel={'Message '+person.name} onPress={()=>void messagePerson(person)}><Avatar person={person} ring size={42}/></Pressable>)}</View></Card>}
     {feedError?failure:loading?<Loading/>:roomList.length?roomList.map(r=><Pressable key={r.id} accessibilityRole="button" accessibilityLabel={'Open conversation with '+displayHandle(r.person)} onPress={()=>openRoom(r)}><Card style={row}><Avatar person={r.person} size={50}/><View style={{flex:1}}><PersonName person={r.person}/><Copy color={theme.muted} size={12}>{chats[r.id]?.at(-1)?.body??'Open conversation'}</Copy></View></Card></Pressable>):<Empty title={inboxTab==='Chats'?'No messages yet':inboxTab==='Groups'?'No groups yet':'No message requests'} detail={inboxTab==='Chats'?'Find a classmate and start a chat.':inboxTab==='Groups'?'Group conversations are available in the preview.':'New requests will appear here.'} action={inboxTab==='Chats'?'Find people':undefined} onPress={()=>open('Explore')}/>}
   </>
+  const lastOwnMessageId=room?[...(chats[room.id]??[])].reverse().find(note=>note.author.id===user.id)?.id:undefined
   const chat=room&&<>
     <Card style={spread}><View style={{...row,flex:1}}><Avatar person={room.person}/><View style={{flex:1}}><PersonName person={room.person}/><View style={{...row,gap:5}}>{!demo&&<View style={{width:7,height:7,borderRadius:4,backgroundColor:presenceById[room.person.id]?.online?'#2FB66D':theme.muted}}/>}<Copy color={presenceById[room.person.id]?.online?'#2FB66D':theme.muted} size={12}>{demo?'Active now':presenceById[room.person.id]?.online?'Online':presenceById[room.person.id]?.lastSeen?'Last seen '+shortTime(presenceById[room.person.id]?.lastSeen||''):'Offline'}</Copy></View></View></View>{demo&&<View style={{...row,gap:0}}><IconButton name="ph" label="Voice call" onPress={()=>selectOverlay({kind:'call',video:false,person:room.person})}/><IconButton name="vid" label="Video call" onPress={()=>selectOverlay({kind:'call',video:true,person:room.person})}/></View>}</Card>
     {!demo&&callMedia&&<View style={{...row,flexWrap:'wrap'}}>
-      <Button label="Voice call" leading="ph" variant="secondary" disabled={!chatConnected||!!roomCall.call} onPress={()=>roomCall.start(false)}/>
-      <Button label="Video call" leading="vid" variant="secondary" disabled={!chatConnected||!!roomCall.call} onPress={()=>roomCall.start(true)}/>
-      {!chatConnected&&<Copy size={12}>Waiting for chat connection…</Copy>}
+      <Button label="Voice call" leading="ph" variant="secondary" disabled={!!roomCall.call} onPress={()=>roomCall.start(false)}/>
+      <Button label="Video call" leading="vid" variant="secondary" disabled={!!roomCall.call} onPress={()=>roomCall.start(true)}/>
+      {deviceNotifications!=='granted'&&props.requestNotifications&&<Button label="Enable call alerts" variant="plain" onPress={()=>void enableDeviceNotifications()}/>}
     </View>}
     {!demo&&!callMedia&&<Copy color={theme.muted} size={12}>Voice and video calls are available in the installed app build or a supported browser.</Copy>}
     {!demo&&callMedia&&roomCall.call&&<Card>
@@ -1297,7 +1367,7 @@ export default function App(props:Props){
     {demo&&room.person.group&&<Card><Copy weight={800}>Pinned message</Copy><Copy>Bring one practice question to the next study session.</Copy><Button label="Join group voice call" leading="ph" variant="secondary" onPress={()=>selectOverlay({kind:'call',video:false,person:room.person,ringing:true})}/></Card>}
     {demo&&room.id==='ada'&&<Card><Copy size={12} color={theme.muted}>Call log · Voice call · 2 min</Copy><Button label={voicePlaying?'Stop voice note preview':'Preview voice note · 0:08'} leading="play" variant="secondary" onPress={()=>setVoicePlaying(!voicePlaying)}/>{voicePlaying&&<Copy>Transcript: Can we revise quadratic equations after school?</Copy>}</Card>}
     {!!feedError&&<Empty title="Reconnecting" detail={feedError}/>}
-    {(chats[room.id]??[]).map(item=>{const own=item.author.id===user.id;return <View key={item.id} style={{alignSelf:own?'flex-end':'flex-start',backgroundColor:own?theme.purple:theme.card,maxWidth:'80%',borderRadius:18,borderBottomLeftRadius:own?18:5,borderBottomRightRadius:own?5:18,borderWidth:1,borderColor:own?theme.purple:theme.border,padding:12}}><Copy color={own?'#fff':theme.text}>{item.body}</Copy></View>})}
+    {(chats[room.id]??[]).map(item=>{const own=item.author.id===user.id;return <View key={item.id} style={{alignSelf:own?'flex-end':'flex-start',backgroundColor:own?theme.purple:theme.card,maxWidth:'80%',borderRadius:18,borderBottomLeftRadius:own?18:5,borderBottomRightRadius:own?5:18,borderWidth:1,borderColor:own?theme.purple:theme.border,padding:12}}><Copy color={own?'#fff':theme.text}>{item.body}</Copy>{own&&lastOwnMessageId===item.id&&<Copy size={11} color="#FFFFFFCC">{item.readAt?'Seen · '+shortTime(item.readAt):'Sent'}</Copy>}</View>})}
     {!(chats[room.id]?.length)&&!feedError&&<Empty title="Say hello" detail="Messages are visible to both people in this conversation."/>}
   </>
   const ownProfile=profile.id===user.id
