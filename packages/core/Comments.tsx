@@ -41,16 +41,16 @@ export function Comments({list,body,onBody,attachment,onPreset,onPhoto,onRemove,
   const options:Preset[]=picker==='gif'
     ? (Object.keys(commentGifs) as (keyof typeof commentGifs)[]).map(id=>({kind:'gif',id}))
     : (Object.keys(commentStickers) as (keyof typeof commentStickers)[]).map(id=>({kind:'sticker',id}))
-  return <>
-    <ScrollView style={{maxHeight:260}} nestedScrollEnabled keyboardShouldPersistTaps="handled" contentContainerStyle={{gap:14,paddingVertical:4}}>
+  return <View style={{flex:1,gap:12,padding:16}}>
+    <ScrollView style={{flex:1}} keyboardShouldPersistTaps="always" keyboardDismissMode="none" contentContainerStyle={{gap:14,paddingVertical:4}}>
       {list.length?list.map(item=><CommentEntry key={item.id} item={item} onProfile={onProfile} renderGif={renderGif}/>):<Copy color={theme.muted}>Be the first to leave a comment.</Copy>}
     </ScrollView>
     <View style={{gap:8,borderTopWidth:1,borderColor:theme.border,paddingTop:12}}>
-      <Field label="Add a comment" placeholder="Write a reply…" value={body} onChangeText={onBody} editable={!busy} maxLength={500}/>
+      <Field label="Add a comment" placeholder="Write a reply…" value={body} onChangeText={onBody} multiline maxLength={500} style={{maxHeight:110}}/>
       {attachment&&<View style={{...spread,alignItems:'flex-start'}}>
         <CommentMedia attachment={attachment} renderGif={renderGif}/><IconButton name="close" label="Remove attachment" onPress={onRemove}/>
       </View>}
-      {!!picker&&<ScrollView horizontal showsHorizontalScrollIndicator={false} keyboardShouldPersistTaps="handled" contentContainerStyle={{...row,gap:8}}>
+      {!!picker&&<ScrollView horizontal showsHorizontalScrollIndicator={false} keyboardShouldPersistTaps="always" contentContainerStyle={{...row,gap:8}}>
         {options.map(option=>{
           const label=option.kind==='gif'?commentGifs[option.id]+' GIF':commentStickers[option.id].label+' sticker'
           return <Pressable key={option.id} accessibilityRole="button" accessibilityLabel={label} onPress={()=>{onPreset(option);setPicker(null)}}
@@ -74,5 +74,5 @@ export function Comments({list,body,onBody,attachment,onPreset,onPhoto,onRemove,
         <Button label={busy?'Posting…':'Post comment'} disabled={busy||(!body.trim()&&!attachment)} onPress={()=>{setPicker(null);onPost()}}/>
       </View>
     </View>
-  </>
+  </View>
 }

@@ -3,7 +3,7 @@ import {dailyLesson} from './learningCatalog'
 import {browserCallMedia,RoomCall,useRoomCall,type CallMedia} from './calls'
 import {readCallSignal,type CallSignal} from './callSignal'
 import React,{lazy,Suspense,useCallback,useEffect,useLayoutEffect,useRef,useState} from 'react'
-import {AccessibilityInfo,Animated,AppState,BackHandler,Easing,Image,Modal,PanResponder,Platform,Pressable,RefreshControl,ScrollView,View,useWindowDimensions,type ViewStyle} from 'react-native'
+import {AccessibilityInfo,Animated,AppState,BackHandler,Easing,Image,KeyboardAvoidingView,Modal,PanResponder,Platform,Pressable,RefreshControl,ScrollView,View,useWindowDimensions,type ViewStyle} from 'react-native'
 import {api,birthdayToday,validBirthDate,storyLifetime,capitalizeName,normalizeUsername,usernameHint,validUsername,initialChats,initialComments,initialPosts,initials,lime,me,people,questions,slides,themes,type FollowListKind,type FollowPage,type FollowStats,type Note,type Person,type Post,type BirthdayEntry,type Role,type StoryGroup,type Theme} from './index'
 import {Avatar,Button,Card,Copy,Design,displayHandle,Field,Icon,IconButton,IconTile,Logo,PersonName,ScreenLinks,Segmented,VerifiedBadge,row,spread,stack,useDesign,type Glyph,type IconRendererProps} from './ui'
 import type {ExtraPage} from './FeatureScreens'
@@ -363,12 +363,25 @@ export default function App(props:Props){
   const sharedLinkHandled=useRef(false)
   const [statsRefresh,refreshStats]=useState(0)
   const [notes,setNotes]=useState<Record<string,Note[]>>({})
+  const [commentKeyboardInset,setCommentKeyboardInset]=useState(0)
   const [chats,setChats]=useState<Record<string,Note[]>>(demo?initialChats:{})
   const [draft,setDraft]=useState(''),[attachment,setAttachment]=useState<Media|null>(null)
   const [message,setMessage]=useState(''),[comment,setComment]=useState('')
   const [commentMedia,setCommentMedia]=useState<Media|Exclude<CommentAttachment,{kind:'image'}>|null>(null)
   const commentDraft=useRef(0)
   const clearComment=()=>{commentDraft.current+=1;setComment('');setCommentMedia(null)}
+  useEffect(()=>{
+    if(Platform.OS!=='web'||overlay?.kind!=='comments'||!window.visualViewport)return
+    const viewport=window.visualViewport
+    const update=()=>{
+      const covered=Math.max(0,window.innerHeight-viewport.height-viewport.offsetTop)
+      setCommentKeyboardInset(covered>120?covered:0)
+    }
+    update()
+    viewport.addEventListener('resize',update)
+    viewport.addEventListener('scroll',update)
+    return ()=>{viewport.removeEventListener('resize',update);viewport.removeEventListener('scroll',update);setCommentKeyboardInset(0)}
+  },[overlay?.kind])
   const [unread,setUnread]=useState(demo)
   const [notifications,setNotifications]=useState(true)
   const [deviceNotifications,setDeviceNotifications]=useState<'unknown'|'granted'|'denied'>(props.requestNotifications?'unknown':'denied')
@@ -956,7 +969,10 @@ export default function App(props:Props){
         item=await call<Note>('/posts/'+post.id+'/comments',request)
       }
       if(session!==demoSession.current)return
-      setNotes(previous=>({...previous,[post.id]:[...(previous[post.id]??(demo&&post.id==='quadratics'?initialComments:[])),item]}))
+      setNotes(previous=>{
+        const existing=previous[post.id]??(demo&&post.id==='quadratics'?initialComments:[])
+        return {...previous,[post.id]:existing.some(note=>note.id===item.id)?existing:[...existing,item]}
+      })
       setPosts(previous=>previous.map(p=>p.id===post.id?{...p,comments:p.comments+1}:p))
       if(revision===commentDraft.current)clearComment()
     }catch(reason){if(session===demoSession.current)fail(reason)}
@@ -1257,7 +1273,7 @@ export default function App(props:Props){
     sheet=<><PostCard detail post={post} onReact={react} onOverlay={selectOverlay} onProfile={showProfile}/><Button label="Read comments" variant="secondary" onPress={()=>selectOverlay({kind:'comments',post})}/></>
   }else if(overlay?.kind==='comments'){
     const list=notes[overlay.post.id]??(demo&&overlay.post.id==='quadratics'?initialComments:[])
-    sheet=<Comments key={overlay.post.id} list={list} body={comment} onBody={setComment} busy={busy} renderGif={props.renderGif}
+    sheet=<Comments key={overlay.post.id} list={list} body={comment} onBody={value=>{commentDraft.current++;setComment(value)}} busy={busy} renderGif={props.renderGif}
       attachment={commentMedia&&'uri' in commentMedia?{kind:'image',url:commentMedia.uri}:commentMedia??undefined}
       onPreset={value=>{commentDraft.current+=1;setCommentMedia(value)}} onRemove={()=>{commentDraft.current+=1;setCommentMedia(null)}}
       onPhoto={props.pickMedia?()=>void pickCommentPhoto():undefined} onPost={()=>void addComment(overlay.post)}
@@ -1421,10 +1437,12 @@ export default function App(props:Props){
             <Copy size={21} weight={800}>{overlayTitle}</Copy>
           </View>
         </View>
-        <ScrollView key={overlay?.kind} style={{flex:1}} keyboardShouldPersistTaps="handled"
+        {overlay?.kind==='comments'?<KeyboardAvoidingView behavior={Platform.OS==='ios'?'padding':undefined} style={{flex:1,width:'100%',maxWidth:720,alignSelf:'center',paddingBottom:commentKeyboardInset}}>
+          {sheet}
+        </KeyboardAvoidingView>:<ScrollView key={overlay?.kind} style={{flex:1}} keyboardShouldPersistTaps="handled"
           contentContainerStyle={{width:'100%',maxWidth:720,alignSelf:'center',padding:16,paddingBottom:30,gap:14}}>
           {sheet}
-        </ScrollView>
+        </ScrollView>}
         {toast&&overlay&&<Toast key={toast.id} item={toast} reduced={reduced} onDismiss={dismissToast} bottom={18}/>}
       </View>}
       </ModalViewport>
