@@ -1,17 +1,29 @@
-const CACHE_NAME='dameeland-shell-v4'
-self.addEventListener('install',event=>{event.waitUntil(caches.open(CACHE_NAME).then(cache=>cache.addAll(['/','/manifest.webmanifest'])).then(()=>self.skipWaiting()))})
+const CACHE_NAME='dameeland-shell-v5'
+const APP_SHELL='/'
+self.addEventListener('install',event=>{event.waitUntil(caches.open(CACHE_NAME).then(cache=>cache.addAll([APP_SHELL,'/manifest.webmanifest'])).then(()=>self.skipWaiting()))})
 self.addEventListener('activate',event=>{
-  event.waitUntil(caches.keys().then(keys=>Promise.all(keys.filter(key=>key.startsWith('dameeland-shell-')&&key!==CACHE_NAME).map(key=>caches.delete(key)))).then(()=>self.clients.claim()))
+  event.waitUntil(Promise.all([
+    caches.keys().then(keys=>Promise.all(keys.filter(key=>key.startsWith('dameeland-shell-')&&key!==CACHE_NAME).map(key=>caches.delete(key)))),
+    self.registration.navigationPreload?.enable(),
+  ]).then(()=>self.clients.claim()))
 })
 self.addEventListener('fetch',event=>{
   const request=event.request
   const url=new URL(request.url)
   if(request.method!=='GET'||url.origin!==self.location.origin||url.pathname.startsWith('/api/'))return
   if(request.mode==='navigate'){
-    event.respondWith(fetch(request).catch(async()=>{
+    event.respondWith((async()=>{
       const cache=await caches.open(CACHE_NAME)
-      return await cache.match(url.pathname)||await cache.match('/')||Response.error()
-    }))
+      try{
+        const preloaded=await event.preloadResponse
+        const response=preloaded||await fetch(request)
+        if(!response||!response.ok)throw new Error('Navigation response unavailable')
+        if(url.pathname===APP_SHELL)await cache.put(APP_SHELL,response.clone())
+        return response
+      }catch{
+        return await cache.match(APP_SHELL)||new Response('',{status:503,headers:{'Content-Type':'text/html'}})
+      }
+    })())
     return
   }
   if(!url.pathname.startsWith('/assets/'))return

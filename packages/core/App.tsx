@@ -391,6 +391,7 @@ export default function App(props:Props){
   const [quietMode,setQuietMode]=useState(false)
   const [query,setQuery]=useState(''),[results,setResults]=useState<(Person&{followsViewer?:boolean})[]>([])
   const [searching,setSearching]=useState(false),[searchError,setSearchError]=useState('')
+  const searchTerm=query.trim().replace(/^@+/, '')
   const [follows,setFollows]=useState<Record<string,boolean>>({})
   const [rooms,setRooms]=useState<Room[]>(demo?localRooms:[])
   const [room,setRoom]=useState<Room|null>(null)
@@ -507,16 +508,17 @@ export default function App(props:Props){
   },[base,demo,token,page,followingOnly,retry])
   useEffect(()=>{
     if(demo||!token||page!=='Explore')return
-    let alive=true
-    setSearching(true);setSearchError('')
+    const controller=new AbortController()
+    setSearching(false);setSearchError('')
     const timer=setTimeout(()=>{
-      api<(Person&{following:boolean;followsViewer:boolean})[]>(base,'/people?q='+encodeURIComponent(query),{},token)
-        .then(data=>{if(alive){setResults(data);setFollows(previous=>({...previous,...Object.fromEntries(data.map(p=>[p.id,p.following]))}))}})
-        .catch(reason=>{if(alive)setSearchError(errorMessage(reason))})
-        .finally(()=>{if(alive)setSearching(false)})
-    },180)
-    return ()=>{alive=false;clearTimeout(timer)}
-  },[base,demo,token,query,page,retry])
+      setSearching(true)
+      api<(Person&{following:boolean;followsViewer:boolean})[]>(base,'/people?q='+encodeURIComponent(searchTerm),{signal:controller.signal},token)
+        .then(data=>{if(!controller.signal.aborted){setResults(data);setFollows(previous=>({...previous,...Object.fromEntries(data.map(p=>[p.id,p.following]))}))}})
+        .catch(reason=>{if(!controller.signal.aborted)setSearchError(errorMessage(reason))})
+        .finally(()=>{if(!controller.signal.aborted)setSearching(false)})
+    },searchTerm?260:0)
+    return ()=>{controller.abort();clearTimeout(timer)}
+  },[base,demo,token,searchTerm,page,retry])
   useEffect(()=>{
     if(demo||!token||page!=='Messages')return
     let alive=true
@@ -1307,7 +1309,7 @@ export default function App(props:Props){
     }catch(reason){if(session===demoSession.current)fail(reason)}
     finally{refreshLock.current=false;setRefreshing(false)}
   }
-  const displayedPeople=demo?people.map(person=>demoAccounts.find(account=>account.person.id===person.id)?.person??person).filter(p=>(displayHandle(p)+' '+p.detail).toLowerCase().includes(query.trim().toLowerCase())):results
+  const displayedPeople=demo?people.map(person=>demoAccounts.find(account=>account.person.id===person.id)?.person??person).filter(p=>(displayHandle(p)+' '+p.detail).toLowerCase().includes(searchTerm.toLowerCase())):results
   const canShare=Boolean(props.share)
   const overlays=overlay?[...overlayHistory.current,overlay]:[]
   const restoreOverlays=(items:Overlay[])=>{
@@ -1405,7 +1407,7 @@ export default function App(props:Props){
     </View>}
   </>
   const explore=<>
-    <Field label="Search" glyph="search" placeholder="Search people, groups, topics" value={query} onChangeText={setQuery} autoCapitalize="none"/>
+    <Field label="Search" glyph="search" placeholder="Search people by name or username" value={query} onChangeText={setQuery} autoCapitalize="none" autoCorrect={false} returnKeyType="search" maxLength={60}/>
     {demo&&!query&&<Card>{section('Trending in your school')}<View style={{...row,flexWrap:'wrap'}}>{['#QuizFriday','#StudyTogether','#WordSprint'].map(tag=><Button key={tag} label={tag} variant="secondary" onPress={()=>setQuery(tag)}/>)}</View></Card>}
     {section(query?'Search results':'Suggested for you')}
     {searchError?<Empty title="Search unavailable" detail={searchError} action="Try again" onPress={()=>setRetry(n=>n+1)}/>:searching?<Loading/>:displayedPeople.length?displayedPeople.map(person=><Card key={person.id} style={spread}><Pressable accessibilityRole="button" accessibilityLabel={'Open '+displayHandle(person)+' profile'} onPress={()=>showProfile(person)} style={{...row,flex:1}}><Avatar person={person}/><View style={{flex:1}}><PersonName person={person}/><Copy color={theme.muted} size={12}>{person.detail}</Copy></View></Pressable><Button label={follows[person.id]?'Following':'followsViewer' in person&&person.followsViewer?'Follow back':'Follow'} variant={follows[person.id]?'secondary':'primary'} onPress={()=>void follow(person)}/></Card>):<Empty title="No results" detail={query?'Try a different name or clear the search.':'Classmates will appear here after they sign up.'}/>}
