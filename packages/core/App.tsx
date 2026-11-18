@@ -86,6 +86,7 @@ type Props={
   loadToken?:()=>Promise<string|null>; saveToken?:(token:string|null)=>Promise<void>;
   openGoogle?:(getUrl:()=>Promise<string>)=>Promise<GoogleWindow>;
   callMedia?:CallMedia;
+  renderVideo?:React.ComponentType<{uri:string;autoPlay?:boolean}>;
   notificationTarget?:string;
   modalViewport?:React.ComponentType<{color:string;children:React.ReactNode}>;
   pickMedia?:()=>Promise<Media|null>; pickCommentMedia?:()=>Promise<Media|null>; renderGif?:GifRenderer; share?:(url:string,details?:{title:string;message:string})=>Promise<void>;
@@ -241,7 +242,7 @@ function Auth({base,demo,busy,error,submit,onGoogle,onCancelGoogle,googlePending
 }
 function StoryRow({onStory,onCreate,onAdd,seen,own,others}:{onStory:(p:Person)=>void;onCreate:()=>void;onAdd?:()=>void;seen:Set<string>;own:Person|null;others:Person[]}){
   const {theme}=useDesign()
-  return <ScrollView horizontal directionalLockEnabled showsHorizontalScrollIndicator={false} contentContainerStyle={{...row,gap:10,paddingVertical:1}}>
+  return <ScrollView horizontal directionalLockEnabled showsHorizontalScrollIndicator={false} contentContainerStyle={{...row,alignItems:'flex-start',gap:10,paddingVertical:1}}>
     <View style={{width:58,alignItems:'center',gap:7}}>
       <Pressable accessibilityRole="button" accessibilityLabel="Your story" onPress={onCreate} style={({pressed})=>({width:52,height:52,alignItems:'center',justifyContent:'center',transform:[{scale:pressed?.92:1}]})}>
         {own?<Avatar person={own} size={44} ring seen={seen.has(own.id)}/>:<View style={{width:52,height:52,borderRadius:26,borderWidth:1,borderStyle:'dashed',borderColor:theme.purple,backgroundColor:theme.chip,alignItems:'center',justifyContent:'center'}}><Icon name="plus" color={theme.ink}/></View>}
@@ -250,7 +251,7 @@ function StoryRow({onStory,onCreate,onAdd,seen,own,others}:{onStory:(p:Person)=>
       <Copy size={10} weight={800}>Your story</Copy>
     </View>
     {others.map(person=><Pressable key={person.id} accessibilityRole="button" accessibilityLabel={person.name+' story'} onPress={()=>onStory(person)} style={({pressed})=>({width:52,alignItems:'center',gap:7,transform:[{scale:pressed?.92:1}]})}>
-      <Avatar person={person} size={43} ring seen={seen.has(person.id)}/><Copy size={10} weight={700}>{person.name.split(' ')[0]}</Copy>
+      <View style={{height:52,justifyContent:'center'}}><Avatar person={person} size={44} ring seen={seen.has(person.id)}/></View><Copy size={10} weight={700}>{person.name.split(' ')[0]}</Copy>
     </Pressable>)}
   </ScrollView>
 }
@@ -274,9 +275,10 @@ function LazyImage({uri,alt,style}:{uri:string;alt:string;style:object}){
   return <Image accessibilityLabel={alt} source={{uri}} resizeMode="cover" style={style}/>
 }
 function UploadedMedia({post}:{post:Post}){
-  const {theme}=useDesign()
+  const {theme,renderVideo:NativeVideo}=useDesign()
   if(!post.media)return null
   if(post.kind==='video'&&Platform.OS==='web')return React.createElement('video',{src:post.media,controls:true,playsInline:true,preload:'metadata',style:{width:'100%',maxHeight:360,borderRadius:14,backgroundColor:theme.chip}})
+  if(post.kind==='video'&&NativeVideo)return <NativeVideo key={post.media} uri={post.media}/>
   if(post.kind==='video')return <View style={{height:210,borderRadius:14,backgroundColor:'#120D1F',alignItems:'center',justifyContent:'center',gap:10}}><IconTile name="play" size={48} color={lime} background="#FFFFFF19"/><Copy color="#fff" weight={800}>VIDEO</Copy></View>
   return <LazyImage uri={post.media} alt="Post attachment" style={{width:'100%',height:195,borderRadius:14,backgroundColor:theme.chip,objectFit:'cover'}}/>
 }
@@ -794,10 +796,10 @@ export default function App(props:Props){
     setOverlay(current=>current?.kind==='story'&&current.person.id===storyId?(next?{kind:'story',person:next}:null):current)
   },[storyId,storyIndex,demoOwn,demoStories,user,demo,activeStories])
   useEffect(()=>{
-    if(!storyId||storyReplyDraft||storyReplyBusy)return
+    if(!storyId||storyReplyDraft||storyReplyBusy||activeStories.find(group=>group.author.id===storyId)?.stories[storyIndex]?.video)return
     const timer=setTimeout(()=>moveStory(1),6500)
     return ()=>clearTimeout(timer)
-  },[storyId,moveStory,storyReplyDraft,storyReplyBusy])
+  },[storyId,moveStory,storyReplyDraft,storyReplyBusy,activeStories,storyIndex])
   const storySwipe=React.useMemo(()=>PanResponder.create({
     onMoveShouldSetPanResponderCapture:(_,gesture)=>Math.abs(gesture.dx)>14&&Math.abs(gesture.dx)>Math.abs(gesture.dy)*1.4,
     onPanResponderRelease:(_,gesture)=>{if(Math.abs(gesture.dx)>=42)moveStory(gesture.dx<0?1:-1)},
@@ -1738,7 +1740,7 @@ export default function App(props:Props){
   const storyPosted=demo?(story?.id===user.id?demoOwn?.posted:story?demoPosted[story.id]:undefined):liveItem?Date.parse(liveItem.created):undefined
   const storyExpires=liveItem?Date.parse(liveItem.expires):storyPosted!==undefined?storyPosted+(story?.verified?verifiedStoryLifetime:storyLifetime):undefined
   const storyText=demo?personalStory?.text??(story?.id==='ada'?'Study session after school. Bring your notes!':story?.id==='bello'?'Maths test is on Friday. Revise quadratics!':story?.id==='code'?'Code Club meets on Friday!':'See you at quiz night!'):liveItem?.text??''
-  return <Design.Provider value={{theme,font,reduced,renderIcon:props.renderIcon}}><View style={{flex:1,backgroundColor:theme.bg,width:'100%'}}>
+  return <Design.Provider value={{theme,font,reduced,renderIcon:props.renderIcon,renderVideo:props.renderVideo}}><View style={{flex:1,backgroundColor:theme.bg,width:'100%'}}>
     {starting||stage==='restore'?<LoadingScreen/>:stage==='intro'?<Intro desktop={desktop} step={step} reduced={reduced} showPublicBrand={Platform.OS==='web'&&!demo} onSkip={()=>setStage('auth')} onNext={()=>step===2?setStage('auth'):setStep(step+1)} onBack={()=>setStep(step-1)}/>:stage==='auth'?<Auth base={base} demo={demo} busy={busy} error={error} submit={authenticate} onGoogle={(mode,username,dob)=>void authenticateWithGoogle(mode,username,dob)} onCancelGoogle={()=>googleRequest.current?.abort()} googlePending={googlePending} onDemo={()=>{setDemoEntered(true);setPosts(initialPosts);setChats(initialChats);setRooms(localRooms);setUnread(true);setUser(me);setPage('Home');setStage('app')}} reduced={reduced} recovering={recovering} setRecovering={setRecovering}/>:
       <View style={{flex:1,flexDirection:'row',width:'100%',maxWidth:1360,alignSelf:'center'}}>
         {desktop&&page!=='Chat'&&page!=='Messages'&&<View style={{width:222,borderRightWidth:1,borderColor:theme.border,padding:18,gap:5,backgroundColor:theme.card}}>
@@ -1849,11 +1851,11 @@ export default function App(props:Props){
           </View>
           <View {...storySwipe.panHandlers} style={{flex:1,minHeight:0,justifyContent:'center',gap:16,paddingBottom:16}}>
             {personalStory?.image&&<Motion key={story.id+':'+activeIndex} reduced={reduced} axis="x" distance={10} style={{flex:1,minHeight:0}}><LazyImage uri={personalStory.image} alt="Story photo" style={{width:'100%',height:'100%',objectFit:'contain'}}/></Motion>}
-            {(personalStory?.video||personalStory?.videoPreview)&&(Platform.OS==='web'&&personalStory?.video?React.createElement('video',{src:personalStory.video,controls:true,autoPlay:true,playsInline:true,style:{width:'100%',maxHeight:'70%',borderRadius:16,backgroundColor:'#000'}}):<View style={{...stack,alignItems:'center'}}><IconTile name="play" size={52} color={lime} background="#FFFFFF19"/><Copy color="#fff" weight={800}>VIDEO · 0:{story?.verified?'20':'10'} MAX</Copy></View>)}
+            {(personalStory?.video||personalStory?.videoPreview)&&(Platform.OS==='web'&&personalStory?.video?React.createElement('video',{src:personalStory.video,controls:true,autoPlay:true,playsInline:true,style:{width:'100%',maxHeight:'70%',borderRadius:16,backgroundColor:'#000'},onEnded:()=>moveStory(1)}):personalStory.video&&props.renderVideo?<props.renderVideo key={personalStory.video} uri={personalStory.video} autoPlay/>:<View style={{...stack,alignItems:'center'}}><IconTile name="play" size={52} color={lime} background="#FFFFFF19"/><Copy color="#fff" weight={800}>VIDEO · 0:{story?.verified?'20':'10'} MAX</Copy></View>)}
             {!!storyText&&<Motion key={'caption:'+story.id+':'+activeIndex} reduced={reduced} axis="x" distance={10}><Copy center color="#fff" weight={800} size={personalStory?.image?18:28}>{storyText}</Copy></Motion>}
-            <View pointerEvents="box-none" style={{position:'absolute',inset:0,flexDirection:'row',justifyContent:'space-between'}}>
-              <Pressable accessibilityRole="button" accessibilityLabel="Previous story" onPress={()=>moveStory(-1)} style={{width:'25%',height:'100%'}}/>
-              <Pressable accessibilityRole="button" accessibilityLabel="Next story" onPress={()=>moveStory(1)} style={{width:'25%',height:'100%'}}/>
+            <View pointerEvents="box-none" style={{...(personalStory?.video?{height:40}:{position:'absolute',inset:0}),flexDirection:'row',justifyContent:'space-between'}}>
+              <Pressable accessibilityRole="button" accessibilityLabel="Previous story" onPress={()=>moveStory(-1)} style={{width:'25%',height:'100%',justifyContent:'center'}}>{personalStory?.video&&<Copy color="#fff" center>Previous</Copy>}</Pressable>
+              <Pressable accessibilityRole="button" accessibilityLabel="Next story" onPress={()=>moveStory(1)} style={{width:'25%',height:'100%',justifyContent:'center'}}>{personalStory?.video&&<Copy color="#fff" center>Next</Copy>}</Pressable>
             </View>
           </View>
           {!demo&&story.id!==user.id&&liveItem&&<View style={{gap:9}}>
