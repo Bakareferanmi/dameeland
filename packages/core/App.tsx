@@ -699,7 +699,15 @@ export default function App(props:Props){
   },[base,demo,token,page])
   // Stories vanish 12 hours after posting: hide them on the client as soon as they expire, not only on the next refresh.
   const activeStories=React.useMemo(()=>liveStories.map(group=>({...group,stories:group.stories.filter(item=>Date.parse(item.expires)>clock)})).filter(group=>group.stories.length),[liveStories,clock])
+  const seenAuthors=demo?seen:new Set(activeStories.filter(group=>group.stories.every(item=>item.viewed||seen.has(item.id))).map(group=>group.author.id))
   const storyId=overlay?.kind==='story'?overlay.person.id:null
+  useEffect(()=>{
+    if(demo||!storyId||!token)return
+    const current=activeStories.find(group=>group.author.id===storyId)?.stories[storyIndex]
+    if(!current||current.viewed||seen.has(current.id))return
+    setSeen(previous=>new Set(previous).add(current.id))
+    void api(base,'/stories/'+encodeURIComponent(storyId)+'/'+encodeURIComponent(current.id)+'/view',{method:'PUT'},token).catch(()=>{})
+  },[base,demo,token,storyId,storyIndex,activeStories,seen])
   const moveStory=useCallback((direction:1|-1)=>{
     if(!storyId)return
     const queue=demo?(demoOwn?[user,...demoStories]:demoStories):activeStories.map(group=>group.author)
@@ -711,7 +719,7 @@ export default function App(props:Props){
     if(inner>=0&&inner<count){setStoryIndex(inner);return}
     const next=queue[index+direction]
     if(!next&&direction===-1)return
-    if(next)setSeen(previous=>new Set(previous).add(next.id))
+    if(next&&demo)setSeen(previous=>new Set(previous).add(next.id))
     setStoryIndex(direction===-1&&!demo&&next?activeStories[index-1].stories.length-1:0)
     setOverlay(current=>current?.kind==='story'&&current.person.id===storyId?(next?{kind:'story',person:next}:null):current)
   },[storyId,storyIndex,demoOwn,demoStories,user,demo,activeStories])
@@ -853,7 +861,12 @@ export default function App(props:Props){
     if(overlay)overlayHistory.current.push(overlay)
     clearComment()
     setOverlay(value)
-    if(value.kind==='story'){setStoryIndex(0);setStoryReplyDraft('');setSeen(previous=>new Set(previous).add(value.person.id))}
+    if(value.kind==='story'){
+      const stories=activeStories.find(group=>group.author.id===value.person.id)?.stories
+      const unread=stories?.findIndex(item=>!item.viewed&&!seen.has(item.id))??-1
+      setStoryIndex(demo?0:Math.max(0,unread));setStoryReplyDraft('')
+      if(demo)setSeen(previous=>new Set(previous).add(value.person.id))
+    }
     if(value.kind==='comments'&&!demo){
       const id=value.post.id
       call<Note[]>('/posts/'+id+'/comments').then(data=>setNotes(previous=>({...previous,[id]:[...data,...(previous[id]??[]).filter(item=>!data.some(match=>match.id===item.id))]}))).catch(fail)
@@ -1364,7 +1377,7 @@ export default function App(props:Props){
   const wishedAlready=(id:string)=>wishedBirthdays.has(id)||birthdays.some(entry=>entry.person.id===id&&entry.wished)
   const hasOwnStory=demo?!!demoOwn:activeStories.some(group=>group.author.id===user.id)
   const home=<>
-    {(demo||token)&&<View style={{paddingHorizontal:2}}><StoryRow onStory={person=>selectOverlay({kind:'story',person})} onCreate={()=>selectOverlay(hasOwnStory?{kind:'story',person:user}:{kind:'newStory'})} onAdd={()=>selectOverlay({kind:'newStory'})} seen={seen} own={hasOwnStory?user:null} others={demo?demoStories:activeStories.map(group=>group.author).filter(author=>author.id!==user.id)}/></View>}
+    {(demo||token)&&<View style={{paddingHorizontal:2}}><StoryRow onStory={person=>selectOverlay({kind:'story',person})} onCreate={()=>selectOverlay(hasOwnStory?{kind:'story',person:user}:{kind:'newStory'})} onAdd={()=>selectOverlay({kind:'newStory'})} seen={seenAuthors} own={hasOwnStory?user:null} others={demo?demoStories:activeStories.map(group=>group.author).filter(author=>author.id!==user.id)}/></View>}
     {(ownBirthday||birthdayPeople.length>0)&&<Card>
       {ownBirthday&&<View style={{gap:4}}><Copy size={19} weight={800}>Happy birthday, {user.name.split(' ')[0]}! 🎂</Copy><Copy color={theme.muted}>Have a great day. Friends can send you a wish today.</Copy></View>}
       {birthdayPeople.length>0&&<>{section('Birthdays today')}{birthdayPeople.map(person=><View key={person.id} style={{...row,flexWrap:'wrap'}}>

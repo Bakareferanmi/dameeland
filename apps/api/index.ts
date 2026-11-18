@@ -724,10 +724,19 @@ app.get('/api/stories',async c=>{
   const authors=groups.filter(group=>group.stories.length).map(group=>group.author.id)
   const likes=authors.length?(await c.env.DB.prepare(`SELECT story_id,COUNT(*) likes,MAX(user_id=?) liked FROM story_likes WHERE author_id IN (${authors.map(()=>'?').join(',')}) GROUP BY story_id`).bind(me.id,...authors).all<{story_id:string;likes:number;liked:number}>()).results:[]
   const byStory=new Map(likes.map(item=>[item.story_id,item]))
+  const viewed=(await c.env.DB.prepare('SELECT story_id FROM story_views WHERE viewer_id=? AND viewed_at>?').bind(me.id,at-storyLifetime).all<{story_id:string}>()).results
+  const viewedIds=new Set(viewed.map(item=>item.story_id))
   c.header('Cache-Control','no-store')
   return c.json<StoryGroup[]>(groups.filter(group=>group.stories.length)
     .sort((a,b)=>Number(b.author.id===me.id)-Number(a.author.id===me.id)||b.stories[b.stories.length-1].created-a.stories[a.stories.length-1].created)
-    .map(group=>({author:person(group.author,c.req.url),stories:group.stories.map(story=>({...storyView(group.author.id,story,c.req.url),likes:byStory.get(story.id)?.likes??0,liked:Boolean(byStory.get(story.id)?.liked)}))})))
+    .map(group=>({author:person(group.author,c.req.url),stories:group.stories.map(story=>({...storyView(group.author.id,story,c.req.url),likes:byStory.get(story.id)?.likes??0,liked:Boolean(byStory.get(story.id)?.liked),viewed:viewedIds.has(story.id)}))})))
+})
+app.put('/api/stories/:author/:id/view',async c=>{
+  const {author,id}=c.req.param()
+  const stories=await readStories(c.env,author)
+  if(!stories.some(story=>story.id===id&&storyExpiry(story)>now()))return c.json({error:'Story unavailable.'},404)
+  await c.env.DB.prepare('INSERT INTO story_views (viewer_id,story_id,viewed_at) VALUES (?,?,?) ON CONFLICT(viewer_id,story_id) DO NOTHING').bind(c.get('user').id,id,now()).run()
+  return c.json({viewed:true})
 })
 app.put('/api/stories/:author/:id/like',async c=>{
   const {author,id}=c.req.param(),me=c.get('user').id
