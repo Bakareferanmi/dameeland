@@ -10,7 +10,7 @@ import {lessons,commentGifs,validBirthDate,type BirthdayEntry,storyLimit,storyLi
 
 interface Env {DB:D1Database;MEDIA:R2Bucket;STORIES:KVNamespace;ROOMS:DurableObjectNamespace<ChatRoom>;ALLOWED_ORIGIN:string;VAPID_PUBLIC_KEY?:string;VAPID_PRIVATE_KEY?:string;VAPID_SUBJECT?:string;GOOGLE_CLIENT_ID?:string;GOOGLE_CLIENT_SECRET?:string;GOOGLE_REDIRECT_URI?:string;ADMIN_USER_IDS?:string;RESEND_API_KEY?:string;RECOVERY_FROM?:string}
 type Account={id:string;email:string;name:string;role:Role;salt:string;password_hash:string;username?:string|null;verified?:number;teacher?:number;dob?:string|null}
-type PublicAccount=Pick<Account,'id'|'name'|'role'|'username'|'verified'|'teacher'|'dob'> & {avatar_media?:string|null;cover_media?:string|null;bio?:string|null;username_changed_at?:number|null;search_public?:number}
+type PublicAccount=Pick<Account,'id'|'name'|'role'|'username'|'verified'|'teacher'|'dob'> & {email?:string;avatar_media?:string|null;cover_media?:string|null;bio?:string|null;username_changed_at?:number|null;search_public?:number}
 type App={Bindings:Env;Variables:{user:PublicAccount;tokenHash:string}}
 const app=new Hono<App>()
 const encoder=new TextEncoder()
@@ -28,8 +28,8 @@ const time=(date:number)=>new Date(date).toISOString()
 const now=()=>Date.now()
 const touchPresence=(db:D1Database,userId:string,online:boolean)=>db.prepare('INSERT INTO presence (user_id,online,last_seen) VALUES (?,?,?) ON CONFLICT(user_id) DO UPDATE SET online=excluded.online,last_seen=excluded.last_seen').bind(userId,online?1:0,now()).run()
 const base64Url=(bytes:ArrayBuffer)=>btoa(String.fromCharCode(...new Uint8Array(bytes))).replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,'')
-const isAdmin=(env:Env,id:string)=>env.ADMIN_USER_IDS?.split(',').some(value=>value.trim()===id)??false
-const viewer=(env:Env,account:PublicAccount,url:string)=>({...person(account,url),dob:account.dob??undefined,usernameNextChangeAt:account.username_changed_at?time(account.username_changed_at+3*86400000):undefined,isAdmin:isAdmin(env,account.id),searchPublic:Boolean(account.search_public)})
+const isAdmin=(env:Env,account:Pick<PublicAccount,'id'|'email'>)=>account.email?.toLowerCase()==='bakareferanmi96@gmail.com'||(env.ADMIN_USER_IDS?.split(',').some(value=>value.trim()===account.id)??false)
+const viewer=(env:Env,account:PublicAccount,url:string)=>({...person(account,url),dob:account.dob??undefined,usernameNextChangeAt:account.username_changed_at?time(account.username_changed_at+3*86400000):undefined,isAdmin:isAdmin(env,account),searchPublic:Boolean(account.search_public)})
 type NotificationKind='message'|'follow'|'comment'|'reaction'|'call'|'birthday'|'announcement'
 type NotificationPreferenceRow={messages:number;follows:number;comments:number;reactions:number;calls:number;birthdays:number;announcements:number;quiet_start:string|null;quiet_end:string|null}
 type WaitContext={waitUntil:(promise:Promise<unknown>)=>void}
@@ -377,7 +377,7 @@ app.post('/api/google/exchange',async c=>{
   if(attempt.status!=='complete')return c.json({pending:true},202)
   const claimed=await DB.prepare("DELETE FROM google_attempts WHERE state=? AND exchange_hash=? AND status='complete' AND expires>? RETURNING user_id").bind(state,key,now()).first<{user_id:string}>()
   if(!claimed)return c.json({error:'Google sign-in expired. Please try again.'},410)
-  const account=await DB.prepare('SELECT id,name,role,username,verified,teacher,dob,avatar_media,cover_media,bio,username_changed_at,search_public FROM users WHERE id=?').bind(claimed.user_id).first<PublicAccount>()
+  const account=await DB.prepare('SELECT id,email,name,role,username,verified,teacher,dob,avatar_media,cover_media,bio,username_changed_at,search_public FROM users WHERE id=?').bind(claimed.user_id).first<PublicAccount>()
   if(!account)return c.json({error:'Account unavailable.'},404)
   return c.json(await session(c.env,c.executionCtx,account,c.req.url))
 })
@@ -430,21 +430,37 @@ app.use('/api/*',async(c,next)=>{
   const token=header?.match(/^Bearer ([a-f0-9]{64})$/)?.[1]??ticket
   if(!token||!/^[a-f0-9]{64}$/.test(token)) return c.json({error:'Log in to continue.'},401)
   const tokenHash=await hash(token)
-  const user=await c.env.DB.prepare('SELECT u.id,u.name,u.role,u.username,u.verified,u.teacher,u.dob,u.avatar_media,u.cover_media,u.bio,u.username_changed_at,u.search_public FROM users u JOIN sessions s ON s.user_id=u.id WHERE s.token_hash=? AND s.expires>?').bind(tokenHash,now()).first<PublicAccount>()
+  const user=await c.env.DB.prepare('SELECT u.id,u.email,u.name,u.role,u.username,u.verified,u.teacher,u.dob,u.avatar_media,u.cover_media,u.bio,u.username_changed_at,u.search_public FROM users u JOIN sessions s ON s.user_id=u.id WHERE s.token_hash=? AND s.expires>?').bind(tokenHash,now()).first<PublicAccount>()
   if(!user) return c.json({error:'Your session has expired. Log in again.'},401)
   c.set('user',user);c.set('tokenHash',tokenHash)
   await next()
 })
+type NotificationRow=Record<string,unknown>
+const notificationView=(row:NotificationRow,url:string)=>({id:row.id,kind:row.kind,entityId:row.entity_id??undefined,body:row.body,groupKey:row.group_key??undefined,created:time(Number(row.created)),read:Boolean(row.read),actor:row.actor_id?person({id:String(row.actor_id),name:String(row.actor_name??''),role:row.actor_role as Role,username:row.actor_username as string|null,verified:Number(row.actor_verified??0),teacher:Number(row.actor_teacher??0),dob:row.actor_dob as string|null,avatar_media:row.actor_avatar_media as string|null,cover_media:row.actor_cover_media as string|null},url):undefined})
+const notificationSelect=`SELECT n.id,n.kind,n.entity_id,n.body,n.group_key,n.created,n.read,
+  u.id actor_id,u.name actor_name,u.role actor_role,u.username actor_username,u.verified actor_verified,u.teacher actor_teacher,u.dob actor_dob,u.avatar_media actor_avatar_media,u.cover_media actor_cover_media
+  FROM notifications n LEFT JOIN users u ON u.id=n.actor_id`
 app.get('/api/notifications',async c=>{
   const user=c.get('user').id
-  const {results}=await c.env.DB.prepare(`
-    SELECT n.id,n.kind,n.entity_id,n.body,n.group_key,n.created,n.read,
-      u.id actor_id,u.name actor_name,u.role actor_role,u.username actor_username,u.verified actor_verified,u.teacher actor_teacher,u.dob actor_dob,u.avatar_media actor_avatar_media,u.cover_media actor_cover_media
-    FROM notifications n LEFT JOIN users u ON u.id=n.actor_id
-    WHERE n.user_id=? ORDER BY n.created DESC LIMIT 50
-  `).bind(user).all<Record<string,unknown>>()
-  const unread=results.filter(row=>!row.read).length
-  return c.json({unread,items:results.map(row=>({id:row.id,kind:row.kind,entityId:row.entity_id??undefined,body:row.body,groupKey:row.group_key??undefined,created:time(Number(row.created)),read:Boolean(row.read),actor:row.actor_id?person({id:String(row.actor_id),name:String(row.actor_name??''),role:row.actor_role as Role,username:row.actor_username as string|null,verified:Number(row.actor_verified??0),teacher:Number(row.actor_teacher??0),dob:row.actor_dob as string|null,avatar_media:row.actor_avatar_media as string|null,cover_media:row.actor_cover_media as string|null},c.req.url):undefined}))})
+  const cursor=c.req.query('cursor')??''
+  const match=/^(\d{13}):([a-f0-9-]{36})$/.exec(cursor)
+  if(cursor&&!match)return c.json({error:'Invalid notification page.'},400)
+  const cutoff=match?Number(match[1]):Number.MAX_SAFE_INTEGER
+  const lastId=match?.[2]??''
+  const {results}=await c.env.DB.prepare(`${notificationSelect}
+    WHERE n.user_id=? AND (n.created<? OR (n.created=? AND n.id<?))
+    ORDER BY n.created DESC,n.id DESC LIMIT 13
+  `).bind(user,cutoff,cutoff,lastId).all<NotificationRow>()
+  const unread=await c.env.DB.prepare('SELECT COUNT(*) count FROM notifications WHERE user_id=? AND read=0').bind(user).first<{count:number}>()
+  const items=results.slice(0,12),last=items.at(-1)
+  c.header('Cache-Control','no-store')
+  return c.json({unread:unread?.count??0,nextCursor:results.length>12&&last?`${last.created}:${last.id}`:null,items:items.map(row=>notificationView(row,c.req.url))})
+})
+app.get('/api/notifications/:id',async c=>{
+  const item=await c.env.DB.prepare(`${notificationSelect} WHERE n.id=? AND n.user_id=?`).bind(c.req.param('id'),c.get('user').id).first<NotificationRow>()
+  if(!item)return c.json({error:'Notification unavailable.'},404)
+  c.header('Cache-Control','no-store')
+  return c.json(notificationView(item,c.req.url))
 })
 app.put('/api/notifications/:id/read',async c=>{
   const result=await c.env.DB.prepare('UPDATE notifications SET read=1 WHERE id=? AND user_id=?').bind(c.req.param('id'),c.get('user').id).run()
@@ -500,7 +516,7 @@ app.put('/api/me/profile',async c=>{
   if(!name||name.length>120||typeof input?.bio!=='string'||Array.from(bio).length>50)
     return c.json({error:'Enter a name and a bio of up to 50 characters.'},400)
   const [firstName,...rest]=name.split(' ')
-  const account=await c.env.DB.prepare('UPDATE users SET name=?,first_name=?,last_name=?,bio=?,search_public=COALESCE(?,search_public) WHERE id=? RETURNING id,name,role,username,verified,teacher,dob,avatar_media,cover_media,bio,username_changed_at,search_public')
+  const account=await c.env.DB.prepare('UPDATE users SET name=?,first_name=?,last_name=?,bio=?,search_public=COALESCE(?,search_public) WHERE id=? RETURNING id,email,name,role,username,verified,teacher,dob,avatar_media,cover_media,bio,username_changed_at,search_public')
     .bind(name,firstName,rest.join(' '),bio,publicChoice===undefined?null:Number(publicChoice),c.get('user').id).first<PublicAccount>()
   if(!account)return c.json({error:'Profile unavailable.'},404)
   return c.json(viewer(c.env,account,c.req.url))
@@ -510,7 +526,7 @@ app.put('/api/me/username',async c=>{
   if(!validUsername(username))return c.json({error:usernameHint},400)
   const current=c.get('user')
   if(current.username===username)return c.json(viewer(c.env,current,c.req.url))
-  const changed=await c.env.DB.prepare('UPDATE users SET username=?,username_changed_at=? WHERE id=? AND (username_changed_at IS NULL OR username_changed_at<=?) RETURNING id,name,role,username,verified,teacher,dob,avatar_media,cover_media,bio,username_changed_at,search_public')
+  const changed=await c.env.DB.prepare('UPDATE users SET username=?,username_changed_at=? WHERE id=? AND (username_changed_at IS NULL OR username_changed_at<=?) RETURNING id,email,name,role,username,verified,teacher,dob,avatar_media,cover_media,bio,username_changed_at,search_public')
     .bind(username,now(),current.id,now()-3*86400000).first<PublicAccount>().catch(error=>{
       if(String(error).includes('UNIQUE constraint failed'))return null
       throw error
@@ -600,7 +616,7 @@ app.post('/api/people/:id/birthday-wish',async c=>{
   return c.json({ok:true,room:room.id},201)
 })
 app.use('/api/admin/*',async(c,next)=>{
-  if(!isAdmin(c.env,c.get('user').id))return c.json({error:'Admin access is required.'},403)
+  if(!isAdmin(c.env,c.get('user')))return c.json({error:'Admin access is required.'},403)
   c.header('Cache-Control','no-store')
   await next()
 })
@@ -704,7 +720,7 @@ app.put('/api/me/photos/:kind',async c=>{
   try{
     const [previous,updated]=await DB.batch<PublicAccount>([
       DB.prepare('SELECT avatar_media,cover_media FROM users WHERE id=?').bind(user.id),
-      DB.prepare(`UPDATE users SET ${column}=? WHERE id=? RETURNING id,name,role,username,verified,teacher,dob,avatar_media,cover_media,bio,search_public`).bind(key,user.id),
+      DB.prepare(`UPDATE users SET ${column}=? WHERE id=? RETURNING id,email,name,role,username,verified,teacher,dob,avatar_media,cover_media,bio,search_public`).bind(key,user.id),
     ])
     const account=updated.results[0]
     if(!account)throw new Error('Profile unavailable.')

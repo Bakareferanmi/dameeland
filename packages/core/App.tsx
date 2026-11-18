@@ -416,6 +416,9 @@ export default function App(props:Props){
   const [notifications,setNotifications]=useState(true)
   const [deviceNotifications,setDeviceNotifications]=useState<'unknown'|'granted'|'denied'>(props.requestNotifications?'unknown':'denied')
   const [notificationItems,setNotificationItems]=useState<NotificationItem[]>([])
+  const [notificationCursor,setNotificationCursor]=useState('')
+  const [notificationNextCursor,setNotificationNextCursor]=useState<string|null>(null)
+  const [notificationHistory,setNotificationHistory]=useState<string[]>([])
   const handledNotification=useRef('')
   const [notificationsLoading,setNotificationsLoading]=useState(false)
   const [quietStart,setQuietStart]=useState(''),[quietEnd,setQuietEnd]=useState('')
@@ -512,12 +515,7 @@ export default function App(props:Props){
     const target=props.notificationTarget||(Platform.OS==='web'?new URLSearchParams(window.location.search).get('notification')??'':'')
     if(!target||handledNotification.current===target)return
     handledNotification.current=target
-    void api<{items:NotificationItem[]}>(base,'/notifications',{},token).then(data=>{
-      setNotificationItems(data.items)
-      const item=data.items.find(entry=>entry.id===target)
-      if(item)return openNotification(item)
-      notify('This notification is no longer available.','error')
-    }).catch(fail)
+    void api<NotificationItem>(base,'/notifications/'+encodeURIComponent(target),{},token).then(item=>openNotification(item)).catch(fail)
     if(Platform.OS==='web')window.history.replaceState(window.history.state,'',window.location.pathname+window.location.hash)
   },[base,demo,props.notificationTarget,stage,token])
   useEffect(()=>{
@@ -527,11 +525,7 @@ export default function App(props:Props){
       const target=event.data.id
       if(!token||stage!=='app')return
       handledNotification.current=target
-      void api<{items:NotificationItem[]}>(base,'/notifications',{},token).then(data=>{
-        setNotificationItems(data.items)
-        const item=data.items.find(entry=>entry.id===target)
-        if(item)void openNotification(item)
-      }).catch(fail)
+      void api<NotificationItem>(base,'/notifications/'+encodeURIComponent(target),{},token).then(item=>openNotification(item)).catch(fail)
     }
     navigator.serviceWorker?.addEventListener('message',listener)
     return ()=>navigator.serviceWorker?.removeEventListener('message',listener)
@@ -548,19 +542,19 @@ export default function App(props:Props){
     if(demo||!token||page!=='Notifications')return
     let alive=true
     setNotificationsLoading(true)
-    api<{unread:number;items:NotificationItem[]}>(base,'/notifications',{},token).then(data=>{if(alive){setNotificationItems(data.items);setUnread(data.unread>0)}}).catch(reason=>{if(alive)notify(errorMessage(reason),'error')}).finally(()=>{if(alive)setNotificationsLoading(false)})
+    api<{unread:number;items:NotificationItem[];nextCursor:string|null}>(base,'/notifications'+(notificationCursor?'?cursor='+encodeURIComponent(notificationCursor):''),{},token).then(data=>{if(alive){setNotificationItems(data.items);setNotificationNextCursor(data.nextCursor);setUnread(data.unread>0)}}).catch(reason=>{if(alive)notify(errorMessage(reason),'error')}).finally(()=>{if(alive)setNotificationsLoading(false)})
     return ()=>{alive=false}
-  },[base,demo,token,page,retry])
+  },[base,demo,token,page,retry,notificationCursor])
   useEffect(()=>{
     if(demo||!token||stage!=='app')return
     let active=true
-    const refresh=()=>api<{unread:number;items:NotificationItem[]}>(base,'/notifications',{},token).then(data=>{
-      if(active){setNotificationItems(data.items);setUnread(data.unread>0)}
+    const refresh=()=>api<{unread:number;items:NotificationItem[];nextCursor:string|null}>(base,'/notifications',{},token).then(data=>{
+      if(active){if(page!=='Notifications'||!notificationCursor){setNotificationItems(data.items);setNotificationNextCursor(data.nextCursor)}setUnread(data.unread>0)}
     }).catch(()=>{})
     void refresh()
     const interval=setInterval(()=>{if(AppState.currentState==='active')void refresh()},30000)
     return ()=>{active=false;clearInterval(interval)}
-  },[base,demo,stage,token])
+  },[base,demo,stage,token,page,notificationCursor])
   const roomId=room?.id
   const [pendingIncoming,setPendingIncoming]=useState<IncomingCall|null>(null)
   const incomingHandled=useRef(new Set<string>())
@@ -947,6 +941,7 @@ export default function App(props:Props){
       scrollOffsets.current={};pendingOffset.current=null;setToast(null)
       roomCall.end();pageHistory.current=[];dismissOverlays();setToken('');setUser(me);setPage('Home');setStage('auth');setError('')
       setPosts(props.demo?initialPosts:[]);setNotes({});setChats(props.demo?initialChats:{});setFollows({});setProfileStats(null)
+      setNotificationItems([]);setNotificationCursor('');setNotificationNextCursor(null);setNotificationHistory([]);setUnread(false)
       setRooms(props.demo?localRooms:[]);setRoom(null);setDraft('');setAttachment(null);setPostSearchPublic(false);clearComment();setMessage('');setSeen(new Set());setOwnStory(null);setDemoEntered(false);setBirthdays([]);setBirthdayWall([]);setWishedBirthdays(new Set());setLiveStories([]);setStoryIndex(0);setStoryMedia(null);setWishes([]);setCompletedLessons([]);setLearningError(false);setVoicePlaying(false);setQuietMode(false);setFollowingOnly(false)
     }catch(reason){fail(reason)}
   }
@@ -1291,8 +1286,8 @@ export default function App(props:Props){
           const preferences=await api<{quiet_start?:string|null;quiet_end?:string|null}>(base,'/notification-preferences',{},token)
           if(session===demoSession.current){setQuietStart(preferences.quiet_start??'');setQuietEnd(preferences.quiet_end??'')}
         }else if(page==='Notifications'){
-          const notifications=await api<{unread:number;items:NotificationItem[]}>(base,'/notifications',{},token)
-          if(session===demoSession.current){setNotificationItems(notifications.items);setUnread(notifications.unread>0)}
+          const notifications=await api<{unread:number;items:NotificationItem[];nextCursor:string|null}>(base,'/notifications'+(notificationCursor?'?cursor='+encodeURIComponent(notificationCursor):''),{},token)
+          if(session===demoSession.current){setNotificationItems(notifications.items);setNotificationNextCursor(notifications.nextCursor);setUnread(notifications.unread>0)}
         }else setRetry(value=>value+1)
       }
     }catch(reason){if(session===demoSession.current)fail(reason)}
@@ -1505,7 +1500,7 @@ export default function App(props:Props){
     Quiz:<Quiz onBack={goBack}/>,
     Admin:(demo||user.isAdmin)&&<Suspense fallback={<Loading/>}><Admin base={base} token={token}
       sample={demo?{overview:demoOverview,accounts:demoAccounts}:undefined} onSampleChange={changeDemoAccount}/></Suspense>,
-    Notifications:demo&&notifications?<Card><View style={row}><Avatar person={people[1]}/><View style={{flex:1}}><Copy weight={800}>Tobi A. liked your post</Copy><Copy color={theme.muted} size={12}>Today</Copy></View></View><View style={row}><Avatar person={people[4]}/><View style={{flex:1}}><Copy weight={800}>Code Club shared a new post</Copy><Copy color={theme.muted} size={12}>Yesterday</Copy></View></View></Card>:notificationsLoading?<Loading/>:notificationItems.length?<View style={stack}>{notificationItems.map(item=><Pressable key={item.id} accessibilityRole="button" onPress={()=>void openNotification(item)} style={{...row,alignItems:'flex-start',padding:13,borderRadius:16,borderWidth:1,borderColor:theme.border,backgroundColor:item.read?theme.card:theme.chip}}>{item.actor?<Avatar person={item.actor} size={42}/>:<IconTile name="bell" size={42}/>}<View style={{flex:1,gap:3}}><Copy weight={item.read?600:800}>{item.body}</Copy><Copy size={12} color={theme.muted}>{shortTime(item.created)}</Copy></View></Pressable>)}<Button label="Mark all as read" variant="secondary" onPress={()=>{void call('/notifications/read-all',{method:'PUT'});setNotificationItems(previous=>previous.map(item=>({...item,read:true})));setUnread(false)}}/></View>:<Empty title="You’re all caught up" detail="New activity will appear here."/>,
+    Notifications:demo&&notifications?<Card><View style={row}><Avatar person={people[1]}/><View style={{flex:1}}><Copy weight={800}>Tobi A. liked your post</Copy><Copy color={theme.muted} size={12}>Today</Copy></View></View><View style={row}><Avatar person={people[4]}/><View style={{flex:1}}><Copy weight={800}>Code Club shared a new post</Copy><Copy color={theme.muted} size={12}>Yesterday</Copy></View></View></Card>:notificationsLoading?<Loading/>:notificationItems.length?<View style={stack}>{notificationItems.map(item=><Pressable key={item.id} accessibilityRole="button" onPress={()=>void openNotification(item)} style={{...row,alignItems:'flex-start',padding:13,borderRadius:16,borderWidth:1,borderColor:theme.border,backgroundColor:item.read?theme.card:theme.chip}}>{item.actor?<Avatar person={item.actor} size={42}/>:<IconTile name="bell" size={42}/>}<View style={{flex:1,gap:3}}><Copy weight={item.read?600:800}>{item.body}</Copy><Copy size={12} color={theme.muted}>{shortTime(item.created)}</Copy></View></Pressable>)}<View style={{...row,justifyContent:'space-between',flexWrap:'wrap'}}><Button label="Mark all as read" variant="secondary" onPress={()=>{void call('/notifications/read-all',{method:'PUT'});setNotificationItems(previous=>previous.map(item=>({...item,read:true})));setUnread(false)}}/><View style={row}>{notificationHistory.length>0&&<Button label="Previous" variant="plain" onPress={()=>{const previous=[...notificationHistory];setNotificationCursor(previous.pop()??'');setNotificationHistory(previous)}}/>}{notificationNextCursor&&<Button label="Next" variant="secondary" onPress={()=>{setNotificationHistory(previous=>[...previous,notificationCursor]);setNotificationCursor(notificationNextCursor)}}/>}</View></View><Copy center size={12} color={theme.muted}>Page {notificationHistory.length+1}</Copy></View>:<Empty title="You’re all caught up" detail="New activity will appear here."/>,
   }
   let sheet:React.ReactNode
   if(overlay?.kind==='connections'){
