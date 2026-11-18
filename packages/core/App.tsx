@@ -1382,10 +1382,12 @@ export default function App(props:Props){
     {demo&&room.person.group&&<Card><Copy weight={800}>Pinned message</Copy><Copy>Bring one practice question to the next study session.</Copy><Button label="Join group voice call" leading="ph" variant="secondary" onPress={()=>selectOverlay({kind:'call',video:false,person:room.person,ringing:true})}/></Card>}
     {demo&&room.id==='ada'&&<Card><Copy size={12} color={theme.muted}>Call log · Voice call · 2 min</Copy><Button label={voicePlaying?'Stop voice note preview':'Preview voice note · 0:08'} leading="play" variant="secondary" onPress={()=>setVoicePlaying(!voicePlaying)}/>{voicePlaying&&<Copy>Transcript: Can we revise quadratic equations after school?</Copy>}</Card>}
     {!!feedError&&<Empty title="Reconnecting" detail={feedError}/>}
-    {(chats[room.id]??[]).map(item=>item.call?<Pressable key={item.id} accessibilityRole="button" accessibilityLabel={item.body} onPress={()=>{if(!roomCall.call&&callMedia)roomCall.start(item.call!.video)}} style={{alignSelf:'center',maxWidth:'92%',minWidth:210,backgroundColor:theme.chip,borderWidth:1,borderColor:theme.border,borderRadius:18,padding:13,gap:6,marginVertical:5}}>
-      <View style={{...row,justifyContent:'center'}}><Icon name={item.call.video?'vid':'ph'} color={item.call.outcome==='missed'?'#D13438':theme.purple} size={20}/><Copy weight={800} color={item.call.outcome==='missed'?'#D13438':theme.text}>{item.body}</Copy></View>
-      <Copy center color={theme.muted} size={12}>{item.call.outcome==='completed'?callLength(item.call.durationSeconds)+' · ':''}{item.createdAt?shortTime(item.createdAt):''} · Tap to call again</Copy>
-    </Pressable>:(()=>{const own=item.author.id===user.id;return <View key={item.id} style={{alignSelf:own?'flex-end':'flex-start',backgroundColor:own?theme.purple:theme.card,maxWidth:'80%',borderRadius:18,borderBottomLeftRadius:own?18:5,borderBottomRightRadius:own?5:18,borderWidth:1,borderColor:own?theme.purple:theme.border,padding:12}}><Copy color={own?'#fff':theme.text}>{item.body}</Copy>{own&&lastOwnMessageId===item.id&&<Copy size={11} color="#FFFFFFCC">{item.readAt?'Seen · '+shortTime(item.readAt):'Sent'}</Copy>}</View>})())}
+    {(chats[room.id]??[]).map(item=>item.call?<View key={item.id} accessibilityLabel={item.body} style={{alignSelf:'center',alignItems:'center',width:'100%',maxWidth:320,paddingVertical:16,gap:6}}>
+      <View style={{width:44,height:44,borderRadius:22,backgroundColor:item.call.outcome==='missed'?theme.chip:theme.card,borderWidth:1,borderColor:theme.border,alignItems:'center',justifyContent:'center'}}><Icon name={item.call.video?'vid':'ph'} color={item.call.outcome==='missed'?'#D13438':theme.purple} size={21}/></View>
+      <Copy center weight={800} color={item.call.outcome==='missed'?'#D13438':theme.text}>{item.body}</Copy>
+      <Copy center color={theme.muted} size={12}>{item.call.outcome==='completed'?callLength(item.call.durationSeconds)+' · ':''}{item.createdAt?shortTime(item.createdAt):''}</Copy>
+      {callMedia&&<Pressable accessibilityRole="button" accessibilityLabel={'Call '+displayHandle(room.person)+' again'} onPress={()=>{if(!roomCall.call)roomCall.start(item.call!.video)}} style={{minHeight:38,paddingHorizontal:18,justifyContent:'center',borderRadius:20,backgroundColor:theme.chip}}><Copy color={theme.purple} weight={800} size={12}>Call again</Copy></Pressable>}
+    </View>:(()=>{const own=item.author.id===user.id;return <View key={item.id} style={{alignSelf:own?'flex-end':'flex-start',backgroundColor:own?theme.purple:theme.card,maxWidth:'80%',borderRadius:18,borderBottomLeftRadius:own?18:5,borderBottomRightRadius:own?5:18,borderWidth:1,borderColor:own?theme.purple:theme.border,padding:12}}><Copy color={own?'#fff':theme.text}>{item.body}</Copy>{own&&lastOwnMessageId===item.id&&<Copy size={11} color="#FFFFFFCC">{item.readAt?'Seen · '+shortTime(item.readAt):'Sent'}</Copy>}</View>})())}
     {!(chats[room.id]?.length)&&!feedError&&<Empty title="Say hello" detail="Messages are visible to both people in this conversation."/>}
   </>
   const ownProfile=profile.id===user.id
@@ -1536,7 +1538,7 @@ export default function App(props:Props){
   return <Design.Provider value={{theme,font,reduced,renderIcon:props.renderIcon}}><View style={{flex:1,backgroundColor:theme.bg,width:'100%'}}>
     {starting||stage==='restore'?<LoadingScreen/>:stage==='intro'?<Intro desktop={desktop} step={step} reduced={reduced} showPublicBrand={Platform.OS==='web'&&!demo} onSkip={()=>setStage('auth')} onNext={()=>step===2?setStage('auth'):setStep(step+1)} onBack={()=>setStep(step-1)}/>:stage==='auth'?<Auth base={base} demo={demo} busy={busy} error={error} submit={authenticate} onGoogle={(mode,username,dob)=>void authenticateWithGoogle(mode,username,dob)} onCancelGoogle={()=>googleRequest.current?.abort()} googlePending={googlePending} onDemo={()=>{setDemoEntered(true);setPosts(initialPosts);setChats(initialChats);setRooms(localRooms);setUnread(true);setUser(me);setPage('Home');setStage('app')}} reduced={reduced} recovering={recovering} setRecovering={setRecovering}/>:
       <View style={{flex:1,flexDirection:'row',width:'100%',maxWidth:1360,alignSelf:'center'}}>
-        {desktop&&page!=='Chat'&&<View style={{width:222,borderRightWidth:1,borderColor:theme.border,padding:18,gap:5,backgroundColor:theme.card}}>
+        {desktop&&page!=='Chat'&&page!=='Messages'&&<View style={{width:222,borderRightWidth:1,borderColor:theme.border,padding:18,gap:5,backgroundColor:theme.card}}>
           <View style={{minHeight:64,justifyContent:'center',marginBottom:14}}><Logo size={40}/></View>
           {tabs.map(([name,glyph])=>navButton(name,glyph))}
           <View style={{height:1,backgroundColor:theme.border,marginVertical:9,marginHorizontal:8}}/>
@@ -1547,9 +1549,9 @@ export default function App(props:Props){
             <Avatar person={user} size={35}/><View style={{flex:1}}><PersonName person={user}/></View>
           </Pressable>
         </View>}
-        <View style={{flex:1,minWidth:0,maxWidth:rail&&page!=='Chat'?680:undefined}}>
+        <View style={{flex:1,minWidth:0,maxWidth:rail&&page!=='Chat'&&page!=='Messages'?680:undefined}}>
           <View style={{...spread,paddingHorizontal:16,minHeight:desktop?72:62,borderBottomWidth:1,borderColor:theme.border,backgroundColor:theme.card}}>
-            {page==='Chat'&&room?<>
+            {page==='Messages'?<><View style={{...row,flex:1}}><IconButton name="back" label="Go back" onPress={()=>navigationDepth>0?goBack():open('Home')}/><Copy weight={800} size={desktop?28:21}>Messages</Copy></View></>:page==='Chat'&&room?<>
               <View style={{...row,flex:1,minWidth:0,gap:5}}>
                 <IconButton name="back" label="Go back" onPress={goBack}/>
                 <Pressable accessibilityRole="button" accessibilityLabel={'Open '+displayHandle(room.person)+' profile'} onPress={()=>showProfile(room.person)} style={{...row,flex:1,minWidth:0}}>
@@ -1609,9 +1611,9 @@ export default function App(props:Props){
               <View style={{opacity:busy||!message.trim()?.5:1}}><IconButton name="send" label="Send" solid onPress={()=>void send()}/></View>
             </View>
           </KeyboardAvoidingView>}
-          {!desktop&&page!=='Chat'&&<View style={{...row,gap:0,justifyContent:'space-around',minHeight:64,paddingHorizontal:6,borderTopWidth:1,borderColor:theme.border,backgroundColor:theme.card}}>{tabs.slice(0,2).map(([name,glyph])=>navButton(name,glyph))}<View style={{width:61,alignItems:'center',marginTop:-13}}><IconButton name="plus" label="Create post" size={26} solid onPress={compose}/></View>{tabs.slice(2).map(([name,glyph])=>navButton(name,glyph))}</View>}
+          {!desktop&&page!=='Chat'&&page!=='Messages'&&<View style={{...row,gap:0,justifyContent:'space-around',minHeight:64,paddingHorizontal:6,borderTopWidth:1,borderColor:theme.border,backgroundColor:theme.card}}>{tabs.slice(0,2).map(([name,glyph])=>navButton(name,glyph))}<View style={{width:61,alignItems:'center',marginTop:-13}}><IconButton name="plus" label="Create post" size={26} solid onPress={compose}/></View>{tabs.slice(2).map(([name,glyph])=>navButton(name,glyph))}</View>}
         </View>
-        {rail&&page!=='Chat'&&<ScrollView style={{flex:1,maxWidth:324,borderLeftWidth:1,borderColor:theme.border}} contentContainerStyle={{padding:17,paddingTop:20,gap:15}}>
+        {rail&&page!=='Chat'&&page!=='Messages'&&<ScrollView style={{flex:1,maxWidth:324,borderLeftWidth:1,borderColor:theme.border}} contentContainerStyle={{padding:17,paddingTop:20,gap:15}}>
           <FeatureCard glyph="bolt" title="Daily challenge" description={featuredLesson.title} action="Start lesson" onPress={()=>openLesson(featuredLesson.id)} compact/>
           {demo&&<>
             <Card>
