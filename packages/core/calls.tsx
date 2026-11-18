@@ -1,7 +1,7 @@
 import React,{useEffect,useRef,useState} from 'react'
-import {Animated,Platform,View} from 'react-native'
+import {Animated,Platform,Pressable,View,useWindowDimensions} from 'react-native'
 import type {CallSignal} from './callSignal'
-import {Avatar,Button,Copy,PersonName,row,useDesign} from './ui'
+import {Avatar,Button,Copy,Icon,displayHandle,row,useDesign,type Glyph} from './ui'
 import type {Person} from './index'
 
 type Track={enabled:boolean;stop:()=>void}
@@ -22,7 +22,7 @@ export type CallPeer={
 export type CallMedia={
   getStream:(video:boolean)=>Promise<CallStream>
   createPeer:()=>CallPeer
-  Surface:React.ComponentType<{stream:CallStream;local?:boolean;video:boolean}>
+  Surface:React.ComponentType<{stream:CallStream;local?:boolean;video:boolean;full?:boolean}>
 }
 export const callIceServers=[{urls:'stun:stun.cloudflare.com:3478'}]
 export const callConstraints=(video:boolean)=>({
@@ -30,7 +30,7 @@ export const callConstraints=(video:boolean)=>({
   video:video?{width:1280,height:720,frameRate:30,facingMode:'user'}:false,
 })
 
-function WebSurface({stream,local,video}:{stream:CallStream;local?:boolean;video:boolean}){
+function WebSurface({stream,local,video,full}:{stream:CallStream;local?:boolean;video:boolean;full?:boolean}){
   const element=useRef<HTMLMediaElement|null>(null)
   const [blocked,setBlocked]=useState(false)
   useEffect(()=>{
@@ -40,10 +40,10 @@ function WebSurface({stream,local,video}:{stream:CallStream;local?:boolean;video
     void player.play().catch(()=>setBlocked(true))
     return ()=>{player.srcObject=null}
   },[stream])
-  return <View>
+  return <View style={full?{flex:1,width:'100%',height:'100%'}:undefined}>
     {React.createElement(video?'video':'audio',{
       ref:(value:HTMLMediaElement|null)=>{element.current=value},autoPlay:true,playsInline:true,muted:local,
-      style:video?{width:'100%',maxHeight:'58vh',aspectRatio:'16 / 9',background:'#120D1F',borderRadius:16}:undefined,
+      style:video?full?{width:'100%',height:'100%',objectFit:'cover',background:'#120D1F'}:{width:'100%',aspectRatio:'16 / 9',objectFit:'cover',background:'#120D1F',borderRadius:16}:undefined,
     })}
     {blocked&&<Button label="Play call media" onPress={()=>void element.current?.play().then(()=>setBlocked(false)).catch(()=>{})}/>}
   </View>
@@ -87,7 +87,7 @@ export async function waitForCallIce(state:()=>string,subscribe:(listener:()=>vo
 
 type ActiveCall={
   id:string;video:boolean;offer?:string;peer?:CallPeer;local?:CallStream;remote?:CallStream;
-  state:'incoming'|'preparing'|'calling'|'ringing'|'connecting'|'connected';timer?:ReturnType<typeof setTimeout>
+  state:'incoming'|'preparing'|'calling'|'ringing'|'connecting'|'connected';timer?:ReturnType<typeof setTimeout>;connectedAt?:number
 }
 const stop=(stream?:CallStream)=>stream?.getTracks().forEach(track=>track.stop())
 
@@ -125,7 +125,11 @@ export function useRoomCall(media:CallMedia|undefined,roomKey:string|undefined,s
       peer.onTrack(stream=>{if(current.current===active){active.remote=stream;update(active)}})
       peer.onState(state=>{
         if(current.current!==active)return
-        if(state==='connected'){clearTimeout(active.timer);active.state='connected';update(active)}
+        if(state==='connected'){
+          clearTimeout(active.timer)
+          if(!active.connectedAt){active.connectedAt=Date.now();void send({kind:'connected',id:active.id})}
+          active.state='connected';update(active)
+        }
         if(state==='disconnected')timeout(active,'Call connection was interrupted.',12000)
         if(state==='failed')end('The networks couldn’t connect directly. Try a different network.')
       })
@@ -139,6 +143,7 @@ export function useRoomCall(media:CallMedia|undefined,roomKey:string|undefined,s
       if(!sdp)throw new Error('Couldn’t prepare the call.')
       const outgoing:CallSignal=active.offer?{kind:'answer',id:active.id,sdp}:{kind:'offer',id:active.id,video:active.video,sdp}
       if(!await send(outgoing))throw new Error('Couldn’t reach the other person. Try the call again.')
+      if(current.current!==active){void send({kind:'end',id:active.id});return}
       if(current.current?.state!=='connected'){
         active.state=active.offer?'connecting':'calling';update(active)
         timeout(active,active.offer?'The call couldn’t connect.':'No answer yet.',65000)
@@ -160,7 +165,7 @@ export function useRoomCall(media:CallMedia|undefined,roomKey:string|undefined,s
       if(active?.id===signal.id)return
       if(active){
         // Simultaneous outgoing calls use the same deterministic winner on both devices.
-        if(active.offer||active.state==='connected'||active.id<signal.id){send({kind:'busy',id:signal.id});return}
+        if(active.offer||active.state==='connected'||active.id<signal.id){void send({kind:'busy',id:signal.id});return}
         end(undefined,false)
       }
       const incoming:ActiveCall={id:signal.id,video:signal.video,offer:signal.sdp,state:'incoming'}
@@ -173,6 +178,7 @@ export function useRoomCall(media:CallMedia|undefined,roomKey:string|undefined,s
       if(active.state==='calling'){active.state='ringing';update(active)}
       return
     }
+    if(signal.kind==='connected')return
     if(signal.kind==='answer'){
       if((active.state!=='calling'&&active.state!=='ringing')||!active.peer)return
       active.state='connecting';update(active)
@@ -187,27 +193,56 @@ export function useRoomCall(media:CallMedia|undefined,roomKey:string|undefined,s
 }
 
 const callLabels={incoming:'Incoming call',preparing:'Starting call…',calling:'Calling…',ringing:'Ringing…',connecting:'Connecting…',connected:'Connected'}
+const formatDuration=(seconds:number)=>`${String(Math.floor(seconds/3600)).padStart(2,'0')}:${String(Math.floor(seconds%3600/60)).padStart(2,'0')}:${String(seconds%60).padStart(2,'0')}`
+function CallControl({label,glyph,onPress,danger=false,active=false}:{label:string;glyph:Glyph;onPress:()=>void;danger?:boolean;active?:boolean}){
+  return <Pressable accessibilityRole="button" accessibilityLabel={label} onPress={onPress} style={{alignItems:'center',gap:8,minWidth:68,minHeight:78}}>
+    <View style={{width:56,height:56,borderRadius:28,alignItems:'center',justifyContent:'center',backgroundColor:danger?'#E64661':active?'#FFFFFF':'#FFFFFF27'}}>
+      <Icon name={glyph} color={active?'#24133F':'#FFFFFF'} size={25}/>
+    </View>
+    <Copy color="#FFFFFF" size={12}>{label}</Copy>
+  </Pressable>
+}
 export function RoomCall({person,media,call,accept,end}:{person:Person;media:CallMedia;call:ActiveCall;accept:()=>void;end:()=>void}){
   const [muted,setMuted]=useState(false)
   const [cameraOff,setCameraOff]=useState(false)
-  const {theme,reduced}=useDesign()
+  const [tick,setTick]=useState(0)
+  const {reduced}=useDesign()
+  const {width}=useWindowDimensions()
   const wave=useRef(new Animated.Value(1)).current
   useEffect(()=>{
     if(reduced||call.video||call.state!=='connected'){wave.setValue(1);return}
     const animation=Animated.loop(Animated.sequence([Animated.timing(wave,{toValue:1.14,duration:650,useNativeDriver:Platform.OS!=='web',isInteraction:false}),Animated.timing(wave,{toValue:1,duration:650,useNativeDriver:Platform.OS!=='web',isInteraction:false})]))
     animation.start();return ()=>animation.stop()
   },[call.state,call.video,reduced,wave])
+  useEffect(()=>{
+    if(call.state!=='connected')return
+    const interval=setInterval(()=>setTick(value=>value+1),1000)
+    return ()=>clearInterval(interval)
+  },[call.state])
   const Surface=media.Surface
-  return <View style={{gap:16}}>
-    <View style={row}><Avatar person={person}/><View><PersonName person={person}/><Copy color={theme.muted}>{callLabels[call.state]}</Copy></View></View>
-    {call.state==='connected'&&!call.video&&<Animated.View style={{alignSelf:'center',width:92,height:92,borderRadius:46,borderWidth:3,borderColor:'#2FB66D',opacity:.65,transform:[{scale:wave}]}}/>}
-    {call.remote&&<Surface stream={call.remote} video={call.video}/>} 
-    {call.video&&call.local&&<Surface stream={call.local} video local/>}
-    <View style={{...row,flexWrap:'wrap'}}>
-      {call.state==='incoming'&&<Button label="Accept call" onPress={accept}/>}
-      {call.local&&<Button label={muted?'Unmute':'Mute'} variant="secondary" onPress={()=>{call.local?.getAudioTracks().forEach(track=>{track.enabled=muted});setMuted(!muted)}}/>}
-      {call.local&&call.video&&<Button label={cameraOff?'Turn camera on':'Turn camera off'} variant="secondary" onPress={()=>{call.local?.getVideoTracks().forEach(track=>{track.enabled=cameraOff});setCameraOff(!cameraOff)}}/>}
-      <Button label={call.state==='incoming'?'Decline call':'End call'} variant="danger" onPress={end}/>
+  const videoSurface=call.video&&(call.remote??call.local)
+  const duration=call.connectedAt?formatDuration(Math.max(0,Math.floor((Date.now()-call.connectedAt)/1000))):undefined
+  void tick
+  return <View accessibilityLabel={call.video?'Video call screen':'Voice call screen'} style={{flex:1,backgroundColor:'#130D25',overflow:'hidden'}}>
+    {!call.video&&call.remote&&<Surface stream={call.remote} video={false}/>}
+    {videoSurface&&<View style={{position:'absolute',inset:0}}><Surface stream={videoSurface} video full local={!call.remote}/></View>}
+    {call.video&&call.remote&&call.local&&<View style={{position:'absolute',top:24,right:18,width:Math.min(128,width*.27),height:174,borderWidth:2,borderColor:'#FFFFFF88',borderRadius:18,overflow:'hidden',backgroundColor:'#211B32'}}><Surface stream={call.local} video full local/></View>}
+    {!videoSurface&&<View style={{flex:1,alignItems:'center',justifyContent:'center',gap:25}}>
+      <Animated.View style={{padding:8,borderRadius:90,borderWidth:2,borderColor:'#C8F53F',transform:[{scale:wave}]}}><Avatar person={person} size={134}/></Animated.View>
+      <Copy color="#FFFFFF" size={31} weight={800} center>{displayHandle(person)}</Copy>
+      <Copy color="#D3C7E8" size={16} center>{call.video?'Video call':'Voice call'}</Copy>
+    </View>}
+    <View style={{position:videoSurface?'absolute':'relative',top:videoSurface?0:undefined,left:0,right:0,paddingHorizontal:24,paddingTop:videoSurface?26:8,paddingBottom:16,backgroundColor:videoSurface?'#130D2577':'transparent',alignItems:videoSurface?'flex-start':'center',gap:5}}>
+      {videoSurface&&<Copy color="#FFFFFF" size={24} weight={800}>{displayHandle(person)}</Copy>}
+      <Copy color="#E7DDF6" size={14} weight={700}>{call.state==='connected'?duration:callLabels[call.state]}</Copy>
+    </View>
+    <View style={{marginTop:'auto',paddingHorizontal:20,paddingTop:24,paddingBottom:32,backgroundColor:videoSurface?'#130D25CC':'#201737',borderTopLeftRadius:28,borderTopRightRadius:28,gap:22}}>
+      <View style={{...row,justifyContent:'space-around',flexWrap:'wrap'}}>
+        {call.local&&<CallControl label={muted?'Unmute':'Mute'} glyph={muted?'micOff':'mic'} active={muted} onPress={()=>{call.local?.getAudioTracks().forEach(track=>{track.enabled=muted});setMuted(!muted)}}/>}
+        {call.local&&call.video&&<CallControl label={cameraOff?'Camera on':'Camera off'} glyph={cameraOff?'vidOff':'vid'} active={cameraOff} onPress={()=>{call.local?.getVideoTracks().forEach(track=>{track.enabled=cameraOff});setCameraOff(!cameraOff)}}/>}
+        {call.state==='incoming'&&<CallControl label="Accept call" glyph="ph" active onPress={accept}/>}
+        <CallControl label={call.state==='incoming'?'Decline call':'End call'} glyph="hangup" danger onPress={end}/>
+      </View>
     </View>
   </View>
 }

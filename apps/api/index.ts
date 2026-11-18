@@ -968,8 +968,19 @@ app.put('/api/people/:id/follow',async c=>{
 const member=(db:D1Database,room:string,user:string)=>db.prepare('SELECT id FROM rooms WHERE id=? AND (first_user=? OR second_user=?)').bind(room,user,user).first()
 app.get('/api/rooms',async c=>{
   const user=c.get('user').id
-  const {results}=await c.env.DB.prepare('SELECT r.id room,u.id,u.name,u.role,u.username,u.verified,u.teacher,u.dob,u.avatar_media,u.cover_media,u.bio FROM rooms r JOIN users u ON u.id=CASE WHEN first_user=? THEN second_user ELSE first_user END WHERE first_user=? OR second_user=? LIMIT 60').bind(user,user,user).all<PublicAccount&{room:string}>()
-  return c.json(results.map(r=>({id:r.room,person:person(r,c.req.url)})))
+  const {results}=await c.env.DB.prepare(`SELECT r.id room,u.id,u.name,u.role,u.username,u.verified,u.teacher,u.dob,u.avatar_media,u.cover_media,u.bio,
+    m.body last_body,m.created message_at,x.video call_video,x.caller call_caller,x.state call_state,x.connected_at call_connected_at,x.ended_at call_ended_at,x.created call_at
+    FROM rooms r JOIN users u ON u.id=CASE WHEN r.first_user=? THEN r.second_user ELSE r.first_user END
+    LEFT JOIN messages m ON m.id=(SELECT id FROM messages WHERE room=r.id ORDER BY created DESC LIMIT 1)
+    LEFT JOIN calls x ON x.id=(SELECT id FROM calls WHERE room=r.id AND (state IN ('ended','declined') OR (state IN ('offered','ringing') AND expires<?)) ORDER BY created DESC LIMIT 1)
+    WHERE r.first_user=? OR r.second_user=? ORDER BY MAX(COALESCE(m.created,0),COALESCE(x.created,0)) DESC LIMIT 60`).bind(user,now(),user,user).all<PublicAccount&{room:string;last_body:string|null;message_at:number|null;call_video:number|null;call_caller:string|null;call_state:string|null;call_connected_at:number|null;call_ended_at:number|null;call_at:number|null}>()
+  return c.json(results.map(r=>{
+    const latestCall=!!r.call_at&&r.call_at>(r.message_at??0)
+    const duration=r.call_connected_at?Math.max(0,Math.floor(((r.call_ended_at??now())-r.call_connected_at)/1000)):0
+    const label=r.call_video?'video call':'voice call'
+    const callActivity=r.call_connected_at?`${r.call_video?'Video call':'Voice call'} · ${Math.floor(duration/60)}m ${String(duration%60).padStart(2,'0')}s`:r.call_state==='declined'?r.call_caller===user?'Call declined':'Declined '+label:r.call_caller===user?'No answer':'Missed '+label
+    return {id:r.room,person:person(r,c.req.url),lastActivity:latestCall?callActivity:r.last_body??undefined,lastActivityAt:r.call_at&&latestCall?time(r.call_at):r.message_at?time(r.message_at):undefined}
+  }))
 })
 app.post('/api/rooms',async c=>{
   const target=clean((await readBody(c.req.raw))?.target,80)
@@ -984,8 +995,25 @@ app.post('/api/rooms',async c=>{
 app.get('/api/rooms/:id/messages',async c=>{
   const room=c.req.param('id')
   if(!await member(c.env.DB,room,c.get('user').id)) return c.json({error:'Conversation unavailable.'},404)
-  const {results}=await c.env.DB.prepare('SELECT u.id,u.name,u.role,u.username,u.verified,u.teacher,u.dob,u.avatar_media,u.cover_media,u.bio,m.id note_id,m.body,m.read_at FROM messages m JOIN users u ON u.id=m.author WHERE room=? ORDER BY m.created DESC LIMIT 100').bind(room).all<NoteRow&{read_at:number|null}>()
-  return c.json(results.reverse().map(r=>({...note(r,c.req.url),readAt:r.read_at?time(r.read_at):undefined})))
+  const [messages,calls]=await Promise.all([
+    c.env.DB.prepare('SELECT u.id,u.name,u.role,u.username,u.verified,u.teacher,u.dob,u.avatar_media,u.cover_media,u.bio,m.id note_id,m.body,m.read_at,m.created FROM messages m JOIN users u ON u.id=m.author WHERE room=? ORDER BY m.created DESC LIMIT 100').bind(room).all<NoteRow&{read_at:number|null;created:number}>(),
+    c.env.DB.prepare(`SELECT x.id,x.caller,x.callee,x.video,x.state,x.created,x.expires,x.connected_at,x.ended_at,
+      u.name,u.role,u.username,u.verified,u.teacher,u.dob,u.avatar_media,u.cover_media,u.bio
+      FROM calls x JOIN users u ON u.id=x.caller WHERE x.room=? AND (x.state IN ('ended','declined') OR (x.state IN ('offered','ringing') AND x.expires<?))
+      ORDER BY x.created DESC LIMIT 40`).bind(room,now()).all<CallRow&PublicAccount>(),
+  ])
+  const viewer=c.get('user').id
+  const items=[
+    ...messages.results.map(r=>({...note(r,c.req.url),readAt:r.read_at?time(r.read_at):undefined,createdAt:time(r.created)})),
+    ...calls.results.map(r=>{
+      const connected=!!r.connected_at
+      const label=r.video?'Video call':'Voice call'
+      const body=connected?label:r.state==='declined'?(viewer===r.callee?'Declined '+label.toLowerCase():label+' declined'):(viewer===r.callee?'Missed '+label.toLowerCase():label+' · No answer')
+      return {id:'call:'+r.id,author:person({...r,id:r.caller},c.req.url),body,createdAt:time(r.created),call:{id:r.id,video:Boolean(r.video),outcome:connected?'completed':r.state==='declined'?'declined':'missed',durationSeconds:connected?Math.max(0,Math.floor(((r.ended_at??now())-r.connected_at!)/1000)):0}}
+    }),
+  ]
+  c.header('Cache-Control','no-store')
+  return c.json(items.sort((a,b)=>Date.parse(a.createdAt)-Date.parse(b.createdAt)).slice(-140))
 })
 app.put('/api/rooms/:id/read',async c=>{
   const room=c.req.param('id'),user=c.get('user').id
@@ -1009,7 +1037,7 @@ app.post('/api/rooms/:id/messages',async c=>{
   c.executionCtx.waitUntil(c.env.ROOMS.getByName(room).fetch('https://room.internal/notify',{method:'POST',body:JSON.stringify(message)}))
   return c.json(message,201)
 })
-type CallRow={id:string;room:string;caller:string;callee:string;video:number;offer:string;answer:string|null;state:'offered'|'ringing'|'answered'|'ended'|'declined';created:number;expires:number}
+type CallRow={id:string;room:string;caller:string;callee:string;video:number;offer:string;answer:string|null;state:'offered'|'ringing'|'answered'|'ended'|'declined';created:number;expires:number;connected_at:number|null;ended_at:number|null}
 const callState=(row:CallRow)=>row.expires<now()&&row.state!=='answered'?'ended':row.state
 app.post('/api/rooms/:id/calls',async c=>{
   const room=c.req.param('id'),user=c.get('user').id
@@ -1035,7 +1063,7 @@ app.get('/api/calls/:id',async c=>{
   const row=await c.env.DB.prepare('SELECT * FROM calls WHERE id=? AND (caller=? OR callee=?)').bind(c.req.param('id'),c.get('user').id,c.get('user').id).first<CallRow>()
   if(!row)return c.json({error:'Call unavailable.'},404)
   c.header('Cache-Control','no-store')
-  return c.json({id:row.id,room:row.room,state:callState(row),video:Boolean(row.video),offer:row.callee===c.get('user').id?row.offer:undefined,answer:row.caller===c.get('user').id?row.answer:undefined,expires:time(row.expires)})
+  return c.json({id:row.id,room:row.room,state:callState(row),video:Boolean(row.video),offer:row.callee===c.get('user').id?row.offer:undefined,answer:row.caller===c.get('user').id?row.answer:undefined,connectedAt:row.connected_at?time(row.connected_at):undefined,expires:time(row.expires)})
 })
 app.put('/api/calls/:id/ringing',async c=>{
   const user=c.get('user').id,id=c.req.param('id')
@@ -1051,11 +1079,18 @@ app.put('/api/calls/:id/answer',async c=>{
   if(!result.meta.changes)return c.json({error:'Call unavailable.'},404)
   return c.json({state:'answered'})
 })
+app.put('/api/calls/:id/connected',async c=>{
+  const id=c.req.param('id'),user=c.get('user').id
+  const result=await c.env.DB.prepare("UPDATE calls SET connected_at=COALESCE(connected_at,?) WHERE id=? AND (caller=? OR callee=?) AND state='answered'").bind(now(),id,user,user).run()
+  if(!result.meta.changes)return c.json({error:'Call unavailable.'},404)
+  return c.json({ok:true})
+})
 app.put('/api/calls/:id/end',async c=>{
   const user=c.get('user').id,id=c.req.param('id')
-  const row=await c.env.DB.prepare('SELECT caller,callee,state FROM calls WHERE id=? AND (caller=? OR callee=?)').bind(id,user,user).first<Pick<CallRow,'caller'|'callee'|'state'>>()
+  const row=await c.env.DB.prepare('SELECT room,caller,callee,state FROM calls WHERE id=? AND (caller=? OR callee=?)').bind(id,user,user).first<Pick<CallRow,'room'|'caller'|'callee'|'state'>>()
   if(!row)return c.json({error:'Call unavailable.'},404)
-  await c.env.DB.prepare('UPDATE calls SET state=? WHERE id=? AND state NOT IN (\'ended\',\'declined\')').bind(user===row.callee&&row.state!=='answered'?'declined':'ended',id).run()
+  const result=await c.env.DB.prepare('UPDATE calls SET state=?,ended_at=? WHERE id=? AND state NOT IN (\'ended\',\'declined\')').bind(user===row.callee&&row.state!=='answered'?'declined':'ended',now(),id).run()
+  if(result.meta.changes)c.executionCtx.waitUntil(c.env.ROOMS.getByName(row.room).fetch('https://room.internal/notify',{method:'POST',body:JSON.stringify({type:'call-history',id})}))
   return c.json({ok:true})
 })
 app.get('/api/rooms/:id/socket',async c=>{

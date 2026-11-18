@@ -3,7 +3,7 @@ import {dailyLesson} from './learningCatalog'
 import {browserCallMedia,RoomCall,useRoomCall,type CallMedia} from './calls'
 import {readCallSignal,type CallSignal} from './callSignal'
 import React,{lazy,Suspense,useCallback,useEffect,useLayoutEffect,useRef,useState} from 'react'
-import {AccessibilityInfo,Animated,AppState,BackHandler,Easing,Image,KeyboardAvoidingView,Modal,PanResponder,Platform,Pressable,RefreshControl,ScrollView,View,useWindowDimensions,type ViewStyle} from 'react-native'
+import {AccessibilityInfo,Animated,AppState,BackHandler,Easing,Image,KeyboardAvoidingView,Modal,PanResponder,Platform,Pressable,RefreshControl,ScrollView,TextInput,View,useWindowDimensions,type ViewStyle} from 'react-native'
 import {api,birthdayToday,validBirthDate,storyLifetime,capitalizeName,normalizeUsername,usernameHint,validUsername,initialChats,initialComments,initialPosts,initials,lime,me,people,questions,slides,themes,type FollowListKind,type FollowPage,type FollowStats,type Note,type Person,type Post,type BirthdayEntry,type Role,type Story,type StoryGroup,type Theme} from './index'
 import {Avatar,Button,Card,Copy,Design,displayHandle,Field,Icon,IconButton,IconTile,Logo,PersonName,ScreenLinks,Segmented,VerifiedBadge,row,spread,stack,useDesign,type Glyph,type IconRendererProps} from './ui'
 import type {ExtraPage} from './FeatureScreens'
@@ -21,7 +21,7 @@ const FeatureScreen=lazy(()=>import('./FeatureScreens'))
 const sampleFollows:Record<string,string[]>={ada:['tobi','zee'],tobi:['ada','code'],zee:['ada','bello'],bello:['ada'],code:['tobi'],maths:['bello'],squad:['code']}
 
 type Page=ExtraPage|'Home'|'Learn'|'Explore'|'Play'|'Messages'|'Chat'|'Notifications'|'Profile'|'Settings'|'Quiz'|'Admin'
-type Room={id:string;person:Person}
+type Room={id:string;person:Person;lastActivity?:string;lastActivityAt?:string}
 type Session={token:string;user:Viewer}
 type AuthMode='signup'|'login'
 type Credentials={firstName:string;lastName:string;username:string;email:string;password:string;dob:string}
@@ -83,6 +83,7 @@ const shortTime=(value:string)=>{
   const minutes=Math.max(0,Math.floor((Date.now()-Date.parse(value))/60000))
   return minutes<1?'Just now':minutes<60?minutes+'m':minutes<1440?Math.floor(minutes/60)+'h':Math.floor(minutes/1440)+'d'
 }
+const callLength=(seconds:number)=>seconds<60?seconds+'s':Math.floor(seconds/60)+'m '+String(seconds%60).padStart(2,'0')+'s'
 function Motion({children,reduced,style,distance=10,axis='y'}:{children:React.ReactNode;reduced:boolean;style?:ViewStyle;distance?:number;axis?:'x'|'y'}){
   const animation=useRef(new Animated.Value(reduced?1:0)).current
   useEffect(()=>{
@@ -305,7 +306,11 @@ function Quiz({onBack}:{onBack:()=>void}){
 function CallPreview({video,person,onClose}:{video:boolean;person:Person;onClose:()=>void}){
   const [seconds,setSeconds]=useState(0),[muted,setMuted]=useState(false)
   useEffect(()=>{const timer=setInterval(()=>setSeconds(s=>s+1),1000);return()=>clearInterval(timer)},[])
-  return <View style={{backgroundColor:'#120D1F',borderRadius:24,padding:24,alignItems:'center',gap:18}}><Copy color="#C9B8FF" weight={800}>{video?'Video call preview':'Voice call preview'}</Copy><Avatar person={person} size={90} ring/><Copy color="#fff" size={24} weight={800}>{person.name}</Copy><Copy color="#C9B8FF">{Math.floor(seconds/60)}:{String(seconds%60).padStart(2,'0')} · Simulated call</Copy><View style={row}><Button label={muted?'Unmute':'Mute'} onPress={()=>setMuted(!muted)} variant="secondary"/><Button label="End call" onPress={onClose} variant="danger"/></View></View>
+  return <View style={{flex:1,backgroundColor:'#130D25',padding:24,alignItems:'center'}}>
+    <Copy color="#C9B8FF" weight={800} size={16}>{video?'Video call preview':'Voice call preview'}</Copy>
+    <View style={{flex:1,alignItems:'center',justifyContent:'center',gap:20}}><Avatar person={person} size={128} ring/><Copy color="#fff" size={30} weight={800}>{displayHandle(person)}</Copy><Copy color="#C9B8FF" size={16}>{Math.floor(seconds/60)}:{String(seconds%60).padStart(2,'0')} · Simulated call</Copy></View>
+    <View style={{...row,justifyContent:'space-around',width:'100%',paddingBottom:24}}><Button label={muted?'Unmute':'Mute'} leading={muted?'micOff':'mic'} onPress={()=>setMuted(!muted)} variant="secondary"/><Button label="End call" leading="hangup" onPress={onClose} variant="danger"/></View>
+  </View>
 }
 export default function App(props:Props){
   const {base,font,phone}=props
@@ -552,13 +557,20 @@ export default function App(props:Props){
   const answeredCall=useRef('')
   const webCallMedia=React.useMemo(browserCallMedia,[])
   const callMedia=props.callMedia??webCallMedia
+  const refreshConversation=(id:string)=>api<Note[]>(base,'/rooms/'+id+'/messages',{},token).then(data=>{
+    setChats(previous=>({...previous,[id]:[...data,...(previous[id]??[]).filter(item=>!data.some(saved=>saved.id===item.id))].slice(-140)}))
+  })
   const sendCall=async(signal:CallSignal)=>{
     try{
       if(signal.kind==='offer'){
         if(!roomId)return false
         await call('/rooms/'+roomId+'/calls',json({signal}))
       }else if(signal.kind==='answer')await call('/calls/'+signal.id+'/answer',json({signal},'PUT'))
-      else if(signal.kind!=='ringing')await call('/calls/'+signal.id+'/end',{method:'PUT'})
+      else if(signal.kind==='connected')await call('/calls/'+signal.id+'/connected',{method:'PUT'})
+      else if(signal.kind!=='ringing'){
+        await call('/calls/'+signal.id+'/end',{method:'PUT'})
+        if(roomId)void refreshConversation(roomId).catch(()=>{})
+      }
       return true
     }catch(reason){if(signal.kind==='offer'||signal.kind==='answer')fail(reason);return false}
   }
@@ -601,6 +613,7 @@ export default function App(props:Props){
       if(!active)return
       if(status.state==='ended'||status.state==='declined'){
         void receiveCall.current({kind:status.state==='declined'?'busy':'end',id:activeCall.id})
+        if(roomId)void refreshConversation(roomId).catch(()=>{})
       }else if(status.state==='ringing'&&activeCall.state==='calling'){
         void receiveCall.current({kind:'ringing',id:activeCall.id})
       }else if(status.answer&&answeredCall.current!==activeCall.id){
@@ -611,14 +624,15 @@ export default function App(props:Props){
     void check()
     const interval=setInterval(check,activeCall.state==='connected'?5000:2000)
     return ()=>{active=false;clearInterval(interval)}
-  },[base,demo,token,page,roomCall.call?.id,roomCall.call?.state])
+  },[base,demo,token,page,roomId,roomCall.call?.id,roomCall.call?.state])
   useEffect(()=>{
     if(demo||!token||page!=='Chat'||!roomId)return
     let active=true
+    let lastSync=0
     const endpoint=base||((typeof window!=='undefined'&&window.location?.origin)||'')
     const url=endpoint.replace(/^http/,'ws').replace(/\/$/,'')+'/api/rooms/'+roomId+'/socket'
     const refresh=()=>api<Note[]>(base,'/rooms/'+roomId+'/messages',{},token)
-      .then(data=>{if(active){setChats(previous=>({...previous,[roomId]:[...data,...(previous[roomId]??[]).filter(m=>!data.some(n=>n.id===m.id))].slice(-100)}));setFeedError('');if(foreground())void api(base,'/rooms/'+roomId+'/read',{method:'PUT'},token).catch(()=>{})}})
+      .then(data=>{if(active){lastSync=Date.now();setChats(previous=>({...previous,[roomId]:[...data,...(previous[roomId]??[]).filter(m=>!data.some(n=>n.id===m.id))].slice(-140)}));setFeedError('');if(foreground()&&data.some(item=>!item.call&&item.author.id!==user.id&&!item.readAt))void api(base,'/rooms/'+roomId+'/read',{method:'PUT'},token).catch(()=>{})}})
       .catch(reason=>{if(active)setFeedError(errorMessage(reason))})
     const socket=new WebSocket(url,['dameeland','ticket.'+token])
     socket.onopen=()=>{if(active)void refresh()}
@@ -631,6 +645,7 @@ export default function App(props:Props){
         if(signal)void receiveCall.current(signal)
         return
       }
+      if(data?.type==='call-history'){void refresh();return}
       if(data?.type==='read'&&Array.isArray(data.ids)&&typeof data.readAt==='string'){
         const ids=new Set<string>(data.ids)
         setChats(previous=>({...previous,[roomId]:(previous[roomId]??[]).map(item=>ids.has(item.id)?{...item,readAt:data.readAt}:item)}))
@@ -644,7 +659,7 @@ export default function App(props:Props){
       }
     }
     void refresh()
-    const poll=setInterval(()=>{if(socket.readyState!==WebSocket.OPEN)void refresh()},3500)
+    const poll=setInterval(()=>{if(foreground()&&(socket.readyState!==WebSocket.OPEN||Date.now()-lastSync>15000))void refresh()},3500)
     const heartbeat=setInterval(()=>{if(socket.readyState===WebSocket.OPEN)socket.send(JSON.stringify({type:'presence'}))},30000)
     const resumed=AppState.addEventListener('change',state=>{if(state==='active')void refresh()})
     const visible=()=>{if(foreground())void refresh()}
@@ -1358,24 +1373,19 @@ export default function App(props:Props){
   const inbox=<>
     <Segmented options={['Chats','Groups','Requests']} selected={inboxTab} onSelect={setInboxTab}/>
     {demo&&inboxTab==='Chats'&&<Card>{section('Active now')}<View style={row}>{[people[0],people[1],people[2]].map(person=><Pressable key={person.id} accessibilityRole="button" accessibilityLabel={'Message '+person.name} onPress={()=>void messagePerson(person)}><Avatar person={person} ring size={42}/></Pressable>)}</View></Card>}
-    {feedError?failure:loading?<Loading/>:roomList.length?roomList.map(r=><Pressable key={r.id} accessibilityRole="button" accessibilityLabel={'Open conversation with '+displayHandle(r.person)} onPress={()=>openRoom(r)}><Card style={row}><Avatar person={r.person} size={50}/><View style={{flex:1}}><PersonName person={r.person}/><Copy color={theme.muted} size={12}>{chats[r.id]?.at(-1)?.body??'Open conversation'}</Copy></View></Card></Pressable>):<Empty title={inboxTab==='Chats'?'No messages yet':inboxTab==='Groups'?'No groups yet':'No message requests'} detail={inboxTab==='Chats'?'Find a classmate and start a chat.':inboxTab==='Groups'?'Group conversations are available in the preview.':'New requests will appear here.'} action={inboxTab==='Chats'?'Find people':undefined} onPress={()=>open('Explore')}/>}
+    {feedError?failure:loading?<Loading/>:roomList.length?roomList.map(r=><Pressable key={r.id} accessibilityRole="button" accessibilityLabel={'Open conversation with '+displayHandle(r.person)} onPress={()=>openRoom(r)}><Card style={{...row,minHeight:72}}><Avatar person={r.person} size={50}/><View style={{flex:1,minWidth:0,gap:3}}><View style={spread}><PersonName person={r.person}/>{r.lastActivityAt&&<Copy color={theme.muted} size={11}>{shortTime(r.lastActivityAt)}</Copy>}</View><Copy color={theme.muted} size={12}>{chats[r.id]?.at(-1)?.body??r.lastActivity??'Open conversation'}</Copy></View></Card></Pressable>):<Empty title={inboxTab==='Chats'?'No messages yet':inboxTab==='Groups'?'No groups yet':'No message requests'} detail={inboxTab==='Chats'?'Find a classmate and start a chat.':inboxTab==='Groups'?'Group conversations are available in the preview.':'New requests will appear here.'} action={inboxTab==='Chats'?'Find people':undefined} onPress={()=>open('Explore')}/>}
   </>
-  const lastOwnMessageId=room?[...(chats[room.id]??[])].reverse().find(note=>note.author.id===user.id)?.id:undefined
+  const lastOwnMessageId=room?[...(chats[room.id]??[])].reverse().find(note=>!note.call&&note.author.id===user.id)?.id:undefined
   const chat=room&&<>
-    <Card style={spread}><View style={{...row,flex:1}}><Avatar person={room.person}/><View style={{flex:1}}><PersonName person={room.person}/><View style={{...row,gap:5}}>{!demo&&<View style={{width:7,height:7,borderRadius:4,backgroundColor:presenceById[room.person.id]?.online?'#2FB66D':theme.muted}}/>}<Copy color={presenceById[room.person.id]?.online?'#2FB66D':theme.muted} size={12}>{demo?'Active now':presenceById[room.person.id]?.online?'Online':presenceById[room.person.id]?.lastSeen?'Last seen '+shortTime(presenceById[room.person.id]?.lastSeen||''):'Offline'}</Copy></View></View></View>{demo&&<View style={{...row,gap:0}}><IconButton name="ph" label="Voice call" onPress={()=>selectOverlay({kind:'call',video:false,person:room.person})}/><IconButton name="vid" label="Video call" onPress={()=>selectOverlay({kind:'call',video:true,person:room.person})}/></View>}</Card>
-    {!demo&&callMedia&&<View style={{...row,flexWrap:'wrap'}}>
-      <Button label="Voice call" leading="ph" variant="secondary" disabled={!!roomCall.call} onPress={()=>roomCall.start(false)}/>
-      <Button label="Video call" leading="vid" variant="secondary" disabled={!!roomCall.call} onPress={()=>roomCall.start(true)}/>
-      {deviceNotifications!=='granted'&&props.requestNotifications&&<Button label="Enable call alerts" variant="plain" onPress={()=>void enableDeviceNotifications()}/>}
-    </View>}
+    {!demo&&callMedia&&deviceNotifications!=='granted'&&props.requestNotifications&&<View style={{alignItems:'center'}}><Button label="Enable call alerts" variant="plain" onPress={()=>void enableDeviceNotifications()}/></View>}
     {!demo&&!callMedia&&<Copy color={theme.muted} size={12}>Voice and video calls are available in the installed app build or a supported browser.</Copy>}
-    {!demo&&callMedia&&roomCall.call&&<Card>
-      <RoomCall key={roomCall.call.id} person={room.person} media={callMedia} call={roomCall.call} accept={roomCall.accept} end={()=>roomCall.end()}/>
-    </Card>}
     {demo&&room.person.group&&<Card><Copy weight={800}>Pinned message</Copy><Copy>Bring one practice question to the next study session.</Copy><Button label="Join group voice call" leading="ph" variant="secondary" onPress={()=>selectOverlay({kind:'call',video:false,person:room.person,ringing:true})}/></Card>}
     {demo&&room.id==='ada'&&<Card><Copy size={12} color={theme.muted}>Call log · Voice call · 2 min</Copy><Button label={voicePlaying?'Stop voice note preview':'Preview voice note · 0:08'} leading="play" variant="secondary" onPress={()=>setVoicePlaying(!voicePlaying)}/>{voicePlaying&&<Copy>Transcript: Can we revise quadratic equations after school?</Copy>}</Card>}
     {!!feedError&&<Empty title="Reconnecting" detail={feedError}/>}
-    {(chats[room.id]??[]).map(item=>{const own=item.author.id===user.id;return <View key={item.id} style={{alignSelf:own?'flex-end':'flex-start',backgroundColor:own?theme.purple:theme.card,maxWidth:'80%',borderRadius:18,borderBottomLeftRadius:own?18:5,borderBottomRightRadius:own?5:18,borderWidth:1,borderColor:own?theme.purple:theme.border,padding:12}}><Copy color={own?'#fff':theme.text}>{item.body}</Copy>{own&&lastOwnMessageId===item.id&&<Copy size={11} color="#FFFFFFCC">{item.readAt?'Seen · '+shortTime(item.readAt):'Sent'}</Copy>}</View>})}
+    {(chats[room.id]??[]).map(item=>item.call?<Pressable key={item.id} accessibilityRole="button" accessibilityLabel={item.body} onPress={()=>{if(!roomCall.call&&callMedia)roomCall.start(item.call!.video)}} style={{alignSelf:'center',maxWidth:'92%',minWidth:210,backgroundColor:theme.chip,borderWidth:1,borderColor:theme.border,borderRadius:18,padding:13,gap:6,marginVertical:5}}>
+      <View style={{...row,justifyContent:'center'}}><Icon name={item.call.video?'vid':'ph'} color={item.call.outcome==='missed'?'#D13438':theme.purple} size={20}/><Copy weight={800} color={item.call.outcome==='missed'?'#D13438':theme.text}>{item.body}</Copy></View>
+      <Copy center color={theme.muted} size={12}>{item.call.outcome==='completed'?callLength(item.call.durationSeconds)+' · ':''}{item.createdAt?shortTime(item.createdAt):''} · Tap to call again</Copy>
+    </Pressable>:(()=>{const own=item.author.id===user.id;return <View key={item.id} style={{alignSelf:own?'flex-end':'flex-start',backgroundColor:own?theme.purple:theme.card,maxWidth:'80%',borderRadius:18,borderBottomLeftRadius:own?18:5,borderBottomRightRadius:own?5:18,borderWidth:1,borderColor:own?theme.purple:theme.border,padding:12}}><Copy color={own?'#fff':theme.text}>{item.body}</Copy>{own&&lastOwnMessageId===item.id&&<Copy size={11} color="#FFFFFFCC">{item.readAt?'Seen · '+shortTime(item.readAt):'Sent'}</Copy>}</View>})())}
     {!(chats[room.id]?.length)&&!feedError&&<Empty title="Say hello" detail="Messages are visible to both people in this conversation."/>}
   </>
   const ownProfile=profile.id===user.id
@@ -1526,7 +1536,7 @@ export default function App(props:Props){
   return <Design.Provider value={{theme,font,reduced,renderIcon:props.renderIcon}}><View style={{flex:1,backgroundColor:theme.bg,width:'100%'}}>
     {starting||stage==='restore'?<LoadingScreen/>:stage==='intro'?<Intro desktop={desktop} step={step} reduced={reduced} showPublicBrand={Platform.OS==='web'&&!demo} onSkip={()=>setStage('auth')} onNext={()=>step===2?setStage('auth'):setStep(step+1)} onBack={()=>setStep(step-1)}/>:stage==='auth'?<Auth base={base} demo={demo} busy={busy} error={error} submit={authenticate} onGoogle={(mode,username,dob)=>void authenticateWithGoogle(mode,username,dob)} onCancelGoogle={()=>googleRequest.current?.abort()} googlePending={googlePending} onDemo={()=>{setDemoEntered(true);setPosts(initialPosts);setChats(initialChats);setRooms(localRooms);setUnread(true);setUser(me);setPage('Home');setStage('app')}} reduced={reduced} recovering={recovering} setRecovering={setRecovering}/>:
       <View style={{flex:1,flexDirection:'row',width:'100%',maxWidth:1360,alignSelf:'center'}}>
-        {desktop&&<View style={{width:222,borderRightWidth:1,borderColor:theme.border,padding:18,gap:5,backgroundColor:theme.card}}>
+        {desktop&&page!=='Chat'&&<View style={{width:222,borderRightWidth:1,borderColor:theme.border,padding:18,gap:5,backgroundColor:theme.card}}>
           <View style={{minHeight:64,justifyContent:'center',marginBottom:14}}><Logo size={40}/></View>
           {tabs.map(([name,glyph])=>navButton(name,glyph))}
           <View style={{height:1,backgroundColor:theme.border,marginVertical:9,marginHorizontal:8}}/>
@@ -1537,8 +1547,21 @@ export default function App(props:Props){
             <Avatar person={user} size={35}/><View style={{flex:1}}><PersonName person={user}/></View>
           </Pressable>
         </View>}
-        <View style={{flex:1,minWidth:0,maxWidth:rail?680:undefined}}>
+        <View style={{flex:1,minWidth:0,maxWidth:rail&&page!=='Chat'?680:undefined}}>
           <View style={{...spread,paddingHorizontal:16,minHeight:desktop?72:62,borderBottomWidth:1,borderColor:theme.border,backgroundColor:theme.card}}>
+            {page==='Chat'&&room?<>
+              <View style={{...row,flex:1,minWidth:0,gap:5}}>
+                <IconButton name="back" label="Go back" onPress={goBack}/>
+                <Pressable accessibilityRole="button" accessibilityLabel={'Open '+displayHandle(room.person)+' profile'} onPress={()=>showProfile(room.person)} style={{...row,flex:1,minWidth:0}}>
+                  <Avatar person={room.person} size={39}/>
+                  <View style={{flex:1,minWidth:0}}><PersonName person={room.person}/><Copy color={theme.muted} size={11}>{demo?'Active now':presenceById[room.person.id]?.online?'Online':presenceById[room.person.id]?.lastSeen?'Last seen '+shortTime(presenceById[room.person.id]!.lastSeen!):'Away'}</Copy></View>
+                </Pressable>
+              </View>
+              <View style={{...row,gap:0}}>
+                <IconButton name="ph" label="Voice call" onPress={()=>demo?selectOverlay({kind:'call',video:false,person:room.person}):callMedia?roomCall.start(false):notify('Calls need an installed app build or a supported browser.','error')}/>
+                <IconButton name="vid" label="Video call" onPress={()=>demo?selectOverlay({kind:'call',video:true,person:room.person}):callMedia?roomCall.start(true):notify('Calls need an installed app build or a supported browser.','error')}/>
+              </View>
+            </>:<>
             <View style={{...row,flex:1}}>
               {!desktop&&page==='Home'?<Logo size={40}/>:!tabs.some(([name])=>name===page)&&<IconButton name="back" label="Go back" onPress={goBack}/>}
               {(desktop||page!=='Home')&&<Copy weight={800} size={desktop?28:21}>{page==='Quiz'?'Quiz Duel':page==='Chat'?'Chat':page}</Copy>}
@@ -1547,6 +1570,7 @@ export default function App(props:Props){
               <IconButton name={themeName==='dark'?'sun':'moon'} label="Toggle light or dark mode" onPress={()=>setAppearance(themeName==='light'?'dark':'light')}/>
               {!desktop&&<><View><IconButton name="bell" label="Notifications" onPress={()=>open('Notifications')}/>{unread&&<View pointerEvents="none" style={{position:'absolute',right:8,top:7,width:7,height:7,borderRadius:5,backgroundColor:theme.purple}}/>}</View><IconButton name="msg" label="Messages" onPress={()=>open('Messages')}/><Pressable accessibilityRole="button" accessibilityLabel="Your profile" style={{width:44,height:44,alignItems:'center',justifyContent:'center'}} onPress={()=>showProfile(user)}><Avatar person={user} size={31}/></Pressable></>}
             </View>
+            </>}
           </View>
           <ScrollView key={page==='Chat'?'chat:'+room?.id:page==='Profile'?'profile:'+profile.id:page} ref={scroll} testID="main-scroll" style={{flex:1}} keyboardShouldPersistTaps="handled" keyboardDismissMode="on-drag"
             refreshControl={Platform.OS==='web'?undefined:<RefreshControl refreshing={refreshing} onRefresh={()=>void refreshPage()} tintColor={theme.purple} colors={[theme.purple]}/>}
@@ -1574,13 +1598,20 @@ export default function App(props:Props){
                 if(room&&(chats[room.id]?.length??0)>0)initialChatScroll.current=false
               }else restorePageScroll()
             }}
-            contentContainerStyle={{padding:desktop?20:13,gap:16,width:'100%',maxWidth:640,alignSelf:'center'}}>
+            contentContainerStyle={{padding:desktop?20:13,gap:page==='Chat'?9:16,width:'100%',maxWidth:page==='Chat'?desktop?900:undefined:640,alignSelf:'center'}}>
             {Platform.OS==='web'&&refreshing&&<Copy center color={theme.muted}>Refreshing…</Copy>}
-            <Motion key={page} reduced={reduced} distance={0} style={stack}>{content[page]??<Suspense fallback={<LoadingScreen compact/>}><FeatureScreen key={page} page={page as ExtraPage} open={open} demo={demo} user={user} startQuiz={startQuiz} completed={completedLessons.length>0} wish={()=>selectOverlay({kind:'wish'})} wishes={wishes} incomingCall={()=>selectOverlay({kind:'call',video:false,person:people[0],ringing:true,incoming:true})}/></Suspense>}</Motion></ScrollView>
-          {page==='Chat'&&<View style={{...row,padding:10,borderTopWidth:1,borderColor:theme.border,backgroundColor:theme.card}}><View style={{flex:1}}><Field label="Message" placeholder="Write a message" value={message} onChangeText={setMessage} onSubmitEditing={()=>void send()} maxLength={800}/></View><View style={{alignSelf:'flex-end'}}><Button label="Send" trailing="send" disabled={busy||!message.trim()} onPress={()=>void send()}/></View></View>}
-          {!desktop&&<View style={{...row,gap:0,justifyContent:'space-around',minHeight:64,paddingHorizontal:6,borderTopWidth:1,borderColor:theme.border,backgroundColor:theme.card}}>{tabs.slice(0,2).map(([name,glyph])=>navButton(name,glyph))}<View style={{width:61,alignItems:'center',marginTop:-13}}><IconButton name="plus" label="Create post" size={26} solid onPress={compose}/></View>{tabs.slice(2).map(([name,glyph])=>navButton(name,glyph))}</View>}
+            <Motion key={page==='Chat'?'chat:'+room?.id:page} reduced={reduced} distance={page==='Chat'?5:8} style={stack}>{content[page]??<Suspense fallback={<LoadingScreen compact/>}><FeatureScreen key={page} page={page as ExtraPage} open={open} demo={demo} user={user} startQuiz={startQuiz} completed={completedLessons.length>0} wish={()=>selectOverlay({kind:'wish'})} wishes={wishes} incomingCall={()=>selectOverlay({kind:'call',video:false,person:people[0],ringing:true,incoming:true})}/></Suspense>}</Motion></ScrollView>
+          {page==='Chat'&&<KeyboardAvoidingView behavior={Platform.OS==='ios'?'padding':undefined}>
+            <View style={{...row,paddingHorizontal:12,paddingVertical:9,borderTopWidth:1,borderColor:theme.border,backgroundColor:theme.card}}>
+              <View style={{flex:1,minWidth:0,borderRadius:23,backgroundColor:theme.chip,borderWidth:1,borderColor:theme.border}}>
+                <TextInput accessibilityLabel="Message" placeholder="Message" placeholderTextColor={theme.muted} value={message} onChangeText={setMessage} multiline maxLength={800} style={[{color:theme.text,fontSize:15,minHeight:44,maxHeight:120,paddingHorizontal:15,paddingVertical:10,textAlignVertical:'center'},font(500)]}/>
+              </View>
+              <View style={{opacity:busy||!message.trim()?.5:1}}><IconButton name="send" label="Send" solid onPress={()=>void send()}/></View>
+            </View>
+          </KeyboardAvoidingView>}
+          {!desktop&&page!=='Chat'&&<View style={{...row,gap:0,justifyContent:'space-around',minHeight:64,paddingHorizontal:6,borderTopWidth:1,borderColor:theme.border,backgroundColor:theme.card}}>{tabs.slice(0,2).map(([name,glyph])=>navButton(name,glyph))}<View style={{width:61,alignItems:'center',marginTop:-13}}><IconButton name="plus" label="Create post" size={26} solid onPress={compose}/></View>{tabs.slice(2).map(([name,glyph])=>navButton(name,glyph))}</View>}
         </View>
-        {rail&&<ScrollView style={{flex:1,maxWidth:324,borderLeftWidth:1,borderColor:theme.border}} contentContainerStyle={{padding:17,paddingTop:20,gap:15}}>
+        {rail&&page!=='Chat'&&<ScrollView style={{flex:1,maxWidth:324,borderLeftWidth:1,borderColor:theme.border}} contentContainerStyle={{padding:17,paddingTop:20,gap:15}}>
           <FeatureCard glyph="bolt" title="Daily challenge" description={featuredLesson.title} action="Start lesson" onPress={()=>openLesson(featuredLesson.id)} compact/>
           {demo&&<>
             <Card>
@@ -1600,7 +1631,7 @@ export default function App(props:Props){
     {toast&&!overlay&&<Toast key={toast.id} item={toast} reduced={reduced} onDismiss={dismissToast} bottom={desktop?24:76}/>}
     <Modal presentationStyle="fullScreen" visible={overlay!==null} animationType={reduced?'none':'fade'} onRequestClose={modalClose}>
       <ModalViewport color={story?(personalStory?.background??(personalStory?.image?'#120D1F':'#4F25D6')):theme.bg}>
-      {story?<View accessibilityViewIsModal style={{flex:1,backgroundColor:personalStory?.background??(personalStory?.image?'#120D1F':'#4F25D6'),padding:18}}>
+      {overlay?.kind==='call'&&!overlay.ringing?<CallPreview video={overlay.video} person={overlay.person} onClose={modalClose}/>:story?<View accessibilityViewIsModal style={{flex:1,backgroundColor:personalStory?.background??(personalStory?.image?'#120D1F':'#4F25D6'),padding:18}}>
         <View style={{width:'100%',maxWidth:640,alignSelf:'center',flex:1,gap:14}}>
           <View accessibilityLabel={`Story ${activeIndex+1} of ${liveGroup?.stories.length??1}`} style={{...row,gap:7}}><View style={{...row,flex:1,gap:4}}>{Array.from({length:liveGroup?.stories.length??1},(_,index)=><View key={index} style={{flex:1,height:3,borderRadius:3,backgroundColor:index<=activeIndex?lime:'rgba(255,255,255,.35)'}}/>)}</View><Copy color="#fff" size={11} weight={800}>{activeIndex+1}/{liveGroup?.stories.length??1}</Copy></View>
           <View style={spread}>
@@ -1646,6 +1677,11 @@ export default function App(props:Props){
         </ScrollView>}
         {toast&&overlay&&<Toast key={toast.id} item={toast} reduced={reduced} onDismiss={dismissToast} bottom={18}/>}
       </View>}
+      </ModalViewport>
+    </Modal>
+    <Modal presentationStyle="fullScreen" visible={Boolean(!demo&&page==='Chat'&&room&&roomCall.call&&callMedia)} animationType={reduced?'none':'fade'} onRequestClose={()=>roomCall.end()}>
+      <ModalViewport color="#130D25">
+        {room&&roomCall.call&&callMedia&&<RoomCall key={roomCall.call.id} person={room.person} media={callMedia} call={roomCall.call} accept={roomCall.accept} end={()=>roomCall.end()}/>}
       </ModalViewport>
     </Modal>
   </View></Design.Provider>

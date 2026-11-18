@@ -35,10 +35,10 @@ export const nativeCalls:CallMedia={
       close:()=>peer.close(),
     }
   },
-  Surface({stream,local,video}){
+  Surface({stream,local,video,full}){
     if(!video)return null
-    return <View style={{borderRadius:14,overflow:'hidden',backgroundColor:'#120D1F'}}>
-      <RTCView streamURL={(stream as MediaStream).toURL()} mirror={local} objectFit="contain" style={{width:'100%',aspectRatio:16/9}}/>
+    return <View style={{flex:full?1:undefined,borderRadius:full?0:14,overflow:'hidden',backgroundColor:'#120D1F'}}>
+      <RTCView streamURL={(stream as MediaStream).toURL()} mirror={local} objectFit={full?'cover':'contain'} style={full?{flex:1}:{width:'100%',aspectRatio:16/9}}/>
     </View>
   },
 }
