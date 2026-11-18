@@ -36,16 +36,26 @@ const openGoogle=async(getUrl:()=>Promise<string>)=>{
 const pickMedia=(comment=false)=>{
   const input=document.createElement('input')
   input.type='file'
-  input.accept=comment?'image/png,image/jpeg,image/webp,image/gif':'image/png,image/jpeg,image/webp'
-  return new Promise<{name:string;uri:string;data:File}|null>((resolve,reject)=>{
+  input.accept=comment?'image/png,image/jpeg,image/webp,image/gif':'image/png,image/jpeg,image/webp,video/mp4,video/webm,video/quicktime'
+  return new Promise<{name:string;uri:string;data:File;kind?:'image'|'video';duration?:number}|null>((resolve,reject)=>{
     input.oncancel=()=>resolve(null)
-    input.onchange=()=>{
+    input.onchange=async()=>{
       const file=input.files?.[0]
       if(!file){resolve(null);return}
-      if(file.size>5*1024*1024){reject(new Error('Choose an image under 5 MB.'));return}
+      const kind=file.type.startsWith('video/')?'video':'image'
+      if(file.size>(kind==='video'?25:5)*1024*1024){reject(new Error(kind==='video'?'Choose a video under 25 MB.':'Choose an image under 5 MB.'));return}
+      let duration:number|undefined
+      if(kind==='video')duration=await new Promise<number>((done,fail)=>{
+        const video=document.createElement('video'),url=URL.createObjectURL(file)
+        video.preload='metadata'
+        video.onloadedmetadata=()=>{const seconds=video.duration;URL.revokeObjectURL(url);Number.isFinite(seconds)?done(seconds):fail(new Error('Couldn’t read this video.'))}
+        video.onerror=()=>{URL.revokeObjectURL(url);fail(new Error('Couldn’t read this video.'))}
+        video.src=url
+      }).catch(error=>{reject(error);return undefined})
+      if(kind==='video'&&duration===undefined)return
       const reader=new FileReader()
       reader.onerror=()=>reject(new Error('Couldn’t open this image.'))
-      reader.onload=()=>resolve({name:file.name,uri:String(reader.result),data:file})
+      reader.onload=()=>resolve({name:file.name,uri:String(reader.result),data:file,kind,duration})
       reader.readAsDataURL(file)
     }
     input.click()
@@ -71,3 +81,4 @@ const notifyDevice=async(title:string,body:string)=>{
 if(import.meta.env.PROD&&!offline&&'serviceWorker' in navigator)window.addEventListener('load',()=>{void navigator.serviceWorker.register('/sw.js',{updateViaCache:'none'})})
 if(phone)document.body.classList.add('phone-preview')
 createRoot(document.getElementById('root')!).render(<App demo={demo} phone={phone} base={offline?'':import.meta.env.VITE_API_URL??'https://dameeland-api.bakareferanmi96.workers.dev'} renderIcon={HugeiconsIcon} initialTheme={initialTheme} font={font} loadToken={loadToken} saveToken={saveToken} openGoogle={openGoogle} pickMedia={()=>pickMedia()} pickCommentMedia={()=>pickMedia(true)} share={share} requestNotifications={requestNotifications} notifyDevice={notifyDevice}/>)
+

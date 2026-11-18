@@ -1,0 +1,2 @@
+ALTER TABLE posts ADD COLUMN edited_at INTEGER;
+ALTER TABLE messages ADD COLUMN edited_at INTEGER;

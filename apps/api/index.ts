@@ -6,7 +6,7 @@ import {bodyLimit} from 'hono/body-limit'
 import {HTTPException} from 'hono/http-exception'
 import {DurableObject} from 'cloudflare:workers'
 import * as webpush from 'web-push'
-import {lessons,commentGifs,validBirthDate,type BirthdayEntry,storyLimit,storyLifetime,type Story,type StoryGroup,commentStickers,capitalizeName,initials,normalizeUsername,usernameHint,validUsername,type AdminAccount,type AdminActivity,type AdminDay,type AdminOverview,type CommentAttachment,type FollowPage,type FollowStats,type Person,type Role} from '@dameeland/core'
+import {lessons,commentGifs,validBirthDate,type BirthdayEntry,storyLimit,storyLifetime,verifiedStoryLimit,verifiedStoryLifetime,storyVideoLimit,verifiedStoryVideoLimit,type Story,type StoryGroup,commentStickers,capitalizeName,initials,normalizeUsername,usernameHint,validUsername,type AdminAccount,type AdminActivity,type AdminDay,type AdminOverview,type CommentAttachment,type FollowPage,type FollowStats,type Person,type Role} from '@dameeland/core'
 
 interface Env {DB:D1Database;MEDIA:R2Bucket;STORIES:KVNamespace;ROOMS:DurableObjectNamespace<ChatRoom>;ALLOWED_ORIGIN:string;VAPID_PUBLIC_KEY?:string;VAPID_PRIVATE_KEY?:string;VAPID_SUBJECT?:string;GOOGLE_CLIENT_ID?:string;GOOGLE_CLIENT_SECRET?:string;GOOGLE_REDIRECT_URI?:string;ADMIN_USER_IDS?:string;RESEND_API_KEY?:string;RECOVERY_FROM?:string}
 type Account={id:string;email:string;name:string;role:Role;salt:string;password_hash:string;username?:string|null;verified?:number;teacher?:number;dob?:string|null}
@@ -33,6 +33,7 @@ const base64Url=(bytes:ArrayBuffer)=>btoa(String.fromCharCode(...new Uint8Array(
 const ownerEmail='bakareferanmi96@gmail.com'
 const isOwner=(account:Pick<PublicAccount,'email'>)=>account.email?.toLowerCase()===ownerEmail
 const isAdmin=(env:Env,account:Pick<PublicAccount,'id'|'email'>)=>isOwner(account)||(env.ADMIN_USER_IDS?.split(',').some(value=>value.trim()===account.id)??false)
+const hasVerifiedBenefits=(account:Pick<PublicAccount,'role'|'verified'|'teacher'>)=>account.role==='tech'||Boolean(account.verified)||Boolean(account.teacher)
 const viewer=(env:Env,account:PublicAccount,url:string)=>({...person(account,url),dob:account.dob??undefined,usernameNextChangeAt:account.username_changed_at?time(account.username_changed_at+3*86400000):undefined,isAdmin:isAdmin(env,account),searchPublic:Boolean(account.search_public)})
 type NotificationKind='message'|'follow'|'comment'|'reaction'|'call'|'birthday'|'announcement'
 type NotificationPreferenceRow={messages:number;follows:number;comments:number;reactions:number;calls:number;birthdays:number;announcements:number;quiet_start:string|null;quiet_end:string|null}
@@ -403,14 +404,14 @@ app.get('/api/media/:id',async c=>{
   return storedMedia(c.env.MEDIA,id,'public, max-age=3600')
 })
 const storyKey=(user:string)=>'stories:'+user
-type StoryRecord={id:string;text:string;media?:string;kind?:'image'|'video';background?:string;created:number}
-const storyExpiry=(story:StoryRecord)=>story.created+storyLifetime
+type StoryRecord={id:string;text:string;media?:string;kind?:'image'|'video';background?:string;created:number;expires?:number}
+const storyExpiry=(story:StoryRecord)=>story.expires??story.created+storyLifetime
 async function readStories(env:Env,user:string){
   const list=await env.STORIES.get<StoryRecord[]>(storyKey(user),'json')
   return Array.isArray(list)?list:[]
 }
 // Stories live only in KV (one key per author) and R2, never in D1. The key expires on its own and
-// every read also filters by timestamp, so a story is never served after 12 hours even if cleanup lags.
+// every read also filters by timestamp, so a story is never served after its account-specific lifetime even if cleanup lags.
 async function writeStories(env:Env,user:string,list:StoryRecord[]){
   if(!list.length)return env.STORIES.delete(storyKey(user))
   const ttl=Math.max(60,Math.ceil((Math.max(...list.map(storyExpiry))-now())/1000))
@@ -755,7 +756,7 @@ app.get('/api/stories',async c=>{
   const authors=groups.filter(group=>group.stories.length).map(group=>group.author.id)
   const likes=authors.length?(await c.env.DB.prepare(`SELECT story_id,COUNT(*) likes,MAX(user_id=?) liked FROM story_likes WHERE author_id IN (${authors.map(()=>'?').join(',')}) GROUP BY story_id`).bind(me.id,...authors).all<{story_id:string;likes:number;liked:number}>()).results:[]
   const byStory=new Map(likes.map(item=>[item.story_id,item]))
-  const viewed=(await c.env.DB.prepare('SELECT story_id FROM story_views WHERE viewer_id=? AND viewed_at>?').bind(me.id,at-storyLifetime).all<{story_id:string}>()).results
+  const viewed=(await c.env.DB.prepare('SELECT story_id FROM story_views WHERE viewer_id=? AND viewed_at>?').bind(me.id,at-verifiedStoryLifetime).all<{story_id:string}>()).results
   const viewedIds=new Set(viewed.map(item=>item.story_id))
   c.header('Cache-Control','no-store')
   return c.json<StoryGroup[]>(groups.filter(group=>group.stories.length)
@@ -782,6 +783,7 @@ app.put('/api/stories/:author/:id/like',async c=>{
 })
 app.post('/api/stories',async c=>{
   const user=c.get('user')
+  const verified=hasVerifiedBenefits(user)
   const id=crypto.randomUUID()
   let text='',contentType:string|null=null,file:File|null=null,kind:'image'|'video'='image',background:string|undefined
   if(c.req.header('Content-Type')?.startsWith('multipart/form-data')){
@@ -792,6 +794,9 @@ app.post('/api/stories',async c=>{
     const upload:unknown=form?.get('image')??form?.get('video')
     if(upload instanceof File){
       const isVideo=upload.type.startsWith('video/')
+      const duration=Number(form?.get('duration')??0)
+      const videoLimit=verified?verifiedStoryVideoLimit:storyVideoLimit
+      if(isVideo&&(!Number.isFinite(duration)||duration<=0||duration>videoLimit+.25))return c.json({error:'Story videos can be up to '+videoLimit+' seconds.'},400)
       contentType=isVideo&&upload.size<=25*1024*1024?upload.type:await imageType(upload)
       if(!contentType||(!isVideo&&upload.size>5*1024*1024))return c.json({error:'Choose an image under 5 MB or a video under 25 MB.'},400)
       kind=isVideo?'video':'image'
@@ -802,8 +807,9 @@ app.post('/api/stories',async c=>{
   const at=now()
   const all=await readStories(c.env,user.id)
   const active=all.filter(story=>storyExpiry(story)>at)
-  if(active.length>=storyLimit)return c.json({error:'You can have up to '+storyLimit+' stories at once. Delete one or wait for it to expire.'},429)
-  const story:StoryRecord={id,text,created:at,media:file?id:undefined,kind:file?kind:undefined,background:kind==='image'&&background?background:undefined}
+  const limit=verified?verifiedStoryLimit:storyLimit
+  if(active.length>=limit)return c.json({error:'You can have up to '+limit+' '+(limit===1?'story':'stories')+' at once. Delete one or wait for it to expire.'},429)
+  const story:StoryRecord={id,text,created:at,expires:at+(verified?verifiedStoryLifetime:storyLifetime),media:file?id:undefined,kind:file?kind:undefined,background:kind==='image'&&background?background:undefined}
   if(file&&contentType)await c.env.MEDIA.put(storyMediaKey(user.id,id),await file.arrayBuffer(),{httpMetadata:{contentType}})
   try{await writeStories(c.env,user.id,[...active,story])}
   catch(error){if(file)await c.env.MEDIA.delete(storyMediaKey(user.id,id));throw error}
@@ -825,22 +831,24 @@ app.post('/api/logout',async c=>{
   await c.env.DB.prepare('DELETE FROM sessions WHERE token_hash=?').bind(c.get('tokenHash')).run()
   return c.json({ok:true})
 })
-type PostRow=PublicAccount&{post_id:string;body:string;created:number;media:string|null;media_kind:'image'|'video'|null;likes:number;liked:number;comments:number;reposts:number;reposted:number;rank_score:number;search_public:number}
+type PostRow=PublicAccount&{post_id:string;body:string;created:number;edited_at:number|null;media:string|null;media_kind:'image'|'video'|null;likes:number;liked:number;comments:number;reposts:number;reposted:number;rank_score:number;search_public:number}
 const postProjection=`
-    SELECT u.id,u.name,u.role,u.username,u.verified,u.teacher,u.dob,u.avatar_media,u.cover_media,u.bio,p.id post_id,p.body,p.created,p.media,p.media_kind,p.search_public,
+    SELECT u.id,u.name,u.role,u.username,u.verified,u.teacher,u.dob,u.avatar_media,u.cover_media,u.bio,p.id post_id,p.body,p.created,p.edited_at,p.media,p.media_kind,p.search_public,
     (SELECT COUNT(*) FROM reactions r WHERE r.post_id=p.id AND kind='like') likes,
     EXISTS(SELECT 1 FROM reactions r WHERE r.post_id=p.id AND r.user_id=? AND kind='like') liked,
     (SELECT COUNT(*) FROM comments x WHERE x.post_id=p.id) comments,
     (SELECT COUNT(*) FROM reactions r WHERE r.post_id=p.id AND kind='repost') reposts,
     EXISTS(SELECT 1 FROM reactions r WHERE r.post_id=p.id AND r.user_id=? AND kind='repost') reposted,
-    (
+    ((
       (SELECT COUNT(*) FROM reactions r WHERE r.post_id=p.id AND kind='like') * 3 +
       (SELECT COUNT(*) FROM comments x WHERE x.post_id=p.id) * 5 +
-      (SELECT COUNT(*) FROM reactions r WHERE r.post_id=p.id AND kind='repost') * 7
-    ) / (1 + ((strftime('%s','now') * 1000 - p.created) / 3600000.0) / 12.0) rank_score
+      (SELECT COUNT(*) FROM reactions r WHERE r.post_id=p.id AND kind='repost') * 7 +
+      CASE WHEN u.role='tech' OR u.verified=1 OR u.teacher=1 THEN 4 ELSE 0 END
+    ) * CASE WHEN u.role='tech' OR u.verified=1 OR u.teacher=1 THEN 1.2 ELSE 1 END)
+      / (1 + ((strftime('%s','now') * 1000 - p.created) / 3600000.0) / 12.0) rank_score
     FROM posts p JOIN users u ON u.id=p.author
 `
-const postView=(r:PostRow,url:string)=>({id:r.post_id,author:person(r,url),body:r.body,time:time(r.created),likes:r.likes,liked:Boolean(r.liked),comments:r.comments,reposts:r.reposts,reposted:Boolean(r.reposted),searchPublic:Boolean(r.search_public),kind:r.media_kind??undefined,media:r.media?new URL('/api/media/'+r.media,url).href:undefined})
+const postView=(r:PostRow,url:string)=>({id:r.post_id,author:person(r,url),body:r.body,time:time(r.created),editedAt:r.edited_at?time(r.edited_at):undefined,likes:r.likes,liked:Boolean(r.liked),comments:r.comments,reposts:r.reposts,reposted:Boolean(r.reposted),searchPublic:Boolean(r.search_public),kind:r.media_kind??undefined,media:r.media?new URL('/api/media/'+r.media,url).href:undefined})
 app.get('/api/feed',async c=>{
   const id=c.get('user').id
   const following=c.req.query('following')==='1'
@@ -860,6 +868,7 @@ app.get('/api/posts/:id',async c=>{
 })
 app.post('/api/posts',async c=>{
   const db=c.env.DB
+  const user=c.get('user')
   const id=crypto.randomUUID()
   let body=''
   let media:string|null=null
@@ -875,6 +884,9 @@ app.post('/api/posts',async c=>{
     const file:unknown=form?.get('image')??form?.get('video')
     if(file instanceof File){
       const isVideo=file.type.startsWith('video/')
+      const duration=Number(form?.get('duration')??0)
+      const videoLimit=hasVerifiedBenefits(user)?verifiedStoryVideoLimit:storyVideoLimit
+      if(isVideo&&(!Number.isFinite(duration)||duration<=0||duration>videoLimit+.25))return c.json({error:'Videos can be up to '+videoLimit+' seconds.'},400)
       const contentType=isVideo&&file.size<=25*1024*1024?file.type:await imageType(file)
       if(!contentType||(!isVideo&&file.size>5*1024*1024))return c.json({error:'Choose a valid image or video.'},400)
       mediaKind=isVideo?'video':'image'
@@ -888,9 +900,30 @@ app.post('/api/posts',async c=>{
     body=clean(input?.body,1200)
   }
   if(!body&&!media) return c.json({error:'Write a post or add an image.'},400)
-  try{await db.prepare('INSERT INTO posts (id,author,body,created,media,media_kind,search_public) VALUES (?,?,?,?,?,?,?)').bind(id,c.get('user').id,body,now(),media,mediaKind,Number(searchPublic)).run()}
+  try{await db.prepare('INSERT INTO posts (id,author,body,created,media,media_kind,search_public) VALUES (?,?,?,?,?,?,?)').bind(id,user.id,body,now(),media,mediaKind,Number(searchPublic)).run()}
   catch(error){if(media) await c.env.MEDIA.delete(media);throw error}
   return c.json({id},201)
+})
+app.put('/api/posts/:id',async c=>{
+  const user=c.get('user'),id=c.req.param('id'),db=c.env.DB
+  if(!hasVerifiedBenefits(user))return c.json({error:'Post editing is available to verified accounts.'},403)
+  const post=await db.prepare('SELECT author,created,media FROM posts WHERE id=?').bind(id).first<{author:string;created:number;media:string|null}>()
+  if(!post||post.author!==user.id)return c.json({error:'Post unavailable.'},404)
+  if(now()-post.created>3600000)return c.json({error:'Posts can be edited for one hour after publishing.'},409)
+  const body=clean((await readBody(c.req.raw))?.body,1200)
+  if(!body&&!post.media)return c.json({error:'Write something for this post.'},400)
+  const editedAt=now()
+  await db.prepare('UPDATE posts SET body=?,edited_at=? WHERE id=?').bind(body,editedAt,id).run()
+  return c.json({body,editedAt:time(editedAt)})
+})
+app.delete('/api/posts/:id',async c=>{
+  const user=c.get('user'),id=c.req.param('id'),db=c.env.DB
+  if(!hasVerifiedBenefits(user))return c.json({error:'Post deletion is available to verified accounts.'},403)
+  const post=await db.prepare('SELECT author,media FROM posts WHERE id=?').bind(id).first<{author:string;media:string|null}>()
+  if(!post||post.author!==user.id)return c.json({error:'Post unavailable.'},404)
+  await db.prepare('DELETE FROM posts WHERE id=?').bind(id).run()
+  if(post.media)c.executionCtx.waitUntil(c.env.MEDIA.delete(post.media).catch(()=>{}))
+  return c.json({ok:true})
 })
 app.put('/api/posts/:id/search-visibility',async c=>{
   const searchPublic=(await readBody(c.req.raw))?.searchPublic
@@ -918,8 +951,8 @@ app.put('/api/posts/:id/:kind',async c=>{
   }
   return c.json({ok:true})
 })
-type NoteRow=PublicAccount&{note_id:string;body:string}
-const note=(r:NoteRow,url:string)=>({id:r.note_id,author:person(r,url),body:r.body})
+type NoteRow=PublicAccount&{note_id:string;body:string;edited_at?:number|null}
+const note=(r:NoteRow,url:string)=>({id:r.note_id,author:person(r,url),body:r.body,editedAt:r.edited_at?time(r.edited_at):undefined})
 type CommentRow=NoteRow&{media:string|null;gif:keyof typeof commentGifs|null;sticker:keyof typeof commentStickers|null;parent_id:string|null;reply_to:string|null;likes:number;liked:number}
 const commentView=(r:CommentRow,url:string)=>({...note(r,url),attachment:commentAttachment(r,url),parentId:r.parent_id??undefined,replyTo:r.reply_to??undefined,likes:r.likes,liked:Boolean(r.liked)})
 function commentAttachment(row:Pick<CommentRow,'media'|'gif'|'sticker'>,url:string):CommentAttachment|undefined{
@@ -1090,7 +1123,7 @@ app.get('/api/rooms/:id/messages',async c=>{
   const room=c.req.param('id')
   if(!await member(c.env.DB,room,c.get('user').id)) return c.json({error:'Conversation unavailable.'},404)
   const [messages,calls]=await Promise.all([
-    c.env.DB.prepare('SELECT u.id,u.name,u.role,u.username,u.verified,u.teacher,u.dob,u.avatar_media,u.cover_media,u.bio,m.id note_id,m.body,m.read_at,m.created FROM messages m JOIN users u ON u.id=m.author WHERE room=? ORDER BY m.created DESC LIMIT 100').bind(room).all<NoteRow&{read_at:number|null;created:number}>(),
+    c.env.DB.prepare('SELECT u.id,u.name,u.role,u.username,u.verified,u.teacher,u.dob,u.avatar_media,u.cover_media,u.bio,m.id note_id,m.body,m.read_at,m.created,m.edited_at FROM messages m JOIN users u ON u.id=m.author WHERE room=? ORDER BY m.created DESC LIMIT 100').bind(room).all<NoteRow&{read_at:number|null;created:number}>(),
     c.env.DB.prepare(`SELECT x.id,x.caller,x.callee,x.video,x.state,x.created,x.expires,x.connected_at,x.ended_at,
       u.name,u.role,u.username,u.verified,u.teacher,u.dob,u.avatar_media,u.cover_media,u.bio
       FROM calls x JOIN users u ON u.id=x.caller WHERE x.room=? AND (x.state IN ('ended','declined') OR (x.state IN ('offered','ringing') AND x.expires<?))
@@ -1124,12 +1157,37 @@ app.post('/api/rooms/:id/messages',async c=>{
   if(!await member(c.env.DB,room,author.id)) return c.json({error:'Conversation unavailable.'},404)
   const body=clean((await readBody(c.req.raw))?.body,800)
   if(!body) return c.json({error:'Enter a message.'},400)
-  const message={id:crypto.randomUUID(),author:person(author,c.req.url),body}
-  await c.env.DB.prepare('INSERT INTO messages (id,room,author,body,created) VALUES (?,?,?,?,?)').bind(message.id,room,author.id,body,now()).run()
+  const created=now()
+  const message={id:crypto.randomUUID(),author:person(author,c.req.url),body,createdAt:time(created)}
+  await c.env.DB.prepare('INSERT INTO messages (id,room,author,body,created) VALUES (?,?,?,?,?)').bind(message.id,room,author.id,body,created).run()
   const other=await c.env.DB.prepare('SELECT CASE WHEN first_user=? THEN second_user ELSE first_user END target FROM rooms WHERE id=?').bind(author.id,room).first<{target:string}>()
   if(other)await createNotification(c.env,c.executionCtx,c.env.DB,other.target,author.id,'message',room,'sent you a message','room:'+room)
   c.executionCtx.waitUntil(c.env.ROOMS.getByName(room).fetch('https://room.internal/notify',{method:'POST',body:JSON.stringify(message)}))
   return c.json(message,201)
+})
+app.put('/api/rooms/:room/messages/:id',async c=>{
+  const {room,id}=c.req.param(),user=c.get('user'),db=c.env.DB
+  if(!await member(db,room,user.id))return c.json({error:'Conversation unavailable.'},404)
+  if(!hasVerifiedBenefits(user))return c.json({error:'Message editing is available to verified accounts.'},403)
+  const message=await db.prepare('SELECT author,created FROM messages WHERE id=? AND room=?').bind(id,room).first<{author:string;created:number}>()
+  if(!message||message.author!==user.id)return c.json({error:'Message unavailable.'},404)
+  if(now()-message.created>3600000)return c.json({error:'Messages can be edited for one hour after sending.'},409)
+  const body=clean((await readBody(c.req.raw))?.body,800)
+  if(!body)return c.json({error:'Enter a message.'},400)
+  const editedAt=now()
+  await db.prepare('UPDATE messages SET body=?,edited_at=? WHERE id=?').bind(body,editedAt,id).run()
+  const updated={type:'message-updated',id,body,editedAt:time(editedAt)}
+  c.executionCtx.waitUntil(c.env.ROOMS.getByName(room).fetch('https://room.internal/notify',{method:'POST',body:JSON.stringify(updated)}))
+  return c.json(updated)
+})
+app.delete('/api/rooms/:room/messages/:id',async c=>{
+  const {room,id}=c.req.param(),user=c.get('user'),db=c.env.DB
+  if(!await member(db,room,user.id))return c.json({error:'Conversation unavailable.'},404)
+  if(!hasVerifiedBenefits(user))return c.json({error:'Message deletion is available to verified accounts.'},403)
+  const result=await db.prepare('DELETE FROM messages WHERE id=? AND room=? AND author=?').bind(id,room,user.id).run()
+  if(!result.meta.changes)return c.json({error:'Message unavailable.'},404)
+  c.executionCtx.waitUntil(c.env.ROOMS.getByName(room).fetch('https://room.internal/notify',{method:'POST',body:JSON.stringify({type:'message-deleted',id})}))
+  return c.json({ok:true})
 })
 type CallRow={id:string;room:string;caller:string;callee:string;video:number;offer:string;answer:string|null;state:'offered'|'ringing'|'answered'|'ended'|'declined';created:number;expires:number;connected_at:number|null;ended_at:number|null}
 const callState=(row:CallRow)=>row.expires<now()&&row.state!=='answered'?'ended':row.state
@@ -1238,3 +1296,4 @@ export class ChatRoom extends DurableObject<Env>{
 
 }
 export default app
+

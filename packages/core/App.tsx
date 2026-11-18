@@ -4,7 +4,7 @@ import {browserCallMedia,RoomCall,useRoomCall,type CallMedia} from './calls'
 import {readCallSignal,type CallSignal} from './callSignal'
 import React,{lazy,Suspense,useCallback,useEffect,useLayoutEffect,useRef,useState} from 'react'
 import {AccessibilityInfo,Animated,AppState,BackHandler,Easing,Image,KeyboardAvoidingView,Modal,PanResponder,Platform,Pressable,RefreshControl,ScrollView,Switch,TextInput,View,useWindowDimensions,type ViewStyle} from 'react-native'
-import {api,birthdayToday,validBirthDate,storyLifetime,capitalizeName,normalizeUsername,usernameHint,validUsername,initialChats,initialComments,initialPosts,initials,lime,me,people,questions,slides,themes,type FollowListKind,type FollowPage,type FollowStats,type Note,type Person,type Post,type BirthdayEntry,type Role,type Story,type StoryGroup,type Theme} from './index'
+import {api,birthdayToday,validBirthDate,storyLifetime,verifiedStoryLifetime,storyVideoLimit,verifiedStoryVideoLimit,verifiedStoryLimit,capitalizeName,normalizeUsername,usernameHint,validUsername,initialChats,initialComments,initialPosts,initials,lime,me,people,questions,slides,themes,type FollowListKind,type FollowPage,type FollowStats,type Note,type Person,type Post,type BirthdayEntry,type Role,type Story,type StoryGroup,type Theme} from './index'
 import {Avatar,Button,Card,Copy,Design,displayHandle,Field,Icon,IconButton,IconTile,Logo,PersonName,ScreenLinks,Segmented,VerifiedBadge,row,spread,stack,useDesign,type Glyph,type IconRendererProps} from './ui'
 import type {ExtraPage} from './FeatureScreens'
 import {LoadingScreen} from './LoadingScreen'
@@ -70,7 +70,7 @@ type Props={
   pickMedia?:()=>Promise<Media|null>; pickCommentMedia?:()=>Promise<Media|null>; renderGif?:GifRenderer; share?:(url:string)=>Promise<void>;
   requestNotifications?:()=>Promise<boolean>; getNotificationDevice?:()=>Promise<{platform:'android'|'ios';token:string}|null>; notifyDevice?:(title:string,body:string)=>Promise<void>;
 }
-type Overlay={kind:'connections';list:FollowListKind;person:Person}|{kind:'comments'|'share'|'post';post:Post;targetId?:string}|{kind:'story';person:Person}|{kind:'photo';person:Person;photo:'avatar'|'cover'}|{kind:'create'|'wish'|'newStory'|'editProfile'|'editUsername'}|{kind:'call';video:boolean;person:Person;ringing?:boolean;incoming?:boolean}
+type Overlay={kind:'connections';list:FollowListKind;person:Person}|{kind:'comments'|'share'|'post'|'editPost';post:Post;targetId?:string}|{kind:'editMessage';message:Note}|{kind:'story';person:Person}|{kind:'photo';person:Person;photo:'avatar'|'cover'}|{kind:'create'|'wish'|'newStory'|'editProfile'|'editUsername'}|{kind:'call';video:boolean;person:Person;ringing?:boolean;incoming?:boolean}
 type PageEntry={page:Page;profile:Person;room:Room|null;overlays:Overlay[];scrollY:number;lessonId:string}
 const tabs:[Page,Glyph][]=[['Home','home'],['Learn','book'],['Explore','search'],['Play','game']]
 const localRooms=people.filter(p=>p.id in initialChats).map(person=>({id:person.id,person}))
@@ -91,6 +91,7 @@ const shortTime=(value:string)=>{
   const minutes=Math.max(0,Math.floor((Date.now()-Date.parse(value))/60000))
   return minutes<1?'Just now':minutes<60?minutes+'m':minutes<1440?Math.floor(minutes/60)+'h':Math.floor(minutes/1440)+'d'
 }
+const withinEditWindow=(value:string|undefined)=>!!value&&Number.isFinite(Date.parse(value))&&Date.now()-Date.parse(value)<=3600000
 const callLength=(seconds:number)=>seconds<60?seconds+'s':Math.floor(seconds/60)+'m '+String(seconds%60).padStart(2,'0')+'s'
 function Motion({children,reduced,style,distance=10,axis='y'}:{children:React.ReactNode;reduced:boolean;style?:ViewStyle;distance?:number;axis?:'x'|'y'}){
   const animation=useRef(new Animated.Value(reduced?1:0)).current
@@ -253,14 +254,14 @@ function UploadedMedia({post}:{post:Post}){
   const {theme}=useDesign()
   if(!post.media)return null
   if(post.kind==='video'&&Platform.OS==='web')return React.createElement('video',{src:post.media,controls:true,playsInline:true,preload:'metadata',style:{width:'100%',maxHeight:360,borderRadius:14,backgroundColor:theme.chip}})
-  if(post.kind==='video')return <View style={{height:210,borderRadius:14,backgroundColor:'#120D1F',alignItems:'center',justifyContent:'center',gap:10}}><IconTile name="play" size={48} color={lime} background="#FFFFFF19"/><Copy color="#fff" weight={800}>VIDEO · 0:10 MAX</Copy></View>
+  if(post.kind==='video')return <View style={{height:210,borderRadius:14,backgroundColor:'#120D1F',alignItems:'center',justifyContent:'center',gap:10}}><IconTile name="play" size={48} color={lime} background="#FFFFFF19"/><Copy color="#fff" weight={800}>VIDEO</Copy></View>
   return <LazyImage uri={post.media} alt="Post attachment" style={{width:'100%',height:195,borderRadius:14,backgroundColor:theme.chip,objectFit:'cover'}}/>
 }
 
 function PostCard({post,onReact,onOverlay,onProfile,detail=false}:{post:Post;detail?:boolean;onReact:(p:Post,k:'like'|'repost')=>void;onOverlay:(o:Overlay)=>void;onProfile:(p:Person)=>void}){
   const {theme}=useDesign()
   return <Card style={{padding:14,gap:9}}>
-    <Pressable accessibilityRole="button" accessibilityLabel={'Open '+displayHandle(post.author)+' profile'} onPress={()=>onProfile(post.author)} style={row}><Avatar person={post.author} size={40}/><View style={{flex:1}}><PersonName person={post.author}/><Copy color={theme.muted} size={12}>{shortTime(post.time)}</Copy></View></Pressable>
+    <Pressable accessibilityRole="button" accessibilityLabel={'Open '+displayHandle(post.author)+' profile'} onPress={()=>onProfile(post.author)} style={row}><Avatar person={post.author} size={40}/><View style={{flex:1}}><PersonName person={post.author}/><Copy color={theme.muted} size={12}>{shortTime(post.time)}{post.editedAt?' · Edited':''}</Copy></View></Pressable>
     {!!post.body&&(detail?<Copy size={15}>{post.body}</Copy>:<Pressable accessibilityRole="button" accessibilityLabel="Open post details" onPress={()=>onOverlay({kind:'post',post})} style={{minHeight:32,justifyContent:'center'}}><Copy size={15}>{post.body}</Copy></Pressable>)}
     {post.media?<UploadedMedia post={post}/>:post.kind&&<PreviewMedia kind={post.kind}/>} 
     <View style={{...row,justifyContent:'space-between',gap:1,borderTopWidth:1,borderColor:theme.border,paddingTop:3}}><IconButton name={post.liked?'heartOn':'heart'} label={post.liked?'Unlike post':'Like post'} active={post.liked} count={post.likes} onPress={()=>onReact(post,'like')}/><IconButton name="cm" label="Comments" count={post.comments} onPress={()=>onOverlay({kind:'comments',post})}/><IconButton name="rp" label={post.reposted?'Undo repost':'Repost'} active={post.reposted} count={post.reposts} onPress={()=>onReact(post,'repost')}/><IconButton name="sh" label="Share post" onPress={()=>onOverlay({kind:'share',post})}/></View>
@@ -351,6 +352,8 @@ export default function App(props:Props){
   const [step,setStep]=useState(0)
   const [recovering,setRecovering]=useState(false)
   const [user,setUser]=useState<Viewer>(me),[token,setToken]=useState('')
+  const verifiedBenefits=Boolean(user.verified||user.teacher)
+  const videoLimit=verifiedBenefits?verifiedStoryVideoLimit:storyVideoLimit
   const [page,setPage]=useState<Page>('Home')
   const pageHistory=useRef<PageEntry[]>([])
   const googleRequest=useRef<AbortController|null>(null)
@@ -669,6 +672,14 @@ export default function App(props:Props){
       if(data?.type==='read'&&Array.isArray(data.ids)&&typeof data.readAt==='string'){
         const ids=new Set<string>(data.ids)
         setChats(previous=>({...previous,[roomId]:(previous[roomId]??[]).map(item=>ids.has(item.id)?{...item,readAt:data.readAt}:item)}))
+        return
+      }
+      if(data?.type==='message-updated'&&typeof data.id==='string'&&typeof data.body==='string'){
+        setChats(previous=>({...previous,[roomId]:(previous[roomId]??[]).map(item=>item.id===data.id?{...item,body:data.body,editedAt:data.editedAt}:item)}))
+        return
+      }
+      if(data?.type==='message-deleted'&&typeof data.id==='string'){
+        setChats(previous=>({...previous,[roomId]:(previous[roomId]??[]).filter(item=>item.id!==data.id)}))
         return
       }
       const item=data as Note
@@ -1048,6 +1059,7 @@ export default function App(props:Props){
         const form=new FormData()
         form.append('body',draft.trim())
         if(postSearchPublic)form.append('searchPublic','true')
+        if(attachment?.kind==='video'&&attachment.duration)form.append('duration',String(attachment.duration))
         if(attachment?.data instanceof Blob)form.append(attachment.kind==='video'?'video':'image',attachment.data,attachment.name)
         else if(attachment)form.append(attachment.kind==='video'?'video':'image',attachment.data as unknown as Blob)
         await call('/posts',attachment?{method:'POST',body:form}:json({body:draft,searchPublic:postSearchPublic}))
@@ -1068,6 +1080,43 @@ export default function App(props:Props){
       notify(saved.searchPublic?'Post is public on the web':'Post search visibility turned off')
     }catch(reason){if(session===demoSession.current)fail(reason)}
     finally{setBusy(false)}
+  }
+  async function editPost(post:Post){
+    const body=comment.trim()
+    if(busy||!body)return
+    setBusy(true)
+    try{
+      const saved=demo?{body,editedAt:new Date().toISOString()}:await call<{body:string;editedAt:string}>('/posts/'+encodeURIComponent(post.id),json({body},'PUT'))
+      setPosts(previous=>previous.map(item=>item.id===post.id?{...item,...saved}:item))
+      modalClose();setComment('');notify('Post updated')
+    }catch(reason){fail(reason)}finally{setBusy(false)}
+  }
+  async function deletePost(post:Post){
+    if(busy)return
+    setBusy(true)
+    try{
+      if(!demo)await call('/posts/'+encodeURIComponent(post.id),{method:'DELETE'})
+      setPosts(previous=>previous.filter(item=>item.id!==post.id))
+      dismissOverlays();notify('Post deleted')
+    }catch(reason){fail(reason)}finally{setBusy(false)}
+  }
+  async function editMessage(item:Note){
+    if(!room||busy||!comment.trim())return
+    setBusy(true)
+    try{
+      const saved=demo?{body:comment.trim(),editedAt:new Date().toISOString()}:await call<{body:string;editedAt:string}>('/rooms/'+encodeURIComponent(room.id)+'/messages/'+encodeURIComponent(item.id),json({body:comment.trim()},'PUT'))
+      setChats(previous=>({...previous,[room.id]:(previous[room.id]??[]).map(entry=>entry.id===item.id?{...entry,...saved}:entry)}))
+      modalClose();setComment('');notify('Message updated')
+    }catch(reason){fail(reason)}finally{setBusy(false)}
+  }
+  async function deleteMessage(item:Note){
+    if(!room||busy)return
+    setBusy(true)
+    try{
+      if(!demo)await call('/rooms/'+encodeURIComponent(room.id)+'/messages/'+encodeURIComponent(item.id),{method:'DELETE'})
+      setChats(previous=>({...previous,[room.id]:(previous[room.id]??[]).filter(entry=>entry.id!==item.id)}))
+      notify('Message deleted')
+    }catch(reason){fail(reason)}finally{setBusy(false)}
   }
   async function wishBirthday(person:Person,message?:string){
     if(busy)return
@@ -1098,12 +1147,13 @@ export default function App(props:Props){
       form.append('text',comment.trim())
       if(storyMode==='Text')form.append('background',storyBackground)
       if((storyMode==='Photo'||storyMode==='Video')&&storyMedia){
+        if(storyMode==='Video'&&storyMedia.duration)form.append('duration',String(storyMedia.duration))
         if(storyMedia.data instanceof Blob)form.append(storyMode==='Video'?'video':'image',storyMedia.data,storyMedia.name)
         else form.append(storyMode==='Video'?'video':'image',storyMedia.data as unknown as Blob)
       }
       await call('/stories',{method:'POST',body:form})
       setStoryRefresh(n=>n+1)
-      modalClose();notify('Story shared. It disappears after 12 hours.')
+      modalClose();notify('Story shared. It disappears after '+(verifiedBenefits?18:12)+' hours.')
     }catch(reason){fail(reason)}finally{setBusy(false)}
   }
   async function deleteStory(id:string){
@@ -1387,8 +1437,10 @@ export default function App(props:Props){
   const birthdayDayLabel=(days:number|undefined)=>days===0?'Today':days===1?'Tomorrow':'In '+days+' days'
   const wishedAlready=(id:string)=>wishedBirthdays.has(id)||birthdays.some(entry=>entry.person.id===id&&entry.wished)
   const hasOwnStory=demo?!!demoOwn:activeStories.some(group=>group.author.id===user.id)
+  const ownStoryCount=demo?(demoOwn?1:0):activeStories.find(group=>group.author.id===user.id)?.stories.length??0
+  const canAddStory=ownStoryCount<(verifiedBenefits?verifiedStoryLimit:1)
   const home=<>
-    {(demo||token)&&<View style={{paddingHorizontal:2}}><StoryRow onStory={person=>selectOverlay({kind:'story',person})} onCreate={()=>selectOverlay(hasOwnStory?{kind:'story',person:user}:{kind:'newStory'})} onAdd={()=>selectOverlay({kind:'newStory'})} seen={seenAuthors} own={hasOwnStory?user:null} others={demo?demoStories:activeStories.map(group=>group.author).filter(author=>author.id!==user.id)}/></View>}
+    {(demo||token)&&<View style={{paddingHorizontal:2}}><StoryRow onStory={person=>selectOverlay({kind:'story',person})} onCreate={()=>selectOverlay(hasOwnStory?{kind:'story',person:user}:{kind:'newStory'})} onAdd={canAddStory?()=>selectOverlay({kind:'newStory'}):undefined} seen={seenAuthors} own={hasOwnStory?user:null} others={demo?demoStories:activeStories.map(group=>group.author).filter(author=>author.id!==user.id)}/></View>}
     {(ownBirthday||birthdayPeople.length>0)&&<Card>
       {ownBirthday&&<View style={{gap:4}}><Copy size={19} weight={800}>Happy birthday, {user.name.split(' ')[0]}! 🎂</Copy><Copy color={theme.muted}>Have a great day. Friends can send you a wish today.</Copy></View>}
       {birthdayPeople.length>0&&<>{section('Birthdays today')}{birthdayPeople.map(person=><View key={person.id} style={{...row,flexWrap:'wrap'}}>
@@ -1435,7 +1487,16 @@ export default function App(props:Props){
       <Copy center weight={800} color={item.call.outcome==='missed'?'#D13438':theme.text}>{item.body}</Copy>
       <Copy center color={theme.muted} size={12}>{item.call.outcome==='completed'?callLength(item.call.durationSeconds)+' · ':''}{item.createdAt?shortTime(item.createdAt):''}</Copy>
       {callMedia&&<Pressable accessibilityRole="button" accessibilityLabel={'Call '+displayHandle(room.person)+' again'} onPress={()=>{if(!roomCall.call)roomCall.start(item.call!.video)}} style={{minHeight:38,paddingHorizontal:18,justifyContent:'center',borderRadius:20,backgroundColor:theme.chip}}><Copy color={theme.purple} weight={800} size={12}>Call again</Copy></Pressable>}
-    </View>:(()=>{const own=item.author.id===user.id;return <View key={item.id} style={{alignSelf:own?'flex-end':'flex-start',backgroundColor:own?theme.purple:theme.card,maxWidth:'80%',borderRadius:18,borderBottomLeftRadius:own?18:5,borderBottomRightRadius:own?5:18,borderWidth:1,borderColor:own?theme.purple:theme.border,padding:12}}><Copy color={own?'#fff':theme.text}>{item.body}</Copy>{own&&lastOwnMessageId===item.id&&<Copy size={11} color="#FFFFFFCC">{item.readAt?'Seen · '+shortTime(item.readAt):'Sent'}</Copy>}</View>})())}
+    </View>:(()=>{
+      const own=item.author.id===user.id
+      const canEdit=own&&verifiedBenefits&&(demo||withinEditWindow(item.createdAt))
+      return <View key={item.id} style={{alignSelf:own?'flex-end':'flex-start',backgroundColor:own?theme.purple:theme.card,maxWidth:'84%',borderRadius:18,borderBottomLeftRadius:own?18:5,borderBottomRightRadius:own?5:18,borderWidth:1,borderColor:own?theme.purple:theme.border,padding:12,gap:5}}>
+        <Copy color={own?'#fff':theme.text}>{item.body}</Copy>
+        {!!item.editedAt&&<Copy size={10} color={own?'#FFFFFFCC':theme.muted}>Edited</Copy>}
+        {own&&lastOwnMessageId===item.id&&<Copy size={11} color="#FFFFFFCC">{item.readAt?'Seen · '+shortTime(item.readAt):'Sent'}</Copy>}
+        {own&&verifiedBenefits&&<View style={{...row,gap:4,flexWrap:'wrap'}}>{canEdit&&<Button label="Edit" variant="plain" onPress={()=>{setComment(item.body);selectOverlay({kind:'editMessage',message:item})}}/>}<Button label="Delete" variant="plain" onPress={()=>void deleteMessage(item)}/></View>}
+      </View>
+    })())}
     {!(chats[room.id]?.length)&&!feedError&&<Empty title="Say hello" detail="Messages are visible to both people in this conversation."/>}
   </>
   const ownProfile=profile.id===user.id
@@ -1523,7 +1584,12 @@ export default function App(props:Props){
     sheet=<ConnectionList key={overlay.person.id+':'+overlay.list} base={base} token={token} profile={overlay.person} list={overlay.list} samples={demo?demoConnections(overlay.person.id,overlay.list):undefined} onProfile={showProfile}/>
   }else if(overlay?.kind==='post'){
     const post=posts.find(item=>item.id===overlay.post.id)??overlay.post
-    sheet=<><PostCard detail post={post} onReact={react} onOverlay={selectOverlay} onProfile={showProfile}/><Button label="Read comments" variant="secondary" onPress={()=>selectOverlay({kind:'comments',post})}/></>
+    const ownVerified=verifiedBenefits&&post.author.id===user.id
+    sheet=<><PostCard detail post={post} onReact={react} onOverlay={selectOverlay} onProfile={showProfile}/><Button label="Read comments" variant="secondary" onPress={()=>selectOverlay({kind:'comments',post})}/>{ownVerified&&<View style={{...row,flexWrap:'wrap'}}>{(demo||withinEditWindow(post.time))&&<Button label="Edit post" variant="secondary" onPress={()=>{setComment(post.body);selectOverlay({kind:'editPost',post})}}/>}<Button label="Delete post" variant="danger" onPress={()=>void deletePost(post)}/></View>}</>
+  }else if(overlay?.kind==='editPost'){
+    sheet=<><Field label="Edit post" value={comment} onChangeText={setComment} multiline maxLength={1200} style={{minHeight:106,textAlignVertical:'top'}}/><Copy size={12} color={theme.muted}>Verified posts can be edited for one hour after publishing.</Copy><Button label={busy?'Saving…':'Save changes'} disabled={busy||!comment.trim()} onPress={()=>void editPost(overlay.post)}/></>
+  }else if(overlay?.kind==='editMessage'){
+    sheet=<><Field label="Edit message" value={comment} onChangeText={setComment} multiline maxLength={800}/><Copy size={12} color={theme.muted}>Verified messages can be edited for one hour after sending.</Copy><Button label={busy?'Saving…':'Save changes'} disabled={busy||!comment.trim()} onPress={()=>void editMessage(overlay.message)}/></>
   }else if(overlay?.kind==='comments'){
     const list=notes[overlay.post.id]??(demo&&overlay.post.id==='quadratics'?initialComments:[])
     sheet=<Comments key={overlay.post.id} list={list} body={comment} onBody={value=>{commentDraft.current++;setComment(value)}} busy={busy} renderGif={props.renderGif}
@@ -1551,7 +1617,7 @@ export default function App(props:Props){
   }else if(overlay?.kind==='create'){
     sheet=<><View style={row}><Avatar person={user}/><PersonName person={user}/></View><Field label="What’s happening?" value={draft} onChangeText={setDraft} multiline maxLength={1200} style={{minHeight:106,textAlignVertical:'top'}}/>
       {attachment&&<View style={spread}><Copy size={12}>{attachment.name}</Copy><IconButton name="close" label="Remove image" onPress={()=>setAttachment(null)}/></View>}
-      {props.pickMedia&&<Button label="Add image or video" leading="image" variant="secondary" onPress={()=>{void props.pickMedia?.().then(value=>{if(value)setAttachment(value)}).catch(fail)}}/>}
+      {props.pickMedia&&<Button label="Add image or video" leading="image" variant="secondary" onPress={()=>{void props.pickMedia?.().then(value=>{if(!value)return;if(value.kind==='video'&&(!value.duration||value.duration>videoLimit+.25)){fail(new Error('Videos can be up to '+videoLimit+' seconds.'));return}setAttachment(value)}).catch(fail)}}/>}
       {!demo&&<SearchVisibility label="Show post in web search" detail="Search engines can show this post and its media to anyone." value={postSearchPublic} onChange={setPostSearchPublic} disabled={busy}/>}
       <Button label={busy?'Posting…':'Publish post'} onPress={()=>void createPost()} disabled={busy||(!draft.trim()&&!attachment)}/></>
   }else if(overlay?.kind==='newStory'){
@@ -1560,10 +1626,10 @@ export default function App(props:Props){
       <Segmented options={['Text','Photo','Video']} selected={storyMode} onSelect={setStoryMode}/>
       {storyMode==='Text'&&<Motion key={storyBackground} reduced={reduced} distance={4} style={{gap:8}}><Copy size={12} weight={800}>Background colour</Copy><View style={{...row,gap:10,flexWrap:'wrap'}}>{['#4F25D6','#120D1F','#E9E0FF','#C8F53F','#F0447A','#FF6B6B','#FF9F43','#00B8A9','#5B8CFF','#B05CFF'].map(color=><Pressable key={color} accessibilityRole="button" accessibilityLabel={'Use '+color+' background'} onPress={()=>setStoryBackground(color)} style={{width:38,height:38,borderRadius:19,backgroundColor:color,borderWidth:storyBackground===color?3:1,borderColor:storyBackground===color?'#fff':theme.border}}/>)}</View></Motion>}
       {storyMode==='Photo'&&<>{storyImage&&<Image source={{uri:storyImage}} style={{width:'100%',height:140,borderRadius:12}}/>}{props.pickMedia&&<Button label={storyImage?'Replace photo':'Choose photo'} leading="image" variant="secondary" onPress={()=>{void props.pickMedia?.().then(value=>{if(value&&value.kind!=='video'){setStoryImage(value.uri);setStoryMedia(value)}}).catch(fail)}}/>}</>}
-      {storyMode==='Video'&&<>{storyMedia?.kind==='video'&&<Card><IconTile name="vid"/><Copy weight={800}>Video ready · 10 seconds maximum</Copy></Card>}{props.pickMedia&&<Button label={storyMedia?.kind==='video'?'Replace video':'Choose video'} leading="vid" variant="secondary" onPress={()=>{void props.pickMedia?.().then(value=>{if(value&&value.kind==='video'){setStoryImage(undefined);setStoryMedia(value)}}).catch(fail)}}/>}</>}
+      {storyMode==='Video'&&<>{storyMedia?.kind==='video'&&<Card><IconTile name="vid"/><Copy weight={800}>Video ready · {videoLimit} seconds maximum</Copy></Card>}{props.pickMedia&&<Button label={storyMedia?.kind==='video'?'Replace video':'Choose video'} leading="vid" variant="secondary" onPress={()=>{void props.pickMedia?.().then(value=>{if(!value||value.kind!=='video')return;if(!value.duration||value.duration>videoLimit+.25){fail(new Error('Story videos can be up to '+videoLimit+' seconds.'));return}setStoryImage(undefined);setStoryMedia(value)}).catch(fail)}}/>}</>}
       <Field label={storyMode==='Text'?'What’s your story?':'Caption'} value={comment} onChangeText={setComment} multiline maxLength={240}/>
-      <Copy size={12} color={theme.muted}>Stories disappear 12 hours after you share them.</Copy>
-      <Button label={busy?'Sharing…':'Share story'} disabled={!valid||busy} onPress={()=>{if(!demo){void shareStory();return}setOwnStory({text:comment.trim(),image:storyMode==='Photo'?storyImage:undefined,videoPreview:storyMode==='Video',posted:Date.now(),background:storyMode==='Text'?storyBackground:undefined});modalClose();notify('Story shared in the preview. It disappears after 12 hours.')}}/>
+      <Copy size={12} color={theme.muted}>{verifiedBenefits?'Verified accounts can keep up to '+verifiedStoryLimit+' stories live for 18 hours.':'Stories disappear 12 hours after you share them.'}</Copy>
+      <Button label={busy?'Sharing…':'Share story'} disabled={!valid||busy} onPress={()=>{if(!demo){void shareStory();return}setOwnStory({text:comment.trim(),image:storyMode==='Photo'?storyImage:undefined,videoPreview:storyMode==='Video',posted:Date.now(),background:storyMode==='Text'?storyBackground:undefined});modalClose();notify('Story shared in the preview. It disappears after '+(verifiedBenefits?18:12)+' hours.')}}/>
     </>
   }else if(overlay?.kind==='share'){
     const post=posts.find(item=>item.id===overlay.post.id)??overlay.post
@@ -1574,6 +1640,7 @@ export default function App(props:Props){
         {post.media&&post.kind==='image'&&<Image source={{uri:post.media}} resizeMode="cover" style={{width:'100%',height:180,borderRadius:14}}/>}
       </Card>
       {!demo&&post.author.id===user.id&&<SearchVisibility label="Show post in web search" detail="Search engines can show this post and its media to anyone." value={Boolean(post.searchPublic)} onChange={value=>void updatePostSearchVisibility(post,value)} disabled={busy}/>}
+      {verifiedBenefits&&post.author.id===user.id&&<View style={{...row,flexWrap:'wrap'}}>{(demo||withinEditWindow(post.time))&&<Button label="Edit post" variant="secondary" onPress={()=>{setComment(post.body);selectOverlay({kind:'editPost',post})}}/>}<Button label="Delete post" variant="danger" onPress={()=>void deletePost(post)}/></View>}
       {canShare&&<Button label="Share post link" disabled={busy} onPress={()=>{void props.share?.(sharedLink('post',post.id)).then(()=>{modalClose();notify('Post link ready to share')}).catch(fail)}}/>}
     </>
   }else if(overlay?.kind==='wish'){
@@ -1586,13 +1653,14 @@ export default function App(props:Props){
   const overlayTitle=overlay?.kind==='connections'?(overlay.list==='followers'?'Followers':'Following')
     :overlay?.kind==='call'?(overlay.ringing?'Ringing':overlay.video?'Video call':'Voice call')
     :overlay?.kind==='photo'?overlay.photo==='avatar'?'Profile picture':'Cover photo'
-    :overlay&&overlay.kind!=='story'?{editProfile:'Edit profile',editUsername:'Change username',comments:'Comments',share:'Share post',post:'Post detail',create:'Create post',wish:'Happy birthday, Zee!',newStory:'Create story'}[overlay.kind]:''
+    :overlay&&overlay.kind!=='story'?{editProfile:'Edit profile',editUsername:'Change username',editPost:'Edit post',editMessage:'Edit message',comments:'Comments',share:'Share post',post:'Post detail',create:'Create post',wish:'Happy birthday, Zee!',newStory:'Create story'}[overlay.kind]:''
   const story=overlay?.kind==='story'?(demoAccounts.find(account=>account.person.id===overlay.person.id)?.person??overlay.person):null
   const liveGroup=story&&!demo?activeStories.find(group=>group.author.id===story.id):undefined
   const activeIndex=liveGroup?Math.min(storyIndex,liveGroup.stories.length-1):0
   const liveItem=liveGroup?.stories[activeIndex]
   const personalStory:{text:string;image?:string;video?:string;videoPreview?:boolean;background?:string}|null=demo?(story?.id===user.id?demoOwn:null):liveItem?{text:liveItem.text,image:liveItem.image,video:liveItem.video,background:liveItem.background}:null
   const storyPosted=demo?(story?.id===user.id?demoOwn?.posted:story?demoPosted[story.id]:undefined):liveItem?Date.parse(liveItem.created):undefined
+  const storyExpires=liveItem?Date.parse(liveItem.expires):storyPosted!==undefined?storyPosted+(story?.verified?verifiedStoryLifetime:storyLifetime):undefined
   const storyText=demo?personalStory?.text??(story?.id==='ada'?'Study session after school. Bring your notes!':story?.id==='bello'?'Maths test is on Friday. Revise quadratics!':story?.id==='code'?'Code Club meets on Friday!':'See you at quiz night!'):liveItem?.text??''
   return <Design.Provider value={{theme,font,reduced,renderIcon:props.renderIcon}}><View style={{flex:1,backgroundColor:theme.bg,width:'100%'}}>
     {starting||stage==='restore'?<LoadingScreen/>:stage==='intro'?<Intro desktop={desktop} step={step} reduced={reduced} showPublicBrand={Platform.OS==='web'&&!demo} onSkip={()=>setStage('auth')} onNext={()=>step===2?setStage('auth'):setStep(step+1)} onBack={()=>setStep(step-1)}/>:stage==='auth'?<Auth base={base} demo={demo} busy={busy} error={error} submit={authenticate} onGoogle={(mode,username,dob)=>void authenticateWithGoogle(mode,username,dob)} onCancelGoogle={()=>googleRequest.current?.abort()} googlePending={googlePending} onDemo={()=>{setDemoEntered(true);setPosts(initialPosts);setChats(initialChats);setRooms(localRooms);setUnread(true);setUser(me);setPage('Home');setStage('app')}} reduced={reduced} recovering={recovering} setRecovering={setRecovering}/>:
@@ -1698,13 +1766,13 @@ export default function App(props:Props){
           <View style={spread}>
             <View style={{...row,flex:1}}><Avatar person={story} size={40}/><View style={{flex:1,gap:2}}>
               <View style={{...row,gap:5}}><Copy color="#fff" weight={800}>{displayHandle(story)}</Copy><VerifiedBadge person={story}/></View>
-              {storyPosted!==undefined&&<Copy color="#fff" size={11}>{storyLeft(storyPosted+storyLifetime-clock)} · disappears after 12 hours</Copy>}
+              {storyExpires!==undefined&&<Copy color="#fff" size={11}>{storyLeft(storyExpires-clock)} · {story?.verified?'18-hour verified story':'12-hour story'}</Copy>}
             </View></View>
             <IconButton name="close" label="Close story" tint="#fff" onPress={modalClose}/>
           </View>
           <View {...storySwipe.panHandlers} style={{flex:1,minHeight:0,justifyContent:'center',gap:16,paddingBottom:16}}>
             {personalStory?.image&&<Motion key={story.id+':'+activeIndex} reduced={reduced} axis="x" distance={10} style={{flex:1,minHeight:0}}><LazyImage uri={personalStory.image} alt="Story photo" style={{width:'100%',height:'100%',objectFit:'contain'}}/></Motion>}
-            {(personalStory?.video||personalStory?.videoPreview)&&(Platform.OS==='web'&&personalStory?.video?React.createElement('video',{src:personalStory.video,controls:true,autoPlay:true,playsInline:true,style:{width:'100%',maxHeight:'70%',borderRadius:16,backgroundColor:'#000'}}):<View style={{...stack,alignItems:'center'}}><IconTile name="play" size={52} color={lime} background="#FFFFFF19"/><Copy color="#fff" weight={800}>VIDEO · 0:10 MAX</Copy></View>)}
+            {(personalStory?.video||personalStory?.videoPreview)&&(Platform.OS==='web'&&personalStory?.video?React.createElement('video',{src:personalStory.video,controls:true,autoPlay:true,playsInline:true,style:{width:'100%',maxHeight:'70%',borderRadius:16,backgroundColor:'#000'}}):<View style={{...stack,alignItems:'center'}}><IconTile name="play" size={52} color={lime} background="#FFFFFF19"/><Copy color="#fff" weight={800}>VIDEO · 0:{story?.verified?'20':'10'} MAX</Copy></View>)}
             {!!storyText&&<Motion key={'caption:'+story.id+':'+activeIndex} reduced={reduced} axis="x" distance={10}><Copy center color="#fff" weight={800} size={personalStory?.image?18:28}>{storyText}</Copy></Motion>}
             <View pointerEvents="box-none" style={{position:'absolute',inset:0,flexDirection:'row',justifyContent:'space-between'}}>
               <Pressable accessibilityRole="button" accessibilityLabel="Previous story" onPress={()=>moveStory(-1)} style={{width:'25%',height:'100%'}}/>
@@ -1747,3 +1815,4 @@ export default function App(props:Props){
     </Modal>
   </View></Design.Provider>
 }
+

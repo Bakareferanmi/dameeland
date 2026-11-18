@@ -40,7 +40,11 @@ export type AdminOverview = {
   activity:AdminActivity[];
 }
 export const storyLifetime = 12*60*60*1000
-export const storyLimit = 10
+export const verifiedStoryLifetime = 18*60*60*1000
+export const storyLimit = 1
+export const verifiedStoryLimit = 5
+export const storyVideoLimit = 10
+export const verifiedStoryVideoLimit = 20
 export const teacherGold = '#E5A100'
 export type Story = {id:string;text:string;image?:string;video?:string;kind?:'image'|'video';background?:string;created:string;expires:string;likes?:number;liked?:boolean;viewed?:boolean}
 export type StoryGroup = {author:Person;stories:Story[]}
@@ -48,7 +52,7 @@ export type AdminAccounts = {accounts:AdminAccount[];nextCursor:string|null}
 export type FollowListKind = 'followers'|'following'
 export type FollowPage = {people:Person[]; nextCursor:string|null}
 export type FollowStats = {followers:number; following:number; followedByViewer:boolean;followsViewer:boolean}
-export type Post = {id:string; author:Person; body:string; likes:number; liked:boolean; comments:number; reposts:number; reposted:boolean; time:string; kind?:'image'|'video'; media?:string; searchPublic?:boolean}
+export type Post = {id:string; author:Person; body:string; likes:number; liked:boolean; comments:number; reposts:number; reposted:boolean; time:string; editedAt?:string; kind?:'image'|'video'; media?:string; searchPublic?:boolean}
 export const commentGifs = {cheer:'Cheer',sparkle:'Sparkle',highfive:'High five'} as const
 export const commentStickers = {
   nice:{label:'Nice!',emoji:'✨'},
@@ -60,7 +64,7 @@ export type CommentAttachment =
   | {kind:'image';url:string}
   | {kind:'gif';id:keyof typeof commentGifs}
   | {kind:'sticker';id:keyof typeof commentStickers}
-export type Note = {id:string; author:Person; body:string; attachment?:CommentAttachment;parentId?:string;replyTo?:string;likes?:number;liked?:boolean;readAt?:string;createdAt?:string;call?:{id:string;video:boolean;outcome:'completed'|'missed'|'declined';durationSeconds:number}}
+export type Note = {id:string; author:Person; body:string; attachment?:CommentAttachment;parentId?:string;replyTo?:string;likes?:number;liked?:boolean;readAt?:string;createdAt?:string;editedAt?:string;call?:{id:string;video:boolean;outcome:'completed'|'missed'|'declined';durationSeconds:number}}
 export const me:Person = {id:'you',name:'You',initials:'YO',role:'student',color:lime,detail:'Student'}
 export const people:Person[] = [
   {id:'ada',username:'ada',name:'Ada O.',initials:'AO',role:'student',color:'#FFD9B8',detail:'SS2 · Student',verified:true},
@@ -106,3 +110,4 @@ export async function api<T>(base:string,path:string,options:RequestInit={},toke
 }
 
 export {lessons,dailyLesson,subjects,type Subject} from './learningCatalog'
+

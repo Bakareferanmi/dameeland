@@ -46,13 +46,14 @@ async function openGoogle(getUrl:()=>Promise<string>){
 }
 async function pickMedia(comment=false){
   const ImagePicker=await import('expo-image-picker')
-  const result=await ImagePicker.launchImageLibraryAsync({mediaTypes:['images'],quality:comment?1:.8,allowsEditing:false})
+  const result=await ImagePicker.launchImageLibraryAsync({mediaTypes:comment?['images']:['images','videos'],quality:comment?1:.8,allowsEditing:false})
   if(result.canceled)return null
   const image=result.assets[0]
-  if(image.fileSize&&image.fileSize>5*1024*1024)throw new Error('Choose an image under 5 MB.')
+  const kind:'video'|'image'=image.type==='video'?'video':'image'
+  if(image.fileSize&&image.fileSize>(kind==='video'?25:5)*1024*1024)throw new Error(kind==='video'?'Choose a video under 25 MB.':'Choose an image under 5 MB.')
   const name=image.fileName??'image.jpg'
   const type=image.mimeType??'image/jpeg'
-  return {name,uri:image.uri,data:image.file??{name,type,uri:image.uri}}
+  return {name,uri:image.uri,data:image.file??{name,type,uri:image.uri},kind,duration:kind==='video'&&image.duration?image.duration/1000:undefined}
 }
 function CommentGif({uri,label,animate}:{uri:string;label:string;animate:boolean}){
   return <ExpoImage source={{uri}} accessibilityLabel={label} accessible autoplay={animate} contentFit="cover"
@@ -87,3 +88,4 @@ export default function App(){
   const demo=offline||process.env.EXPO_PUBLIC_DEMO==='1'
   return <SafeAreaProvider><SafeAreaView style={{flex:1,backgroundColor:loaded||error?(theme==='dark'?'#120D1F':'#FAF8FF'):'#4F25D6'}}>{loaded||error?<Dameeland phone={offline} demo={demo} base={base} callMedia={callMedia} notificationTarget={notificationTarget} renderIcon={HugeiconsIcon} initialTheme={theme} font={error?()=>({}):font} loadToken={loadToken} saveToken={saveToken} openGoogle={openGoogle} modalViewport={Platform.OS==='web'?undefined:NativeModalViewport} pickMedia={()=>pickMedia()} pickCommentMedia={()=>pickMedia(true)} renderGif={CommentGif} share={share} requestNotifications={requestNotifications} getNotificationDevice={getNotificationDevice} notifyDevice={notifyDevice}/>:<LoadingScreen/>}</SafeAreaView></SafeAreaProvider>
 }
+

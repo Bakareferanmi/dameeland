@@ -1,4 +1,4 @@
-const CACHE_NAME='dameeland-shell-v7'
+const CACHE_NAME='dameeland-shell-v8'
 const APP_SHELL='/'
 self.addEventListener('install',event=>{event.waitUntil(caches.open(CACHE_NAME).then(cache=>cache.addAll([APP_SHELL,'/manifest.webmanifest'])).then(()=>self.skipWaiting()))})
 self.addEventListener('activate',event=>{
@@ -50,3 +50,4 @@ self.addEventListener('notificationclick',event=>{
     return self.clients.openWindow(destination)
   }))
 })
+
