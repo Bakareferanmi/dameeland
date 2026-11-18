@@ -3,7 +3,7 @@ import {dailyLesson} from './learningCatalog'
 import {browserCallMedia,RoomCall,useRoomCall,type CallMedia} from './calls'
 import {readCallSignal,type CallSignal} from './callSignal'
 import React,{lazy,Suspense,useCallback,useEffect,useLayoutEffect,useRef,useState} from 'react'
-import {AccessibilityInfo,Animated,AppState,BackHandler,Easing,Image,KeyboardAvoidingView,Modal,PanResponder,Platform,Pressable,RefreshControl,ScrollView,TextInput,View,useWindowDimensions,type ViewStyle} from 'react-native'
+import {AccessibilityInfo,Animated,AppState,BackHandler,Easing,Image,KeyboardAvoidingView,Modal,PanResponder,Platform,Pressable,RefreshControl,ScrollView,Switch,TextInput,View,useWindowDimensions,type ViewStyle} from 'react-native'
 import {api,birthdayToday,validBirthDate,storyLifetime,capitalizeName,normalizeUsername,usernameHint,validUsername,initialChats,initialComments,initialPosts,initials,lime,me,people,questions,slides,themes,type FollowListKind,type FollowPage,type FollowStats,type Note,type Person,type Post,type BirthdayEntry,type Role,type Story,type StoryGroup,type Theme} from './index'
 import {Avatar,Button,Card,Copy,Design,displayHandle,Field,Icon,IconButton,IconTile,Logo,PersonName,ScreenLinks,Segmented,VerifiedBadge,row,spread,stack,useDesign,type Glyph,type IconRendererProps} from './ui'
 import type {ExtraPage} from './FeatureScreens'
@@ -49,6 +49,14 @@ function BirthdayFields({value,onChange,note}:{value:BirthDraft;onChange:(next:B
     {!!note&&<Copy size={12} color={theme.muted}>{note}</Copy>}
   </View>
 }
+function SearchVisibility({label,detail,value,onChange,disabled}:{label:string;detail:string;value:boolean;onChange:(value:boolean)=>void;disabled?:boolean}){
+  const {theme}=useDesign()
+  return <View style={{...row,gap:12}}>
+    <View style={{flex:1,gap:4}}><Copy weight={800}>{label}</Copy><Copy size={12} color={theme.muted}>{detail}</Copy></View>
+    <Switch accessibilityLabel={label} value={value} onValueChange={onChange} disabled={disabled} trackColor={{true:theme.purple}}/>
+  </View>
+}
+
 type GoogleStart={url:string;state:string;exchange:string}
 type GoogleWindow={close:()=>void}
 type Media={name:string;uri:string;data:Blob|{uri:string;name:string;type:string};kind?:'image'|'video';duration?:number}
@@ -385,6 +393,8 @@ export default function App(props:Props){
   const [commentKeyboardInset,setCommentKeyboardInset]=useState(0)
   const [chats,setChats]=useState<Record<string,Note[]>>(demo?initialChats:{})
   const [draft,setDraft]=useState(''),[attachment,setAttachment]=useState<Media|null>(null)
+  const [postSearchPublic,setPostSearchPublic]=useState(false)
+  const [profileSearchPublic,setProfileSearchPublic]=useState(false)
   const [message,setMessage]=useState(''),[comment,setComment]=useState('')
   const [replyTarget,setReplyTarget]=useState<Note|null>(null)
   const [commentMedia,setCommentMedia]=useState<Media|Exclude<CommentAttachment,{kind:'image'}>|null>(null)
@@ -837,7 +847,7 @@ export default function App(props:Props){
     }
   },[stage,token,demo])
   const selectOverlay=(value:Overlay)=>{
-    if(value.kind==='editProfile'){setProfileNameDraft(user.name);setBioDraft(user.bio??'')}
+    if(value.kind==='editProfile'){setProfileNameDraft(user.name);setBioDraft(user.bio??'');setProfileSearchPublic(Boolean(user.searchPublic))}
     if(value.kind==='editUsername')setUsernameDraft(user.username??'')
     if(value.kind==='newStory'){setStoryMode('Text');setStoryImage(undefined);setStoryMedia(null);setStoryBackground('#4F25D6')}
     if(overlay)overlayHistory.current.push(overlay)
@@ -924,7 +934,7 @@ export default function App(props:Props){
       scrollOffsets.current={};pendingOffset.current=null;setToast(null)
       roomCall.end();pageHistory.current=[];dismissOverlays();setToken('');setUser(me);setPage('Home');setStage('auth');setError('')
       setPosts(props.demo?initialPosts:[]);setNotes({});setChats(props.demo?initialChats:{});setFollows({});setProfileStats(null)
-      setRooms(props.demo?localRooms:[]);setRoom(null);setDraft('');setAttachment(null);clearComment();setMessage('');setSeen(new Set());setOwnStory(null);setDemoEntered(false);setBirthdays([]);setBirthdayWall([]);setWishedBirthdays(new Set());setLiveStories([]);setStoryIndex(0);setStoryMedia(null);setWishes([]);setCompletedLessons([]);setLearningError(false);setVoicePlaying(false);setQuietMode(false);setFollowingOnly(false)
+      setRooms(props.demo?localRooms:[]);setRoom(null);setDraft('');setAttachment(null);setPostSearchPublic(false);clearComment();setMessage('');setSeen(new Set());setOwnStory(null);setDemoEntered(false);setBirthdays([]);setBirthdayWall([]);setWishedBirthdays(new Set());setLiveStories([]);setStoryIndex(0);setStoryMedia(null);setWishes([]);setCompletedLessons([]);setLearningError(false);setVoicePlaying(false);setQuietMode(false);setFollowingOnly(false)
     }catch(reason){fail(reason)}
   }
   async function react(post:Post,kind:'like'|'repost'){
@@ -954,7 +964,7 @@ export default function App(props:Props){
     const session=demoSession.current
     setBusy(true)
     try{
-      const input={name:profileNameDraft.trim(),bio:bioDraft.trim()}
+      const input={name:profileNameDraft.trim(),bio:bioDraft.trim(),searchPublic:profileSearchPublic}
       const account=demo?{...user,...input}:await call<Viewer>('/me/profile',json(input,'PUT'))
       if(session!==demoSession.current)return
       setUser(account)
@@ -1013,13 +1023,27 @@ export default function App(props:Props){
       else{
         const form=new FormData()
         form.append('body',draft.trim())
+        if(postSearchPublic)form.append('searchPublic','true')
         if(attachment?.data instanceof Blob)form.append(attachment.kind==='video'?'video':'image',attachment.data,attachment.name)
         else if(attachment)form.append(attachment.kind==='video'?'video':'image',attachment.data as unknown as Blob)
-        await call('/posts',attachment?{method:'POST',body:form}:json({body:draft}))
+        await call('/posts',attachment?{method:'POST',body:form}:json({body:draft,searchPublic:postSearchPublic}))
         setRetry(n=>n+1)
       }
-      setDraft('');setAttachment(null);dismissOverlays();setFollowingOnly(false);open('Home');notify('Post shared')
+      setDraft('');setAttachment(null);setPostSearchPublic(false);dismissOverlays();setFollowingOnly(false);open('Home');notify('Post shared')
     }catch(reason){fail(reason)}finally{setBusy(false)}
+  }
+  async function updatePostSearchVisibility(post:Post,searchPublic:boolean){
+    if(busy||demo||post.author.id!==user.id)return
+    const session=demoSession.current
+    setBusy(true)
+    try{
+      const saved=await call<{searchPublic:boolean}>('/posts/'+encodeURIComponent(post.id)+'/search-visibility',json({searchPublic},'PUT'))
+      if(session!==demoSession.current)return
+      setPosts(previous=>previous.map(item=>item.id===post.id?{...item,searchPublic:saved.searchPublic}:item))
+      setOverlay(current=>current?.kind==='share'&&current.post.id===post.id?{...current,post:{...current.post,searchPublic:saved.searchPublic}}:current)
+      notify(saved.searchPublic?'Post is public on the web':'Post search visibility turned off')
+    }catch(reason){if(session===demoSession.current)fail(reason)}
+    finally{setBusy(false)}
   }
   async function wishBirthday(person:Person,message?:string){
     if(busy)return
@@ -1488,6 +1512,7 @@ export default function App(props:Props){
     sheet=<><Field label="Real name" value={profileNameDraft} onChangeText={setProfileNameDraft} maxLength={120} autoCapitalize="words"/>
       <Field label="Bio" value={bioDraft} onChangeText={value=>setBioDraft(Array.from(value).slice(0,50).join(''))} multiline/>
       <Copy color={theme.muted} size={12}>{Array.from(bioDraft).length}/50</Copy>
+      {!demo&&user.username&&<SearchVisibility label="Show profile in web search" detail="Search engines can show your username, bio and profile picture." value={profileSearchPublic} onChange={setProfileSearchPublic} disabled={busy}/>}
       <Button label={busy?'Saving…':'Save profile'} onPress={()=>void saveProfile()} disabled={busy||!profileNameDraft.trim()}/></>
   }else if(overlay?.kind==='editUsername'){
     const next=user.usernameNextChangeAt?Date.parse(user.usernameNextChangeAt):0
@@ -1503,6 +1528,7 @@ export default function App(props:Props){
     sheet=<><View style={row}><Avatar person={user}/><PersonName person={user}/></View><Field label="What’s happening?" value={draft} onChangeText={setDraft} multiline maxLength={1200} style={{minHeight:106,textAlignVertical:'top'}}/>
       {attachment&&<View style={spread}><Copy size={12}>{attachment.name}</Copy><IconButton name="close" label="Remove image" onPress={()=>setAttachment(null)}/></View>}
       {props.pickMedia&&<Button label="Add image or video" leading="image" variant="secondary" onPress={()=>{void props.pickMedia?.().then(value=>{if(value)setAttachment(value)}).catch(fail)}}/>}
+      {!demo&&<SearchVisibility label="Show post in web search" detail="Search engines can show this post and its media to anyone." value={postSearchPublic} onChange={setPostSearchPublic} disabled={busy}/>}
       <Button label={busy?'Posting…':'Publish post'} onPress={()=>void createPost()} disabled={busy||(!draft.trim()&&!attachment)}/></>
   }else if(overlay?.kind==='newStory'){
     const valid=storyMode==='Text'?!!comment.trim():storyMode==='Photo'?!!storyImage:storyMedia?.kind==='video'
@@ -1516,7 +1542,16 @@ export default function App(props:Props){
       <Button label={busy?'Sharing…':'Share story'} disabled={!valid||busy} onPress={()=>{if(!demo){void shareStory();return}setOwnStory({text:comment.trim(),image:storyMode==='Photo'?storyImage:undefined,videoPreview:storyMode==='Video',posted:Date.now(),background:storyMode==='Text'?storyBackground:undefined});modalClose();notify('Story shared in the preview. It disappears after 12 hours.')}}/>
     </>
   }else if(overlay?.kind==='share'){
-    sheet=<><Card style={{gap:12}}><View style={row}><Avatar person={overlay.post.author} size={42}/><View><PersonName person={overlay.post.author}/><Copy color={theme.muted} size={12}>Post on dameen</Copy></View></View><Copy>{overlay.post.body||'Shared a post'}</Copy>{overlay.post.media&&overlay.post.kind==='image'&&<Image source={{uri:overlay.post.media}} resizeMode="cover" style={{width:'100%',height:180,borderRadius:14}}/>}</Card>{canShare&&<Button label="Share post link" onPress={()=>{void props.share?.(sharedLink('post',overlay.post.id)).then(()=>{modalClose();notify('Post link ready to share')}).catch(fail)}}/>}</>
+    const post=posts.find(item=>item.id===overlay.post.id)??overlay.post
+    sheet=<>
+      <Card style={{gap:12}}>
+        <View style={row}><Avatar person={post.author} size={42}/><View><PersonName person={post.author}/><Copy color={theme.muted} size={12}>Post on dameen</Copy></View></View>
+        <Copy>{post.body||'Shared a post'}</Copy>
+        {post.media&&post.kind==='image'&&<Image source={{uri:post.media}} resizeMode="cover" style={{width:'100%',height:180,borderRadius:14}}/>}
+      </Card>
+      {!demo&&post.author.id===user.id&&<SearchVisibility label="Show post in web search" detail="Search engines can show this post and its media to anyone." value={Boolean(post.searchPublic)} onChange={value=>void updatePostSearchVisibility(post,value)} disabled={busy}/>}
+      {canShare&&<Button label="Share post link" disabled={busy} onPress={()=>{void props.share?.(sharedLink('post',post.id)).then(()=>{modalClose();notify('Post link ready to share')}).catch(fail)}}/>}
+    </>
   }else if(overlay?.kind==='wish'){
     sheet=<><Avatar person={people[2]} size={65}/><Field label="Write a birthday wish" value={comment} onChangeText={setComment} maxLength={300}/><Button label="Send wish" disabled={!comment.trim()} variant="fun" onPress={()=>{setWishes(previous=>[...previous,comment.trim()]);modalClose();notify('Birthday wish sent in the preview')}}/></>
   }else if(overlay?.kind==='call'&&overlay.ringing){

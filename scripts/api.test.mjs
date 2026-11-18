@@ -83,6 +83,63 @@ test('username cooldown, public preview, presence, and personal analytics',async
   await request('/me/presence',{token,method:'PUT',body:{online:false}})
   assert.equal((await request('/people/'+account.user.id+'/presence',{token:other.token})).online,false)
 })
+test('public search only lists profiles and posts their owners opted in',async()=>{
+  const owner=await create('Search Owner')
+  const visitor=await create('Search Visitor')
+  const token=owner.token
+  const profile='/public/profiles/'+owner.username
+  const sitemap=async(section,status=200)=>{
+    const response=await fetch(base+'/api/public/sitemap'+(section?'?section='+section:''))
+    assert.equal(response.status,status)
+    if(response.ok)assert.match(response.headers.get('Content-Type'),/application\/xml/)
+    return response.text()
+  }
+  const setProfile=searchPublic=>request('/me/profile',{token,method:'PUT',body:{name:'Search Owner',bio:'My short bio',searchPublic}})
+  const setPost=(id,searchPublic,accessToken=token,status=200)=>request('/posts/'+id+'/search-visibility',{token:accessToken,method:'PUT',body:{searchPublic},status})
+  assert.equal((await request(profile)).searchPublic,false)
+  assert.match(await sitemap(),/<sitemapindex/)
+  assert.match(await sitemap('site'),/<loc>https:\/\/dameen\.app\/about\/<\/loc>/)
+  await sitemap('profiles-0',404)
+  const privatePost=await request('/posts',{token,method:'POST',body:{body:'Members only'},status:201})
+  assert.equal((await request('/public/posts/'+privatePost.id)).searchPublic,false)
+  await setPost(privatePost.id,true,visitor.token,404)
+  assert.equal((await request('/public/posts/'+privatePost.id)).searchPublic,false)
+
+  assert.equal((await setProfile(true)).searchPublic,true)
+  assert.equal((await setProfile(undefined)).searchPublic,true)
+  assert.equal((await request('/me',{token})).searchPublic,true)
+  assert.match(await sitemap(),/section=profiles-1/)
+  const profileUrls=await sitemap('profiles-1')
+  assert.ok(profileUrls.includes('/u/'+owner.username))
+  assert.ok(!profileUrls.includes('/u/'+visitor.username))
+
+  const form=new FormData()
+  form.append('body','Visible <text> and media')
+  form.append('searchPublic','true')
+  form.append('image',new Blob([Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jA5sAAAAASUVORK5CYII=','base64')],{type:'image/png'}),'photo.png')
+  const post=await request('/posts',{token,method:'POST',form,status:201})
+  assert.equal((await request('/posts/'+post.id,{token:visitor.token})).searchPublic,true)
+  const published=await request('/public/posts/'+post.id)
+  assert.equal(published.body,'Visible <text> and media')
+  assert.equal(published.username,owner.username)
+  assert.equal(published.email,undefined)
+  assert.equal(published.comments,undefined)
+  assert.equal((await fetch(published.media)).status,200)
+  assert.match(await sitemap(),/section=posts-1/)
+  const postUrls=await sitemap('posts-1')
+  assert.ok(postUrls.includes('/p/'+post.id))
+  assert.ok(!postUrls.includes('/p/'+privatePost.id))
+
+  assert.equal((await setPost(post.id,false)).searchPublic,false)
+  assert.equal((await request('/public/posts/'+post.id)).searchPublic,false)
+  assert.equal((await fetch(published.media)).status,404)
+  assert.equal((await request('/posts/'+post.id,{token:visitor.token})).body,published.body)
+  assert.equal((await setProfile(false)).searchPublic,false)
+  assert.equal((await request(profile)).searchPublic,false)
+  await setPost(privatePost.id,true)
+  assert.equal((await request('/public/posts/'+privatePost.id)).body,'Members only')
+  assert.ok(!(await sitemap('posts-1')).includes('/p/'+post.id))
+})
 test('API preflight allows both production sites and rejects unknown origins',async()=>{
   for(const origin of ['https://dameen.app','https://dameeland.pages.dev','https://untrusted.example']){
     const response=await fetch(base+'/api/health',{

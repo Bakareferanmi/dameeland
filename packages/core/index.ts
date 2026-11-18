@@ -29,7 +29,7 @@ export function birthdayToday(birthday:string|undefined,at=new Date()){
 }
 export type BirthdayEntry = {person:Person;wished:boolean;daysUntil?:number}
 export type Person = {id:string; name:string; initials:string; role:Role; color:string; detail:string; verified?:boolean; teacher?:boolean; group?:boolean; birthday?:string; dob?:string; avatar?:string; cover?:string; username?:string; bio?:string}
-export type Viewer = Person & {isAdmin?:boolean;usernameNextChangeAt?:string}
+export type Viewer = Person & {isAdmin?:boolean;usernameNextChangeAt?:string;searchPublic?:boolean}
 export type AdminAccount = {person:Person;email:string;created:number|null;independentlyVerified:boolean}
 export type AdminActivity = {id:string;name:string;kind:'signup'|'post'|'comment';created:number;excerpt?:string}
 export type AdminDay = {day:string;signups:number;posts:number;comments:number;likes:number;reposts:number;messages:number}
@@ -48,7 +48,7 @@ export type AdminAccounts = {accounts:AdminAccount[];nextCursor:string|null}
 export type FollowListKind = 'followers'|'following'
 export type FollowPage = {people:Person[]; nextCursor:string|null}
 export type FollowStats = {followers:number; following:number; followedByViewer:boolean;followsViewer:boolean}
-export type Post = {id:string; author:Person; body:string; likes:number; liked:boolean; comments:number; reposts:number; reposted:boolean; time:string; kind?:'image'|'video'; media?:string}
+export type Post = {id:string; author:Person; body:string; likes:number; liked:boolean; comments:number; reposts:number; reposted:boolean; time:string; kind?:'image'|'video'; media?:string; searchPublic?:boolean}
 export const commentGifs = {cheer:'Cheer',sparkle:'Sparkle',highfive:'High five'} as const
 export const commentStickers = {
   nice:{label:'Nice!',emoji:'✨'},

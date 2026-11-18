@@ -1,3 +1,4 @@
+import {searchSitemap} from './searchSitemap'
 import {readCallSignal} from '@dameeland/core/call-signal'
 import {Hono} from 'hono'
 import {cors} from 'hono/cors'
@@ -9,7 +10,7 @@ import {lessons,commentGifs,validBirthDate,type BirthdayEntry,storyLimit,storyLi
 
 interface Env {DB:D1Database;MEDIA:R2Bucket;STORIES:KVNamespace;ROOMS:DurableObjectNamespace<ChatRoom>;ALLOWED_ORIGIN:string;VAPID_PUBLIC_KEY?:string;VAPID_PRIVATE_KEY?:string;VAPID_SUBJECT?:string;GOOGLE_CLIENT_ID?:string;GOOGLE_CLIENT_SECRET?:string;GOOGLE_REDIRECT_URI?:string;ADMIN_USER_IDS?:string;RESEND_API_KEY?:string;RECOVERY_FROM?:string}
 type Account={id:string;email:string;name:string;role:Role;salt:string;password_hash:string;username?:string|null;verified?:number;teacher?:number;dob?:string|null}
-type PublicAccount=Pick<Account,'id'|'name'|'role'|'username'|'verified'|'teacher'|'dob'> & {avatar_media?:string|null;cover_media?:string|null;bio?:string|null;username_changed_at?:number|null}
+type PublicAccount=Pick<Account,'id'|'name'|'role'|'username'|'verified'|'teacher'|'dob'> & {avatar_media?:string|null;cover_media?:string|null;bio?:string|null;username_changed_at?:number|null;search_public?:number}
 type App={Bindings:Env;Variables:{user:PublicAccount;tokenHash:string}}
 const app=new Hono<App>()
 const encoder=new TextEncoder()
@@ -28,7 +29,7 @@ const now=()=>Date.now()
 const touchPresence=(db:D1Database,userId:string,online:boolean)=>db.prepare('INSERT INTO presence (user_id,online,last_seen) VALUES (?,?,?) ON CONFLICT(user_id) DO UPDATE SET online=excluded.online,last_seen=excluded.last_seen').bind(userId,online?1:0,now()).run()
 const base64Url=(bytes:ArrayBuffer)=>btoa(String.fromCharCode(...new Uint8Array(bytes))).replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,'')
 const isAdmin=(env:Env,id:string)=>env.ADMIN_USER_IDS?.split(',').some(value=>value.trim()===id)??false
-const viewer=(env:Env,account:PublicAccount,url:string)=>({...person(account,url),dob:account.dob??undefined,usernameNextChangeAt:account.username_changed_at?time(account.username_changed_at+3*86400000):undefined,isAdmin:isAdmin(env,account.id)})
+const viewer=(env:Env,account:PublicAccount,url:string)=>({...person(account,url),dob:account.dob??undefined,usernameNextChangeAt:account.username_changed_at?time(account.username_changed_at+3*86400000):undefined,isAdmin:isAdmin(env,account.id),searchPublic:Boolean(account.search_public)})
 type NotificationKind='message'|'follow'|'comment'|'reaction'|'call'|'birthday'|'announcement'
 type NotificationPreferenceRow={messages:number;follows:number;comments:number;reactions:number;calls:number;birthdays:number;announcements:number;quiet_start:string|null;quiet_end:string|null}
 type WaitContext={waitUntil:(promise:Promise<unknown>)=>void}
@@ -152,22 +153,43 @@ app.use('/api/*',async(c,next)=>{
   return bodyLimit({maxSize,onError:()=>{throw new HTTPException(413,{message:'The request is too large.'})}})(c,next)
 })
 app.get('/api/health',c=>c.json({ok:true}))
+app.use('/api/public/*',async(c,next)=>{
+  c.header('X-Robots-Tag','noindex')
+  c.header('Cache-Control','no-store')
+  await next()
+})
+app.get('/api/public/sitemap',c=>searchSitemap(c.env.DB,c.req.query('section')))
+const publicPostId=/^[a-z0-9-]{8,80}$/i
+app.get('/api/public/posts/:id',async c=>{
+  const id=c.req.param('id')
+  if(!publicPostId.test(id))return c.json({error:'Post unavailable.'},404)
+  const post=await c.env.DB.prepare(`SELECT p.id,p.body,p.created,p.media,p.media_kind,p.search_public,u.username,u.name,u.avatar_media
+    FROM posts p JOIN users u ON u.id=p.author WHERE p.id=?`).bind(id)
+    .first<{id:string;body:string;created:number;media:string|null;media_kind:'image'|'video'|null;search_public:number;username:string|null;name:string;avatar_media:string|null}>()
+  if(!post)return c.json({error:'Post unavailable.'},404)
+  const searchPublic=Boolean(post.search_public)
+  return c.json({
+    id:post.id,body:post.body,created:time(post.created),searchPublic,handle:post.username,username:post.username||post.name,
+    avatar:post.avatar_media?mediaUrl(post.avatar_media,c.req.url):undefined,
+    image:post.media&&post.media_kind==='image'?mediaUrl(post.media,c.req.url):undefined,
+    media:searchPublic&&post.media?new URL('/api/public/post-media/'+post.id,c.req.url).href:undefined,
+    kind:post.media_kind,
+  })
+})
+app.get('/api/public/post-media/:id',async c=>{
+  const id=c.req.param('id')
+  if(!publicPostId.test(id))return c.json({error:'Media unavailable.'},404)
+  const post=await c.env.DB.prepare('SELECT media FROM posts WHERE id=? AND search_public=1').bind(id).first<{media:string|null}>()
+  if(!post?.media)return c.json({error:'Media unavailable.'},404)
+  return storedMedia(c.env.MEDIA,post.media,'no-store')
+})
 app.get('/api/public/profiles/:username',async c=>{
   const username=normalizeUsername(c.req.param('username'))
   if(!validUsername(username))return c.json({error:'Profile unavailable.'},404)
-  const account=await c.env.DB.prepare('SELECT id,name,role,username,verified,teacher,dob,avatar_media,cover_media,bio FROM users WHERE username=? COLLATE NOCASE').bind(username).first<PublicAccount>()
+  const account=await c.env.DB.prepare('SELECT id,name,role,username,verified,teacher,dob,avatar_media,cover_media,bio,search_public FROM users WHERE username=? COLLATE NOCASE').bind(username).first<PublicAccount>()
   if(!account)return c.json({error:'Profile unavailable.'},404)
-  c.header('Cache-Control','public, max-age=60')
   const profile=person(account,c.req.url)
-  return c.json({id:profile.id,username:profile.username,name:profile.name,bio:profile.bio,avatar:profile.avatar,cover:profile.cover,detail:profile.detail})
-})
-app.get('/api/public/posts/:id',async c=>{
-  const id=c.req.param('id')
-  if(!/^[a-z0-9-]{8,80}$/i.test(id))return c.json({error:'Post unavailable.'},404)
-  const post=await c.env.DB.prepare('SELECT p.id,p.body,p.media,p.media_kind,u.username,u.name,u.avatar_media FROM posts p JOIN users u ON u.id=p.author WHERE p.id=?').bind(id).first<{id:string;body:string;media:string|null;media_kind:string|null;username:string|null;name:string;avatar_media:string|null}>()
-  if(!post)return c.json({error:'Post unavailable.'},404)
-  c.header('Cache-Control','public, max-age=60')
-  return c.json({id:post.id,body:post.body,username:post.username||post.name,avatar:post.avatar_media?new URL('/api/media/'+post.avatar_media,c.req.url).href:undefined,image:post.media&&post.media_kind==='image'?new URL('/api/media/'+post.media,c.req.url).href:undefined})
+  return c.json({id:profile.id,username:profile.username,name:profile.name,bio:profile.bio,avatar:profile.avatar,cover:profile.cover,detail:profile.detail,searchPublic:Boolean(account.search_public)})
 })
 const usernameOf=(value:unknown)=>typeof value==='string'?normalizeUsername(value):''
 const usernameTaken=(db:D1Database,username:string)=>db.prepare('SELECT 1 FROM users WHERE username=? COLLATE NOCASE').bind(username).first()
@@ -355,19 +377,22 @@ app.post('/api/google/exchange',async c=>{
   if(attempt.status!=='complete')return c.json({pending:true},202)
   const claimed=await DB.prepare("DELETE FROM google_attempts WHERE state=? AND exchange_hash=? AND status='complete' AND expires>? RETURNING user_id").bind(state,key,now()).first<{user_id:string}>()
   if(!claimed)return c.json({error:'Google sign-in expired. Please try again.'},410)
-  const account=await DB.prepare('SELECT id,name,role,username,verified,teacher,dob,avatar_media,cover_media,bio,username_changed_at FROM users WHERE id=?').bind(claimed.user_id).first<PublicAccount>()
+  const account=await DB.prepare('SELECT id,name,role,username,verified,teacher,dob,avatar_media,cover_media,bio,username_changed_at,search_public FROM users WHERE id=?').bind(claimed.user_id).first<PublicAccount>()
   if(!account)return c.json({error:'Account unavailable.'},404)
   return c.json(await session(c.env,c.executionCtx,account,c.req.url))
 })
+async function storedMedia(bucket:R2Bucket,id:string,cacheControl:string){
+  const object=await bucket.get(id)
+  if(!object)return Response.json({error:'Image unavailable.'},{status:404})
+  const headers=new Headers({'X-Content-Type-Options':'nosniff','Cache-Control':cacheControl})
+  object.writeHttpMetadata(headers)
+  return new Response(object.body,{headers})
+}
 app.get('/api/media/:id',async c=>{
   const id=c.req.param('id')
   const attachment=await c.env.DB.prepare('SELECT id FROM users WHERE avatar_media=? OR cover_media=? UNION ALL SELECT id FROM posts WHERE media=? UNION ALL SELECT id FROM comments WHERE media=? LIMIT 1').bind(id,id,id,id).first()
   if(!attachment) return c.json({error:'Image unavailable.'},404)
-  const object=await c.env.MEDIA.get(id)
-  if(!object) return c.json({error:'Image unavailable.'},404)
-  const headers=new Headers({'X-Content-Type-Options':'nosniff','Cache-Control':'public, max-age=3600'})
-  object.writeHttpMetadata(headers)
-  return new Response(object.body,{headers})
+  return storedMedia(c.env.MEDIA,id,'public, max-age=3600')
 })
 const storyKey=(user:string)=>'stories:'+user
 type StoryRecord={id:string;text:string;media?:string;kind?:'image'|'video';background?:string;created:number}
@@ -405,7 +430,7 @@ app.use('/api/*',async(c,next)=>{
   const token=header?.match(/^Bearer ([a-f0-9]{64})$/)?.[1]??ticket
   if(!token||!/^[a-f0-9]{64}$/.test(token)) return c.json({error:'Log in to continue.'},401)
   const tokenHash=await hash(token)
-  const user=await c.env.DB.prepare('SELECT u.id,u.name,u.role,u.username,u.verified,u.teacher,u.dob,u.avatar_media,u.cover_media,u.bio,u.username_changed_at FROM users u JOIN sessions s ON s.user_id=u.id WHERE s.token_hash=? AND s.expires>?').bind(tokenHash,now()).first<PublicAccount>()
+  const user=await c.env.DB.prepare('SELECT u.id,u.name,u.role,u.username,u.verified,u.teacher,u.dob,u.avatar_media,u.cover_media,u.bio,u.username_changed_at,u.search_public FROM users u JOIN sessions s ON s.user_id=u.id WHERE s.token_hash=? AND s.expires>?').bind(tokenHash,now()).first<PublicAccount>()
   if(!user) return c.json({error:'Your session has expired. Log in again.'},401)
   c.set('user',user);c.set('tokenHash',tokenHash)
   await next()
@@ -467,13 +492,16 @@ app.get('/api/me',c=>{
 })
 app.put('/api/me/profile',async c=>{
   const input=await readBody(c.req.raw)
+  const publicChoice=input?.searchPublic
+  if(publicChoice!==undefined&&typeof publicChoice!=='boolean')return c.json({error:'Choose a search visibility setting.'},400)
+  if(publicChoice===true&&!c.get('user').username)return c.json({error:'Choose a username before enabling search visibility.'},400)
   const name=typeof input?.name==='string'?input.name.trim().replace(/\s+/g,' '):''
   const bio=typeof input?.bio==='string'?input.bio.trim():''
   if(!name||name.length>120||typeof input?.bio!=='string'||Array.from(bio).length>50)
     return c.json({error:'Enter a name and a bio of up to 50 characters.'},400)
   const [firstName,...rest]=name.split(' ')
-  const account=await c.env.DB.prepare('UPDATE users SET name=?,first_name=?,last_name=?,bio=? WHERE id=? RETURNING id,name,role,username,verified,teacher,dob,avatar_media,cover_media,bio,username_changed_at')
-    .bind(name,firstName,rest.join(' '),bio,c.get('user').id).first<PublicAccount>()
+  const account=await c.env.DB.prepare('UPDATE users SET name=?,first_name=?,last_name=?,bio=?,search_public=COALESCE(?,search_public) WHERE id=? RETURNING id,name,role,username,verified,teacher,dob,avatar_media,cover_media,bio,username_changed_at,search_public')
+    .bind(name,firstName,rest.join(' '),bio,publicChoice===undefined?null:Number(publicChoice),c.get('user').id).first<PublicAccount>()
   if(!account)return c.json({error:'Profile unavailable.'},404)
   return c.json(viewer(c.env,account,c.req.url))
 })
@@ -482,7 +510,7 @@ app.put('/api/me/username',async c=>{
   if(!validUsername(username))return c.json({error:usernameHint},400)
   const current=c.get('user')
   if(current.username===username)return c.json(viewer(c.env,current,c.req.url))
-  const changed=await c.env.DB.prepare('UPDATE users SET username=?,username_changed_at=? WHERE id=? AND (username_changed_at IS NULL OR username_changed_at<=?) RETURNING id,name,role,username,verified,teacher,dob,avatar_media,cover_media,bio,username_changed_at')
+  const changed=await c.env.DB.prepare('UPDATE users SET username=?,username_changed_at=? WHERE id=? AND (username_changed_at IS NULL OR username_changed_at<=?) RETURNING id,name,role,username,verified,teacher,dob,avatar_media,cover_media,bio,username_changed_at,search_public')
     .bind(username,now(),current.id,now()-3*86400000).first<PublicAccount>().catch(error=>{
       if(String(error).includes('UNIQUE constraint failed'))return null
       throw error
@@ -676,7 +704,7 @@ app.put('/api/me/photos/:kind',async c=>{
   try{
     const [previous,updated]=await DB.batch<PublicAccount>([
       DB.prepare('SELECT avatar_media,cover_media FROM users WHERE id=?').bind(user.id),
-      DB.prepare(`UPDATE users SET ${column}=? WHERE id=? RETURNING id,name,role,username,verified,teacher,dob,avatar_media,cover_media,bio`).bind(key,user.id),
+      DB.prepare(`UPDATE users SET ${column}=? WHERE id=? RETURNING id,name,role,username,verified,teacher,dob,avatar_media,cover_media,bio,search_public`).bind(key,user.id),
     ])
     const account=updated.results[0]
     if(!account)throw new Error('Profile unavailable.')
@@ -757,9 +785,9 @@ app.post('/api/logout',async c=>{
   await c.env.DB.prepare('DELETE FROM sessions WHERE token_hash=?').bind(c.get('tokenHash')).run()
   return c.json({ok:true})
 })
-type PostRow=PublicAccount&{post_id:string;body:string;created:number;media:string|null;media_kind:'image'|'video'|null;likes:number;liked:number;comments:number;reposts:number;reposted:number;rank_score:number}
+type PostRow=PublicAccount&{post_id:string;body:string;created:number;media:string|null;media_kind:'image'|'video'|null;likes:number;liked:number;comments:number;reposts:number;reposted:number;rank_score:number;search_public:number}
 const postProjection=`
-    SELECT u.id,u.name,u.role,u.username,u.verified,u.teacher,u.dob,u.avatar_media,u.cover_media,u.bio,p.id post_id,p.body,p.created,p.media,p.media_kind,
+    SELECT u.id,u.name,u.role,u.username,u.verified,u.teacher,u.dob,u.avatar_media,u.cover_media,u.bio,p.id post_id,p.body,p.created,p.media,p.media_kind,p.search_public,
     (SELECT COUNT(*) FROM reactions r WHERE r.post_id=p.id AND kind='like') likes,
     EXISTS(SELECT 1 FROM reactions r WHERE r.post_id=p.id AND r.user_id=? AND kind='like') liked,
     (SELECT COUNT(*) FROM comments x WHERE x.post_id=p.id) comments,
@@ -772,7 +800,7 @@ const postProjection=`
     ) / (1 + ((strftime('%s','now') * 1000 - p.created) / 3600000.0) / 12.0) rank_score
     FROM posts p JOIN users u ON u.id=p.author
 `
-const postView=(r:PostRow,url:string)=>({id:r.post_id,author:person(r,url),body:r.body,time:time(r.created),likes:r.likes,liked:Boolean(r.liked),comments:r.comments,reposts:r.reposts,reposted:Boolean(r.reposted),kind:r.media_kind??undefined,media:r.media?new URL('/api/media/'+r.media,url).href:undefined})
+const postView=(r:PostRow,url:string)=>({id:r.post_id,author:person(r,url),body:r.body,time:time(r.created),likes:r.likes,liked:Boolean(r.liked),comments:r.comments,reposts:r.reposts,reposted:Boolean(r.reposted),searchPublic:Boolean(r.search_public),kind:r.media_kind??undefined,media:r.media?new URL('/api/media/'+r.media,url).href:undefined})
 app.get('/api/feed',async c=>{
   const id=c.get('user').id
   const following=c.req.query('following')==='1'
@@ -796,10 +824,14 @@ app.post('/api/posts',async c=>{
   let body=''
   let media:string|null=null
   let mediaKind:'image'|'video'|null=null
+  let searchPublic=false
   if(c.req.header('Content-Type')?.startsWith('multipart/form-data')){
     if(Number(c.req.header('Content-Length'))>30000000) return c.json({error:'Choose a video under 25 MB or an image under 5 MB.'},413)
     const form=await c.req.raw.formData().catch(()=>null)
     body=clean(form?.get('body'),1200)
+    const publicChoice=form?.get('searchPublic')
+    if(publicChoice!=null&&publicChoice!=='true'&&publicChoice!=='false')return c.json({error:'Choose a search visibility setting.'},400)
+    searchPublic=publicChoice==='true'
     const file:unknown=form?.get('image')??form?.get('video')
     if(file instanceof File){
       const isVideo=file.type.startsWith('video/')
@@ -809,11 +841,24 @@ app.post('/api/posts',async c=>{
       media=id
       await c.env.MEDIA.put(media,await file.arrayBuffer(),{httpMetadata:{contentType}})
     }
-  }else body=clean((await readBody(c.req.raw))?.body,1200)
+  }else{
+    const input=await readBody(c.req.raw)
+    if(input?.searchPublic!==undefined&&typeof input.searchPublic!=='boolean')return c.json({error:'Choose a search visibility setting.'},400)
+    searchPublic=input?.searchPublic===true
+    body=clean(input?.body,1200)
+  }
   if(!body&&!media) return c.json({error:'Write a post or add an image.'},400)
-  try{await db.prepare('INSERT INTO posts (id,author,body,created,media,media_kind) VALUES (?,?,?,?,?,?)').bind(id,c.get('user').id,body,now(),media,mediaKind).run()}
+  try{await db.prepare('INSERT INTO posts (id,author,body,created,media,media_kind,search_public) VALUES (?,?,?,?,?,?,?)').bind(id,c.get('user').id,body,now(),media,mediaKind,Number(searchPublic)).run()}
   catch(error){if(media) await c.env.MEDIA.delete(media);throw error}
   return c.json({id},201)
+})
+app.put('/api/posts/:id/search-visibility',async c=>{
+  const searchPublic=(await readBody(c.req.raw))?.searchPublic
+  if(typeof searchPublic!=='boolean')return c.json({error:'Choose a search visibility setting.'},400)
+  const post=await c.env.DB.prepare('UPDATE posts SET search_public=? WHERE id=? AND author=? RETURNING id')
+    .bind(Number(searchPublic),c.req.param('id'),c.get('user').id).first()
+  if(!post)return c.json({error:'Post unavailable.'},404)
+  return c.json({searchPublic})
 })
 app.put('/api/posts/:id/:kind',async c=>{
   const {id,kind}=c.req.param()
