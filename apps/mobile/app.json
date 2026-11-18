@@ -6,6 +6,11 @@
     "orientation": "portrait",
     "userInterfaceStyle": "automatic",
     "icon": "../../packages/core/assets/dameeland-logo.png",
+    "splash": {
+      "image": "../../packages/core/assets/dameeland-logo.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#4F25D6"
+    },
     "ios": {
       "bundleIdentifier": "com.dameeland.app"
     },

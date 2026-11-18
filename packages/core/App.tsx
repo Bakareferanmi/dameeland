@@ -103,6 +103,20 @@ function Motion({children,reduced,style,distance=10,axis='y'}:{children:React.Re
   const offset=animation.interpolate({inputRange:[0,1],outputRange:[distance,0]})
   return <Animated.View style={[style,{opacity:animation,transform:[axis==='x'?{translateX:offset}:{translateY:offset}]}]}>{children}</Animated.View>
 }
+function RefreshIndicator({reduced,color}:{reduced:boolean;color:string}){
+  const pulse=useRef(new Animated.Value(reduced?1:.35)).current
+  useEffect(()=>{
+    if(reduced){pulse.setValue(1);return}
+    const animation=Animated.loop(Animated.sequence([
+      Animated.timing(pulse,{toValue:1,duration:520,easing:Easing.inOut(Easing.quad),useNativeDriver:Platform.OS!=='web',isInteraction:false}),
+      Animated.timing(pulse,{toValue:.35,duration:520,easing:Easing.inOut(Easing.quad),useNativeDriver:Platform.OS!=='web',isInteraction:false}),
+    ]))
+    animation.start();return ()=>animation.stop()
+  },[pulse,reduced])
+  return <View accessibilityRole="progressbar" accessibilityLabel="Refreshing" style={{position:'absolute',top:0,left:0,right:0,height:3,zIndex:20,alignItems:'center',overflow:'hidden'}}>
+    <Animated.View style={{width:'46%',height:3,borderRadius:3,backgroundColor:color,transform:[{scaleX:pulse}]}}/>
+  </View>
+}
 function DefaultModalViewport({color,children}:{color:string;children:React.ReactNode}){
   return <View style={{flex:1,backgroundColor:color}}>{children}</View>
 }
@@ -1617,6 +1631,7 @@ export default function App(props:Props){
             </View>
             </>}
           </View>
+          {Platform.OS==='web'&&refreshing&&<RefreshIndicator reduced={reduced} color={theme.purple}/>}
           <ScrollView key={page==='Chat'?'chat:'+room?.id:page==='Profile'?'profile:'+profile.id:page} ref={scroll} testID="main-scroll" style={{flex:1}} keyboardShouldPersistTaps="handled" keyboardDismissMode="on-drag"
             refreshControl={Platform.OS==='web'?undefined:<RefreshControl refreshing={refreshing} onRefresh={()=>void refreshPage()} tintColor={theme.purple} colors={[theme.purple]}/>}
             onTouchStart={event=>{
@@ -1644,7 +1659,6 @@ export default function App(props:Props){
               }else restorePageScroll()
             }}
             contentContainerStyle={{padding:desktop?20:13,gap:page==='Chat'?9:16,width:'100%',maxWidth:page==='Chat'?desktop?900:undefined:640,alignSelf:'center'}}>
-            {Platform.OS==='web'&&refreshing&&<Copy center color={theme.muted}>Refreshing…</Copy>}
             <Motion key={page==='Chat'?'chat:'+room?.id:page} reduced={reduced} distance={page==='Chat'?5:8} style={stack}>{content[page]??<Suspense fallback={<LoadingScreen compact/>}><FeatureScreen key={page} page={page as ExtraPage} open={open} demo={demo} user={user} startQuiz={startQuiz} completed={completedLessons.length>0} wish={()=>selectOverlay({kind:'wish'})} wishes={wishes} incomingCall={()=>selectOverlay({kind:'call',video:false,person:people[0],ringing:true,incoming:true})}/></Suspense>}</Motion></ScrollView>
           {page==='Chat'&&<KeyboardAvoidingView behavior={Platform.OS==='ios'?'padding':undefined}>
             <View style={{...row,paddingHorizontal:12,paddingVertical:9,borderTopWidth:1,borderColor:theme.border,backgroundColor:theme.card}}>

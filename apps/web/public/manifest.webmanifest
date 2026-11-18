@@ -4,7 +4,7 @@
   "description": "Hang out, learn and have fun with your people.",
   "start_url": "/",
   "display": "standalone",
-  "background_color": "#FAF8FF",
+  "background_color": "#4F25D6",
   "theme_color": "#6A35F0",
   "orientation": "portrait-primary",
   "icons": [

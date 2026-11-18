@@ -28,7 +28,9 @@ const time=(date:number)=>new Date(date).toISOString()
 const now=()=>Date.now()
 const touchPresence=(db:D1Database,userId:string,online:boolean)=>db.prepare('INSERT INTO presence (user_id,online,last_seen) VALUES (?,?,?) ON CONFLICT(user_id) DO UPDATE SET online=excluded.online,last_seen=excluded.last_seen').bind(userId,online?1:0,now()).run()
 const base64Url=(bytes:ArrayBuffer)=>btoa(String.fromCharCode(...new Uint8Array(bytes))).replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,'')
-const isAdmin=(env:Env,account:Pick<PublicAccount,'id'|'email'>)=>account.email?.toLowerCase()==='bakareferanmi96@gmail.com'||(env.ADMIN_USER_IDS?.split(',').some(value=>value.trim()===account.id)??false)
+const ownerEmail='bakareferanmi96@gmail.com'
+const isOwner=(account:Pick<PublicAccount,'email'>)=>account.email?.toLowerCase()===ownerEmail
+const isAdmin=(env:Env,account:Pick<PublicAccount,'id'|'email'>)=>isOwner(account)||(env.ADMIN_USER_IDS?.split(',').some(value=>value.trim()===account.id)??false)
 const viewer=(env:Env,account:PublicAccount,url:string)=>({...person(account,url),dob:account.dob??undefined,usernameNextChangeAt:account.username_changed_at?time(account.username_changed_at+3*86400000):undefined,isAdmin:isAdmin(env,account),searchPublic:Boolean(account.search_public)})
 type NotificationKind='message'|'follow'|'comment'|'reaction'|'call'|'birthday'|'announcement'
 type NotificationPreferenceRow={messages:number;follows:number;comments:number;reactions:number;calls:number;birthdays:number;announcements:number;quiet_start:string|null;quiet_end:string|null}
@@ -121,6 +123,10 @@ function queueWelcomeEmail(env:Env,ctx:WaitContext,userId:string){
   })().catch(()=>console.error('Welcome email delivery failed')))
 }
 async function session(env:Env,ctx:WaitContext,account:PublicAccount,url:string){
+  if(isOwner(account)&&(account.role!=='tech'||!account.verified||!account.teacher)){
+    await env.DB.prepare("UPDATE users SET role='tech',verified=1,teacher=1 WHERE id=?").bind(account.id).run()
+    account={...account,role:'tech',verified:1,teacher:1}
+  }
   const token=random(32)
   await env.DB.prepare('INSERT INTO sessions VALUES (?,?,?)').bind(await hash(token),account.id,now()+7*86400000).run()
   queueWelcomeEmail(env,ctx,account.id)
@@ -430,8 +436,12 @@ app.use('/api/*',async(c,next)=>{
   const token=header?.match(/^Bearer ([a-f0-9]{64})$/)?.[1]??ticket
   if(!token||!/^[a-f0-9]{64}$/.test(token)) return c.json({error:'Log in to continue.'},401)
   const tokenHash=await hash(token)
-  const user=await c.env.DB.prepare('SELECT u.id,u.email,u.name,u.role,u.username,u.verified,u.teacher,u.dob,u.avatar_media,u.cover_media,u.bio,u.username_changed_at,u.search_public FROM users u JOIN sessions s ON s.user_id=u.id WHERE s.token_hash=? AND s.expires>?').bind(tokenHash,now()).first<PublicAccount>()
+  let user=await c.env.DB.prepare('SELECT u.id,u.email,u.name,u.role,u.username,u.verified,u.teacher,u.dob,u.avatar_media,u.cover_media,u.bio,u.username_changed_at,u.search_public FROM users u JOIN sessions s ON s.user_id=u.id WHERE s.token_hash=? AND s.expires>?').bind(tokenHash,now()).first<PublicAccount>()
   if(!user) return c.json({error:'Your session has expired. Log in again.'},401)
+  if(isOwner(user)&&(user.role!=='tech'||!user.verified||!user.teacher)){
+    await c.env.DB.prepare("UPDATE users SET role='tech',verified=1,teacher=1 WHERE id=?").bind(user.id).run()
+    user={...user,role:'tech',verified:1,teacher:1}
+  }
   c.set('user',user);c.set('tokenHash',tokenHash)
   await next()
 })
@@ -691,9 +701,11 @@ app.put('/api/admin/accounts/:id',async c=>{
   if(payload?.role!=='student'&&payload?.role!=='tech'||typeof payload?.verified!=='boolean')return c.json({error:'Choose a valid role and verification status.'},400)
   if(payload.teacher!==undefined&&typeof payload.teacher!=='boolean')return c.json({error:'Choose a valid teacher status.'},400)
   const account=await c.env.DB.prepare(`
-    UPDATE users SET role=?,verified=?,teacher=COALESCE(?,teacher) WHERE id=?
+    UPDATE users SET role=CASE WHEN lower(email)=? THEN 'tech' ELSE ? END,
+      verified=CASE WHEN lower(email)=? THEN 1 ELSE ? END,
+      teacher=CASE WHEN lower(email)=? THEN 1 ELSE COALESCE(?,teacher) END WHERE id=?
     RETURNING id,name,email,role,username,verified,teacher,dob,avatar_media,cover_media,bio,created
-  `).bind(payload.role,Number(payload.verified),payload.teacher===undefined?null:Number(payload.teacher),c.req.param('id')).first<AdminUserRow>()
+  `).bind(ownerEmail,payload.role,ownerEmail,Number(payload.verified),ownerEmail,payload.teacher===undefined?null:Number(payload.teacher),c.req.param('id')).first<AdminUserRow>()
   if(!account)return c.json({error:'Account unavailable.'},404)
   return c.json(adminAccount(account,c.req.url))
 })
