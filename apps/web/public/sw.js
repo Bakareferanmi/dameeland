@@ -1,5 +1,6 @@
-const CACHE_NAME='dameeland-shell-v9'
+const CACHE_NAME='dameeland-shell-v10'
 const APP_SHELL='/'
+const OFFLINE_SHELL='<!doctype html><html style="background:#4F25D6"><head><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="theme-color" content="#6A35F0"><style>html,body{width:100%;height:100%;margin:0;background:#4F25D6}body{display:grid;place-items:center}svg{width:116px;height:116px;animation:p 1.8s ease-in-out infinite}@keyframes p{50%{transform:scale(1.045)}}@media(prefers-reduced-motion:reduce){svg{animation:none}}</style></head><body><svg viewBox="0 0 64 64" aria-label="Opening dameen"><rect width="64" height="64" rx="18" fill="#6A35F0"/><path d="M10 52C10 32 19 18 32 18C45 18 54 32 54 52Q54 54 52 54H12Q10 54 10 52Z" fill="#C8F53F"/><circle cx="24" cy="38" r="8.5" fill="#fff"/><circle cx="40" cy="38" r="8.5" fill="#fff"/><circle cx="26.2" cy="36.2" r="3.7" fill="#1B1233"/><circle cx="42.2" cy="36.2" r="3.7" fill="#1B1233"/></svg></body></html>'
 self.addEventListener('install',event=>{event.waitUntil(caches.open(CACHE_NAME).then(cache=>cache.addAll([APP_SHELL,'/manifest.webmanifest'])).then(()=>self.skipWaiting()))})
 self.addEventListener('activate',event=>{
   event.waitUntil(Promise.all([
@@ -21,7 +22,7 @@ self.addEventListener('fetch',event=>{
         if(url.pathname===APP_SHELL)await cache.put(APP_SHELL,response.clone())
         return response
       }catch{
-        return await cache.match(APP_SHELL)||new Response('',{status:503,headers:{'Content-Type':'text/html'}})
+        return await cache.match(APP_SHELL)||new Response(OFFLINE_SHELL,{status:200,headers:{'Content-Type':'text/html; charset=utf-8','Cache-Control':'no-store'}})
       }
     })())
     return

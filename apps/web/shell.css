@@ -5,4 +5,3 @@ button,input,textarea{font:inherit}
 body.phone-preview{display:grid;place-items:center;background:#171027}
 .phone-preview #root{max-width:390px;max-height:844px;overflow:hidden;box-shadow:0 24px 90px #08051391}
 @media(min-width:440px) and (min-height:875px){.phone-preview #root{border-radius:30px}}
-@media(prefers-color-scheme:dark){body{background:#4F25D6}}
