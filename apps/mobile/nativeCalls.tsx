@@ -32,13 +32,24 @@ export const nativeCalls:CallMedia={
         peer.addEventListener('icegatheringstatechange',listener)
         return ()=>peer.removeEventListener('icegatheringstatechange',listener)
       }),
+      replaceVideoTrack:async track=>{
+        const sender=peer.getSenders().find(value=>value.track?.kind==='video')
+        if(!sender)throw new Error('Camera is not connected to this call.')
+        await sender.replaceTrack(track as MediaStreamTrack)
+      },
       close:()=>peer.close(),
     }
   },
+  async switchCamera(stream){
+    const track=stream.getVideoTracks()[0] as MediaStreamTrack&{_switchCamera?:()=>void}
+    if(!track?._switchCamera)throw new Error('The other camera is not available on this device.')
+    track._switchCamera()
+    return stream
+  },
   Surface({stream,local,video,full}){
     if(!video)return null
-    return <View style={{flex:full?1:undefined,borderRadius:full?0:14,overflow:'hidden',backgroundColor:'#120D1F'}}>
-      <RTCView streamURL={(stream as MediaStream).toURL()} mirror={local} objectFit={full?'cover':'contain'} style={full?{flex:1}:{width:'100%',aspectRatio:16/9}}/>
+    return <View style={full?{flex:1,width:'100%',height:'100%',overflow:'hidden',backgroundColor:'#120D1F'}:{borderRadius:14,overflow:'hidden',backgroundColor:'#120D1F'}}>
+      <RTCView streamURL={(stream as MediaStream).toURL()} mirror={local} objectFit={full?'cover':'contain'} style={full?{width:'100%',height:'100%'}:{width:'100%',aspectRatio:16/9}}/>
     </View>
   },
 }

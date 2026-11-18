@@ -22,6 +22,8 @@ const sampleFollows:Record<string,string[]>={ada:['tobi','zee'],tobi:['ada','cod
 
 type Page=ExtraPage|'Home'|'Learn'|'Explore'|'Play'|'Messages'|'Chat'|'Notifications'|'Profile'|'Settings'|'Quiz'|'Admin'
 type Room={id:string;person:Person;lastActivity?:string;lastActivityAt?:string}
+type RoomPage={items:Room[];nextCursor:string|null}
+type MessagePage={items:Note[];nextCursor:string|null}
 type Session={token:string;user:Viewer}
 type AuthMode='signup'|'login'
 type Credentials={firstName:string;lastName:string;username:string;email:string;password:string;dob:string}
@@ -93,6 +95,7 @@ const shortTime=(value:string)=>{
 }
 const withinEditWindow=(value:string|undefined)=>!!value&&Number.isFinite(Date.parse(value))&&Date.now()-Date.parse(value)<=3600000
 const callLength=(seconds:number)=>seconds<60?seconds+'s':Math.floor(seconds/60)+'m '+String(seconds%60).padStart(2,'0')+'s'
+const mergeNotes=(current:Note[],incoming:Note[])=>[...new Map([...current,...incoming].map(item=>[item.id,item])).values()].sort((a,b)=>Date.parse(a.createdAt??'')-Date.parse(b.createdAt??''))
 function Motion({children,reduced,style,distance=10,axis='y'}:{children:React.ReactNode;reduced:boolean;style?:ViewStyle;distance?:number;axis?:'x'|'y'}){
   const animation=useRef(new Animated.Value(reduced?1:0)).current
   useEffect(()=>{
@@ -397,6 +400,9 @@ export default function App(props:Props){
   const searchTerm=query.trim().replace(/^@+/, '')
   const [follows,setFollows]=useState<Record<string,boolean>>({})
   const [rooms,setRooms]=useState<Room[]>(demo?localRooms:[])
+  const [roomsLoading,setRoomsLoading]=useState(false)
+  const [roomsLoadingMore,setRoomsLoadingMore]=useState(false)
+  const [roomsNextCursor,setRoomsNextCursor]=useState<string|null>(null)
   const [room,setRoom]=useState<Room|null>(null)
   const [inboxTab,setInboxTab]=useState('Chats')
   const [profile,setProfile]=useState<Person>(me)
@@ -410,6 +416,9 @@ export default function App(props:Props){
   const [notes,setNotes]=useState<Record<string,Note[]>>({})
   const [commentKeyboardInset,setCommentKeyboardInset]=useState(0)
   const [chats,setChats]=useState<Record<string,Note[]>>(demo?initialChats:{})
+  const [messageLoading,setMessageLoading]=useState(false)
+  const [messageLoadingOlder,setMessageLoadingOlder]=useState(false)
+  const [messageNextCursor,setMessageNextCursor]=useState<Record<string,string|null>>({})
   const [draft,setDraft]=useState(''),[attachment,setAttachment]=useState<Media|null>(null)
   const [postSearchPublic,setPostSearchPublic]=useState(false)
   const [profileSearchPublic,setProfileSearchPublic]=useState(false)
@@ -525,8 +534,8 @@ export default function App(props:Props){
   useEffect(()=>{
     if(demo||!token||page!=='Messages')return
     let alive=true
-    setLoading(true);setFeedError('')
-    api<Room[]>(base,'/rooms',{},token).then(data=>{if(alive)setRooms(data)}).catch(reason=>{if(alive)setFeedError(errorMessage(reason))}).finally(()=>{if(alive)setLoading(false)})
+    setRoomsLoading(true);setFeedError('')
+    api<RoomPage>(base,'/rooms?paged=1',{},token).then(data=>{if(alive){setRooms(data.items);setRoomsNextCursor(data.nextCursor)}}).catch(reason=>{if(alive)setFeedError(errorMessage(reason))}).finally(()=>{if(alive)setRoomsLoading(false)})
     return ()=>{alive=false}
   },[base,demo,token,page,retry])
   useEffect(()=>{
@@ -580,8 +589,9 @@ export default function App(props:Props){
   const answeredCall=useRef('')
   const webCallMedia=React.useMemo(browserCallMedia,[])
   const callMedia=props.callMedia??webCallMedia
-  const refreshConversation=(id:string)=>api<Note[]>(base,'/rooms/'+id+'/messages',{},token).then(data=>{
-    setChats(previous=>({...previous,[id]:[...data,...(previous[id]??[]).filter(item=>!data.some(saved=>saved.id===item.id))].slice(-140)}))
+  const refreshConversation=(id:string)=>api<MessagePage>(base,'/rooms/'+id+'/messages?paged=1',{},token).then(data=>{
+    setMessageNextCursor(previous=>({...previous,[id]:data.nextCursor}))
+    setChats(previous=>({...previous,[id]:mergeNotes(previous[id]??[],data.items)}))
   })
   const sendCall=async(signal:CallSignal)=>{
     try{
@@ -652,11 +662,13 @@ export default function App(props:Props){
     if(demo||!token||page!=='Chat'||!roomId)return
     let active=true
     let lastSync=0
+    setMessageLoading(!(chats[roomId]?.length))
     const endpoint=base||((typeof window!=='undefined'&&window.location?.origin)||'')
     const url=endpoint.replace(/^http/,'ws').replace(/\/$/,'')+'/api/rooms/'+roomId+'/socket'
-    const refresh=()=>api<Note[]>(base,'/rooms/'+roomId+'/messages',{},token)
-      .then(data=>{if(active){lastSync=Date.now();setChats(previous=>({...previous,[roomId]:[...data,...(previous[roomId]??[]).filter(m=>!data.some(n=>n.id===m.id))].slice(-140)}));setFeedError('');if(foreground()&&data.some(item=>!item.call&&item.author.id!==user.id&&!item.readAt))void api(base,'/rooms/'+roomId+'/read',{method:'PUT'},token).catch(()=>{})}})
+    const refresh=()=>api<MessagePage>(base,'/rooms/'+roomId+'/messages?paged=1',{},token)
+      .then(data=>{if(active){lastSync=Date.now();setMessageNextCursor(previous=>({...previous,[roomId]:data.nextCursor}));setChats(previous=>({...previous,[roomId]:mergeNotes(previous[roomId]??[],data.items)}));setFeedError('');if(foreground()&&data.items.some(item=>!item.call&&item.author.id!==user.id&&!item.readAt))void api(base,'/rooms/'+roomId+'/read',{method:'PUT'},token).catch(()=>{})}})
       .catch(reason=>{if(active)setFeedError(errorMessage(reason))})
+      .finally(()=>{if(active)setMessageLoading(false)})
     const socket=new WebSocket(url,['dameeland','ticket.'+token])
     socket.onopen=()=>{if(active)void refresh()}
     socket.onmessage=event=>{
@@ -1309,6 +1321,26 @@ export default function App(props:Props){
       }
     }catch(reason){fail(reason)}finally{setBusy(false)}
   }
+  async function loadMoreRooms(){
+    if(demo||!token||!roomsNextCursor||roomsLoadingMore)return
+    setRoomsLoadingMore(true)
+    try{
+      const data=await api<RoomPage>(base,'/rooms?paged=1&cursor='+encodeURIComponent(roomsNextCursor),{},token)
+      setRooms(previous=>[...previous,...data.items.filter(item=>!previous.some(saved=>saved.id===item.id))])
+      setRoomsNextCursor(data.nextCursor)
+    }catch(reason){fail(reason)}finally{setRoomsLoadingMore(false)}
+  }
+  async function loadOlderMessages(){
+    if(demo||!token||!room||!messageNextCursor[room.id]||messageLoadingOlder)return
+    const id=room.id
+    setMessageLoadingOlder(true)
+    stickToChatEnd.current=false
+    try{
+      const data=await api<MessagePage>(base,'/rooms/'+id+'/messages?paged=1&before='+encodeURIComponent(messageNextCursor[id]!),{},token)
+      setChats(previous=>({...previous,[id]:mergeNotes(data.items,previous[id]??[])}))
+      setMessageNextCursor(previous=>({...previous,[id]:data.nextCursor}))
+    }catch(reason){fail(reason)}finally{setMessageLoadingOlder(false)}
+  }
   const displayedPosts=demo&&followingOnly?posts.filter(p=>p.author.id===user.id||follows[p.author.id]):posts
   async function refreshPage(){
     if(refreshLock.current||stage!=='app')return
@@ -1328,11 +1360,11 @@ export default function App(props:Props){
           const people=await api<(Person&{following:boolean})[]>(base,'/people?q='+encodeURIComponent(query),{},token)
           if(session===demoSession.current){setResults(people);setFollows(previous=>({...previous,...Object.fromEntries(people.map(person=>[person.id,person.following]))}));setSearchError('')}
         }else if(page==='Messages'){
-          const rooms=await api<Room[]>(base,'/rooms',{},token)
-          if(session===demoSession.current)setRooms(rooms)
+          const rooms=await api<RoomPage>(base,'/rooms?paged=1',{},token)
+          if(session===demoSession.current){setRooms(rooms.items);setRoomsNextCursor(rooms.nextCursor)}
         }else if(page==='Chat'&&room){
-          const messages=await api<Note[]>(base,'/rooms/'+room.id+'/messages',{},token)
-          if(session===demoSession.current)setChats(previous=>({...previous,[room.id]:messages}))
+          const messages=await api<MessagePage>(base,'/rooms/'+room.id+'/messages?paged=1',{},token)
+          if(session===demoSession.current){setChats(previous=>({...previous,[room.id]:messages.items}));setMessageNextCursor(previous=>({...previous,[room.id]:messages.nextCursor}))}
         }else if(page==='Profile'){
           const [person,stats]=await Promise.all([
             api<Person|Viewer>(base,profile.id===user.id?'/me':'/people/'+encodeURIComponent(profile.id),{},token),
@@ -1473,7 +1505,7 @@ export default function App(props:Props){
   const inbox=<>
     <Segmented options={['Chats','Groups','Requests']} selected={inboxTab} onSelect={setInboxTab}/>
     {demo&&inboxTab==='Chats'&&<Card>{section('Active now')}<View style={row}>{[people[0],people[1],people[2]].map(person=><Pressable key={person.id} accessibilityRole="button" accessibilityLabel={'Message '+person.name} onPress={()=>void messagePerson(person)}><Avatar person={person} ring size={42}/></Pressable>)}</View></Card>}
-    {feedError?failure:loading?<Loading/>:roomList.length?roomList.map(r=><Pressable key={r.id} accessibilityRole="button" accessibilityLabel={'Open conversation with '+displayHandle(r.person)} onPress={()=>openRoom(r)}><Card style={{...row,minHeight:72}}><Avatar person={r.person} size={50}/><View style={{flex:1,minWidth:0,gap:3}}><View style={spread}><PersonName person={r.person}/>{r.lastActivityAt&&<Copy color={theme.muted} size={11}>{shortTime(r.lastActivityAt)}</Copy>}</View><Copy color={theme.muted} size={12}>{chats[r.id]?.at(-1)?.body??r.lastActivity??'Open conversation'}</Copy></View></Card></Pressable>):<Empty title={inboxTab==='Chats'?'No messages yet':inboxTab==='Groups'?'No groups yet':'No message requests'} detail={inboxTab==='Chats'?'Find a classmate and start a chat.':inboxTab==='Groups'?'Group conversations are available in the preview.':'New requests will appear here.'} action={inboxTab==='Chats'?'Find people':undefined} onPress={()=>open('Explore')}/>}
+    {feedError&&!rooms.length?failure:roomsLoading&&!rooms.length?<Loading/>:roomList.length?<>{roomList.map(r=><Motion key={r.id} reduced={reduced} distance={4}><Pressable accessibilityRole="button" accessibilityLabel={'Open conversation with '+displayHandle(r.person)} onPress={()=>openRoom(r)}><Card style={{...row,minHeight:72}}><Avatar person={r.person} size={50}/><View style={{flex:1,minWidth:0,gap:3}}><View style={spread}><PersonName person={r.person}/>{r.lastActivityAt&&<Copy color={theme.muted} size={11}>{shortTime(r.lastActivityAt)}</Copy>}</View><Copy color={theme.muted} size={12}>{chats[r.id]?.at(-1)?.body??r.lastActivity??'Open conversation'}</Copy></View></Card></Pressable></Motion>)}{roomsNextCursor&&inboxTab==='Chats'&&<Button label={roomsLoadingMore?'Loading conversations…':'Load more conversations'} variant="secondary" disabled={roomsLoadingMore} onPress={()=>void loadMoreRooms()}/>}</>:<Empty title={inboxTab==='Chats'?'No messages yet':inboxTab==='Groups'?'No groups yet':'No message requests'} detail={inboxTab==='Chats'?'Find a classmate and start a chat.':inboxTab==='Groups'?'Group conversations are available in the preview.':'New requests will appear here.'} action={inboxTab==='Chats'?'Find people':undefined} onPress={()=>open('Explore')}/>} 
   </>
   const lastOwnMessageId=room?[...(chats[room.id]??[])].reverse().find(note=>!note.call&&note.author.id===user.id)?.id:undefined
   const chat=room&&<>
@@ -1482,6 +1514,8 @@ export default function App(props:Props){
     {demo&&room.person.group&&<Card><Copy weight={800}>Pinned message</Copy><Copy>Bring one practice question to the next study session.</Copy><Button label="Join group voice call" leading="ph" variant="secondary" onPress={()=>selectOverlay({kind:'call',video:false,person:room.person,ringing:true})}/></Card>}
     {demo&&room.id==='ada'&&<Card><Copy size={12} color={theme.muted}>Call log · Voice call · 2 min</Copy><Button label={voicePlaying?'Stop voice note preview':'Preview voice note · 0:08'} leading="play" variant="secondary" onPress={()=>setVoicePlaying(!voicePlaying)}/>{voicePlaying&&<Copy>Transcript: Can we revise quadratic equations after school?</Copy>}</Card>}
     {!!feedError&&<Empty title="Reconnecting" detail={feedError}/>}
+    {messageLoading&&!(chats[room.id]?.length)&&<Loading/>}
+    {!messageLoading&&messageNextCursor[room.id]&&<View style={{alignItems:'center'}}><Button label={messageLoadingOlder?'Loading earlier messages…':'Load earlier messages'} variant="plain" disabled={messageLoadingOlder} onPress={()=>void loadOlderMessages()}/></View>}
     {(chats[room.id]??[]).map(item=>item.call?<View key={item.id} accessibilityLabel={item.body} style={{alignSelf:'center',alignItems:'center',width:'100%',maxWidth:320,paddingVertical:16,gap:6}}>
       <View style={{width:44,height:44,borderRadius:22,backgroundColor:item.call.outcome==='missed'?theme.chip:theme.card,borderWidth:1,borderColor:theme.border,alignItems:'center',justifyContent:'center'}}><Icon name={item.call.video?'vid':'ph'} color={item.call.outcome==='missed'?'#D13438':theme.purple} size={21}/></View>
       <Copy center weight={800} color={item.call.outcome==='missed'?'#D13438':theme.text}>{item.body}</Copy>
@@ -1497,7 +1531,7 @@ export default function App(props:Props){
         {own&&verifiedBenefits&&<View style={{...row,gap:4,flexWrap:'wrap'}}>{canEdit&&<Button label="Edit" variant="plain" onPress={()=>{setComment(item.body);selectOverlay({kind:'editMessage',message:item})}}/>}<Button label="Delete" variant="plain" onPress={()=>void deleteMessage(item)}/></View>}
       </View>
     })())}
-    {!(chats[room.id]?.length)&&!feedError&&<Empty title="Say hello" detail="Messages are visible to both people in this conversation."/>}
+    {!messageLoading&&!(chats[room.id]?.length)&&!feedError&&<Empty title="Say hello" detail="Messages are visible to both people in this conversation."/>}
   </>
   const ownProfile=profile.id===user.id
   const currentStats=profileStats?.id===profile.id?profileStats:undefined
@@ -1810,7 +1844,7 @@ export default function App(props:Props){
     </Modal>
     <Modal presentationStyle="fullScreen" visible={Boolean(!demo&&page==='Chat'&&room&&roomCall.call&&callMedia)} animationType={reduced?'none':'fade'} onRequestClose={()=>roomCall.end()}>
       <ModalViewport color="#130D25">
-        {room&&roomCall.call&&callMedia&&<RoomCall key={roomCall.call.id} person={room.person} media={callMedia} call={roomCall.call} accept={roomCall.accept} end={()=>roomCall.end()}/>}
+        {room&&roomCall.call&&callMedia&&<RoomCall key={roomCall.call.id} person={room.person} media={callMedia} call={roomCall.call} accept={roomCall.accept} end={()=>roomCall.end()} switchCamera={()=>void roomCall.switchCamera()} canSwitchCamera={roomCall.canSwitchCamera}/>} 
       </ModalViewport>
     </Modal>
   </View></Design.Provider>

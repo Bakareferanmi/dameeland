@@ -1095,19 +1095,24 @@ app.put('/api/people/:id/follow',async c=>{
 const member=(db:D1Database,room:string,user:string)=>db.prepare('SELECT id FROM rooms WHERE id=? AND (first_user=? OR second_user=?)').bind(room,user,user).first()
 app.get('/api/rooms',async c=>{
   const user=c.get('user').id
+  const paged=c.req.query('paged')==='1'
+  const cursor=Math.max(0,Math.min(10000,Number.parseInt(c.req.query('cursor')??'0',10)||0))
+  const limit=paged?21:60
   const {results}=await c.env.DB.prepare(`SELECT r.id room,u.id,u.name,u.role,u.username,u.verified,u.teacher,u.dob,u.avatar_media,u.cover_media,u.bio,
     m.body last_body,m.created message_at,x.video call_video,x.caller call_caller,x.state call_state,x.connected_at call_connected_at,x.ended_at call_ended_at,x.created call_at
     FROM rooms r JOIN users u ON u.id=CASE WHEN r.first_user=? THEN r.second_user ELSE r.first_user END
     LEFT JOIN messages m ON m.id=(SELECT id FROM messages WHERE room=r.id ORDER BY created DESC LIMIT 1)
     LEFT JOIN calls x ON x.id=(SELECT id FROM calls WHERE room=r.id AND (state IN ('ended','declined') OR (state IN ('offered','ringing') AND expires<?)) ORDER BY created DESC LIMIT 1)
-    WHERE r.first_user=? OR r.second_user=? ORDER BY MAX(COALESCE(m.created,0),COALESCE(x.created,0)) DESC LIMIT 60`).bind(user,now(),user,user).all<PublicAccount&{room:string;last_body:string|null;message_at:number|null;call_video:number|null;call_caller:string|null;call_state:string|null;call_connected_at:number|null;call_ended_at:number|null;call_at:number|null}>()
-  return c.json(results.map(r=>{
+    WHERE r.first_user=? OR r.second_user=? ORDER BY MAX(COALESCE(m.created,0),COALESCE(x.created,0)) DESC LIMIT ? OFFSET ?`).bind(user,now(),user,user,limit,paged?cursor:0).all<PublicAccount&{room:string;last_body:string|null;message_at:number|null;call_video:number|null;call_caller:string|null;call_state:string|null;call_connected_at:number|null;call_ended_at:number|null;call_at:number|null}>()
+  const rooms=results.slice(0,paged?20:60).map(r=>{
     const latestCall=!!r.call_at&&r.call_at>(r.message_at??0)
     const duration=r.call_connected_at?Math.max(0,Math.floor(((r.call_ended_at??now())-r.call_connected_at)/1000)):0
     const label=r.call_video?'video call':'voice call'
     const callActivity=r.call_connected_at?`${r.call_video?'Video call':'Voice call'} · ${Math.floor(duration/60)}m ${String(duration%60).padStart(2,'0')}s`:r.call_state==='declined'?r.call_caller===user?'Call declined':'Declined '+label:r.call_caller===user?'No answer':'Missed '+label
     return {id:r.room,person:person(r,c.req.url),lastActivity:latestCall?callActivity:r.last_body??undefined,lastActivityAt:r.call_at&&latestCall?time(r.call_at):r.message_at?time(r.message_at):undefined}
-  }))
+  })
+  c.header('Cache-Control','no-store')
+  return c.json(paged?{items:rooms,nextCursor:results.length>20?String(cursor+20):null}:rooms)
 })
 app.post('/api/rooms',async c=>{
   const target=clean((await readBody(c.req.raw))?.target,80)
@@ -1122,12 +1127,17 @@ app.post('/api/rooms',async c=>{
 app.get('/api/rooms/:id/messages',async c=>{
   const room=c.req.param('id')
   if(!await member(c.env.DB,room,c.get('user').id)) return c.json({error:'Conversation unavailable.'},404)
+  const paged=c.req.query('paged')==='1'
+  const beforeRaw=Number(c.req.query('before'))
+  const before=Number.isFinite(beforeRaw)&&beforeRaw>0?beforeRaw:now()+1
+  const messageLimit=paged?31:100
+  const callLimit=paged?31:40
   const [messages,calls]=await Promise.all([
-    c.env.DB.prepare('SELECT u.id,u.name,u.role,u.username,u.verified,u.teacher,u.dob,u.avatar_media,u.cover_media,u.bio,m.id note_id,m.body,m.read_at,m.created,m.edited_at FROM messages m JOIN users u ON u.id=m.author WHERE room=? ORDER BY m.created DESC LIMIT 100').bind(room).all<NoteRow&{read_at:number|null;created:number}>(),
+    c.env.DB.prepare('SELECT u.id,u.name,u.role,u.username,u.verified,u.teacher,u.dob,u.avatar_media,u.cover_media,u.bio,m.id note_id,m.body,m.read_at,m.created,m.edited_at FROM messages m JOIN users u ON u.id=m.author WHERE room=? AND m.created<? ORDER BY m.created DESC LIMIT ?').bind(room,before,messageLimit).all<NoteRow&{read_at:number|null;created:number}>(),
     c.env.DB.prepare(`SELECT x.id,x.caller,x.callee,x.video,x.state,x.created,x.expires,x.connected_at,x.ended_at,
       u.name,u.role,u.username,u.verified,u.teacher,u.dob,u.avatar_media,u.cover_media,u.bio
-      FROM calls x JOIN users u ON u.id=x.caller WHERE x.room=? AND (x.state IN ('ended','declined') OR (x.state IN ('offered','ringing') AND x.expires<?))
-      ORDER BY x.created DESC LIMIT 40`).bind(room,now()).all<CallRow&PublicAccount>(),
+      FROM calls x JOIN users u ON u.id=x.caller WHERE x.room=? AND x.created<? AND (x.state IN ('ended','declined') OR (x.state IN ('offered','ringing') AND x.expires<?))
+      ORDER BY x.created DESC LIMIT ?`).bind(room,before,now(),callLimit).all<CallRow&PublicAccount>(),
   ])
   const viewer=c.get('user').id
   const items=[
@@ -1139,8 +1149,12 @@ app.get('/api/rooms/:id/messages',async c=>{
       return {id:'call:'+r.id,author:person({...r,id:r.caller},c.req.url),body,createdAt:time(r.created),call:{id:r.id,video:Boolean(r.video),outcome:connected?'completed':r.state==='declined'?'declined':'missed',durationSeconds:connected?Math.max(0,Math.floor(((r.ended_at??now())-r.connected_at!)/1000)):0}}
     }),
   ]
+  const ordered=items.sort((a,b)=>Date.parse(a.createdAt)-Date.parse(b.createdAt))
   c.header('Cache-Control','no-store')
-  return c.json(items.sort((a,b)=>Date.parse(a.createdAt)-Date.parse(b.createdAt)).slice(-140))
+  if(!paged)return c.json(ordered.slice(-140))
+  const page=ordered.slice(-30)
+  const oldest=page[0]?.createdAt
+  return c.json({items:page,nextCursor:ordered.length>30&&oldest?String(Date.parse(oldest)):null})
 })
 app.put('/api/rooms/:id/read',async c=>{
   const room=c.req.param('id'),user=c.get('user').id

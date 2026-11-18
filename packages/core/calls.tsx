@@ -4,7 +4,7 @@ import type {CallSignal} from './callSignal'
 import {Avatar,Button,Copy,Icon,displayHandle,row,useDesign,type Glyph} from './ui'
 import type {Person} from './index'
 
-type Track={enabled:boolean;stop:()=>void}
+type Track={enabled:boolean;stop:()=>void;_switchCamera?:()=>void}
 export type CallStream={getTracks:()=>Track[];getAudioTracks:()=>Track[];getVideoTracks:()=>Track[]}
 type Description={type:'offer'|'answer';sdp:string}
 export type CallPeer={
@@ -17,11 +17,13 @@ export type CallPeer={
   onTrack:(listener:(stream:CallStream)=>void)=>void
   onState:(listener:(state:string)=>void)=>void
   waitForIce:()=>Promise<void>
+  replaceVideoTrack:(track:Track)=>Promise<void>
   close:()=>void
 }
 export type CallMedia={
   getStream:(video:boolean)=>Promise<CallStream>
   createPeer:()=>CallPeer
+  switchCamera?:(stream:CallStream,peer:CallPeer)=>Promise<CallStream>
   Surface:React.ComponentType<{stream:CallStream;local?:boolean;video:boolean;full?:boolean}>
 }
 export const callIceServers=[{urls:'stun:stun.cloudflare.com:3478'}]
@@ -51,6 +53,7 @@ function WebSurface({stream,local,video,full}:{stream:CallStream;local?:boolean;
 
 export function browserCallMedia():CallMedia|undefined{
   if(Platform.OS!=='web'||typeof RTCPeerConnection==='undefined'||!globalThis.navigator?.mediaDevices?.getUserMedia)return
+  let facing:'user'|'environment'='user'
   return {
     getStream:video=>navigator.mediaDevices.getUserMedia(callConstraints(video)),
     createPeer:()=>{
@@ -68,8 +71,22 @@ export function browserCallMedia():CallMedia|undefined{
           peer.addEventListener('icegatheringstatechange',listener)
           return ()=>peer.removeEventListener('icegatheringstatechange',listener)
         }),
+        replaceVideoTrack:async track=>{
+          const sender=peer.getSenders().find(value=>value.track?.kind==='video')
+          if(!sender)throw new Error('Camera is not connected to this call.')
+          await sender.replaceTrack(track as MediaStreamTrack)
+        },
         close:()=>peer.close(),
       }
+    },
+    switchCamera:async(stream,peer)=>{
+      facing=facing==='user'?'environment':'user'
+      const next=await navigator.mediaDevices.getUserMedia({audio:false,video:{width:1280,height:720,frameRate:30,facingMode:{ideal:facing}}})
+      const nextTrack=next.getVideoTracks()[0]
+      if(!nextTrack)throw new Error('The other camera is not available.')
+      await peer.replaceVideoTrack(nextTrack)
+      stream.getVideoTracks().forEach(track=>track.stop())
+      return new MediaStream([...stream.getAudioTracks() as MediaStreamTrack[],nextTrack])
     },
     Surface:WebSurface,
   }
@@ -189,7 +206,15 @@ export function useRoomCall(media:CallMedia|undefined,roomKey:string|undefined,s
     }
     end(signal.kind==='busy'?'The other person is on a call.':signal.kind==='unavailable'?'The other person needs to open this chat.':'The other person ended the call.',false)
   }
-  return {call,start,receive,end,accept:()=>{const active=current.current;if(active?.state==='incoming')void connect(active)}}
+  async function switchCamera(){
+    const active=current.current
+    if(!media?.switchCamera||!active?.video||!active.local||!active.peer)return
+    try{
+      active.local=await media.switchCamera(active.local,active.peer)
+      update(active)
+    }catch(reason){notify(reason instanceof Error?reason.message:'Couldn’t switch camera.')}
+  }
+  return {call,start,receive,end,switchCamera,canSwitchCamera:Boolean(media?.switchCamera),accept:()=>{const active=current.current;if(active?.state==='incoming')void connect(active)}}
 }
 
 const callLabels={incoming:'Incoming call',preparing:'Starting call…',calling:'Calling…',ringing:'Ringing…',connecting:'Connecting…',connected:'Connected'}
@@ -202,7 +227,7 @@ function CallControl({label,glyph,onPress,danger=false,active=false}:{label:stri
     <Copy color="#FFFFFF" size={12}>{label}</Copy>
   </Pressable>
 }
-export function RoomCall({person,media,call,accept,end}:{person:Person;media:CallMedia;call:ActiveCall;accept:()=>void;end:()=>void}){
+export function RoomCall({person,media,call,accept,end,switchCamera,canSwitchCamera}:{person:Person;media:CallMedia;call:ActiveCall;accept:()=>void;end:()=>void;switchCamera:()=>void;canSwitchCamera:boolean}){
   const [muted,setMuted]=useState(false)
   const [cameraOff,setCameraOff]=useState(false)
   const [tick,setTick]=useState(0)
@@ -240,9 +265,11 @@ export function RoomCall({person,media,call,accept,end}:{person:Person;media:Cal
       <View style={{...row,justifyContent:'space-around',flexWrap:'wrap'}}>
         {call.local&&<CallControl label={muted?'Unmute':'Mute'} glyph={muted?'micOff':'mic'} active={muted} onPress={()=>{call.local?.getAudioTracks().forEach(track=>{track.enabled=muted});setMuted(!muted)}}/>}
         {call.local&&call.video&&<CallControl label={cameraOff?'Camera on':'Camera off'} glyph={cameraOff?'vidOff':'vid'} active={cameraOff} onPress={()=>{call.local?.getVideoTracks().forEach(track=>{track.enabled=cameraOff});setCameraOff(!cameraOff)}}/>}
+        {call.local&&call.video&&canSwitchCamera&&<CallControl label="Switch camera" glyph="rp" onPress={switchCamera}/>} 
         {call.state==='incoming'&&<CallControl label="Accept call" glyph="ph" active onPress={accept}/>}
         <CallControl label={call.state==='incoming'?'Decline call':'End call'} glyph="hangup" danger onPress={end}/>
       </View>
     </View>
   </View>
 }
+
