@@ -181,7 +181,7 @@ function Intro({step,onNext,onBack,onSkip,reduced,desktop,showPublicBrand}:{step
       <View style={{width:'100%',maxWidth:desktop?380:undefined,gap:6,paddingTop:18}}>
         <Button label={step===2?'Get started':'Continue'} variant="fun" onPress={onNext}/>
         {step>0&&<Pressable accessibilityRole="button" onPress={onBack} style={{...row,justifyContent:'center',minHeight:44}}><Icon name="back" color="#fff" size={17}/><Copy color="#fff" weight={800}>Back</Copy></Pressable>}
-        {showPublicBrand&&<a href="/about/" style={{...font(700),display:'flex',alignItems:'center',justifyContent:'center',minHeight:44,color:'#fff',fontSize:13}}>About dameen</a>}
+        {showPublicBrand&&<View style={{...row,justifyContent:'center',gap:18}}><a href="/about/" style={{...font(700),display:'flex',alignItems:'center',justifyContent:'center',minHeight:44,color:'#fff',fontSize:13}}>About dameen</a><a href="/download/" style={{...font(800),display:'flex',alignItems:'center',justifyContent:'center',minHeight:44,color:'#C8F53F',fontSize:13}}>Get Android app</a></View>}
       </View>
     </View>
   </ScrollView>
@@ -234,7 +234,7 @@ function Auth({base,demo,busy,error,submit,onGoogle,onCancelGoogle,googlePending
       <GoogleButton signup={mode==='signup'} disabled={busy||mode==='signup'&&usernameStatus==='taken'} onPress={()=>onGoogle(mode,handle,birthIso(birth))}/>
       {googlePending&&<Button label="Cancel Google sign-in" variant="plain" onPress={onCancelGoogle}/>}
       {demo&&<><Button label="Explore demo" variant="secondary" onPress={onDemo}/><Copy color={theme.muted} center size={12}>Look around with sample data. Nothing is saved.</Copy></>}
-      {Platform.OS==='web'&&!demo&&React.createElement('a',{href:'/about/',style:{color:theme.ink,textAlign:'center',fontSize:13}},'About dameen')}
+      {Platform.OS==='web'&&!demo&&<View style={{...row,justifyContent:'center',gap:18}}>{React.createElement('a',{href:'/about/',style:{color:theme.ink,textAlign:'center',fontSize:13}},'About dameen')}{React.createElement('a',{href:'/download/',style:{color:'#6A35F0',textAlign:'center',fontSize:13,fontWeight:800}},'Get Android app')}</View>}
       </>}
     </Motion>
   </ScrollView>
