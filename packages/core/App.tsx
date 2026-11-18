@@ -88,7 +88,7 @@ type Props={
   callMedia?:CallMedia;
   notificationTarget?:string;
   modalViewport?:React.ComponentType<{color:string;children:React.ReactNode}>;
-  pickMedia?:()=>Promise<Media|null>; pickCommentMedia?:()=>Promise<Media|null>; renderGif?:GifRenderer; share?:(url:string)=>Promise<void>;
+  pickMedia?:()=>Promise<Media|null>; pickCommentMedia?:()=>Promise<Media|null>; renderGif?:GifRenderer; share?:(url:string,details?:{title:string;message:string})=>Promise<void>;
   requestNotifications?:()=>Promise<boolean>; getNotificationDevice?:()=>Promise<{platform:'android'|'ios';token:string}|null>; notifyDevice?:(title:string,body:string)=>Promise<void>;
   onReady?:()=>void;
 }
@@ -906,7 +906,12 @@ export default function App(props:Props){
     return ()=>clearTimeout(timer)
   },[voicePlaying])
   const showProfile=(person:Person)=>open('Profile',{profile:demo?demoAccounts.find(account=>account.person.id===person.id)?.person??person:person})
-  const sharedLink=(kind:'profile'|'post',id:string)=>kind==='post'?'https://dameen.app/p/'+encodeURIComponent(id):profile.username?'https://dameen.app/u/'+encodeURIComponent(profile.username):'https://dameen.app/?profile='+encodeURIComponent(id)
+  const sharedLink=(kind:'profile'|'post',id:string)=>kind==='post'?'https://dameen.app/p/'+encodeURIComponent(id):'https://dameen.app/u/'+encodeURIComponent(id)
+  const shareProfile=(person:Person)=>{
+    if(!person.username){notify('Set a username before sharing this profile.','error');return}
+    const handle='@'+person.username
+    void props.share?.(sharedLink('profile',person.username),{title:handle+' on dameen',message:'View '+handle+' on dameen'}).then(()=>notify('Profile link ready to share')).catch(fail)
+  }
   useEffect(()=>{
     if(sharedLinkHandled.current||stage!=='app'||(!demo&&!token)||Platform.OS!=='web')return
     const params=new URLSearchParams(window.location.search)
@@ -1601,10 +1606,10 @@ export default function App(props:Props){
           {ownProfile?<><Button label="Edit profile" variant="secondary" onPress={()=>selectOverlay({kind:'editProfile'})}/><Button label="Change username" variant="secondary" onPress={()=>selectOverlay({kind:'editUsername'})}/>{props.pickMedia&&<>
             <Button label={photoBusy==='avatar'?'Updating picture…':'Change profile picture'} leading="image" variant="secondary" disabled={!!photoBusy} onPress={()=>void uploadProfilePhoto('avatar')}/>
             <Button label={photoBusy==='cover'?'Updating cover…':'Change cover photo'} variant="secondary" disabled={!!photoBusy} onPress={()=>void uploadProfilePhoto('cover')}/>
-          </>}<Button label="Share profile" leading="sh" variant="secondary" onPress={()=>{void props.share?.(sharedLink('profile',profile.id)).then(()=>notify('Profile link ready to share')).catch(fail)}}/><Button label="Settings" leading="settings" variant="secondary" onPress={()=>open('Settings')}/></>:<>
+          </>}<Button label="Share profile" leading="sh" variant="secondary" disabled={!profile.username} onPress={()=>shareProfile(profile)}/><Button label="Settings" leading="settings" variant="secondary" onPress={()=>open('Settings')}/></>:<>
             <Button label={follows[profile.id]?'Following':currentStats?.data?.followsViewer?'Follow back':'Follow'} disabled={!demo&&!currentStats?.data} onPress={()=>void follow(profile)}/>
             <Button label="Message" leading="msg" variant="secondary" onPress={()=>void messagePerson(profile)}/>
-            <Button label="Share profile" leading="sh" variant="secondary" onPress={()=>{void props.share?.(sharedLink('profile',profile.id)).then(()=>notify('Profile link ready to share')).catch(fail)}}/>
+            <Button label="Share profile" leading="sh" variant="secondary" disabled={!profile.username} onPress={()=>shareProfile(profile)}/>
           </>}
         </View>
       </View>

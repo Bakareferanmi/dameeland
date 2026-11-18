@@ -61,8 +61,8 @@ const pickMedia=(comment=false)=>{
     input.click()
   })
 }
-const share=async(url:string)=>{
-  if(navigator.share){await navigator.share({url});return}
+const share=async(url:string,details?:{title:string;message:string})=>{
+  if(navigator.share){await navigator.share({url,title:details?.title,text:details?.message});return}
   if(navigator.clipboard){await navigator.clipboard.writeText(url);return}
   window.prompt('Copy this link',url)
 }
