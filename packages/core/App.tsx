@@ -401,7 +401,7 @@ export default function App(props:Props){
   const searchTerm=query.trim().replace(/^@+/, '')
   const [follows,setFollows]=useState<Record<string,boolean>>({})
   const [rooms,setRooms]=useState<Room[]>(demo?localRooms:[])
-  const [roomsLoading,setRoomsLoading]=useState(false)
+  const [roomsLoading,setRoomsLoading]=useState(true)
   const [roomsLoadingMore,setRoomsLoadingMore]=useState(false)
   const [roomsNextCursor,setRoomsNextCursor]=useState<string|null>(null)
   const [room,setRoom]=useState<Room|null>(null)
@@ -417,7 +417,6 @@ export default function App(props:Props){
   const [notes,setNotes]=useState<Record<string,Note[]>>({})
   const [commentKeyboardInset,setCommentKeyboardInset]=useState(0)
   const [chats,setChats]=useState<Record<string,Note[]>>(demo?initialChats:{})
-  const [messageLoading,setMessageLoading]=useState(false)
   const [messageLoadingOlder,setMessageLoadingOlder]=useState(false)
   const [messageNextCursor,setMessageNextCursor]=useState<Record<string,string|null>>({})
   const [draft,setDraft]=useState(''),[attachment,setAttachment]=useState<Media|null>(null)
@@ -588,13 +587,14 @@ export default function App(props:Props){
     return ()=>{active=false;clearInterval(interval)}
   },[base,demo,stage,token,page,notificationCursor])
   const roomId=room?.id
+  const messageLoading=!demo&&!!roomId&&chats[roomId]===undefined&&!feedError
   const [pendingIncoming,setPendingIncoming]=useState<IncomingCall|null>(null)
   const incomingHandled=useRef(new Set<string>())
   const answeredCall=useRef('')
   const webCallMedia=React.useMemo(browserCallMedia,[])
   const callMedia=props.callMedia??webCallMedia
   const refreshConversation=(id:string)=>api<MessagePage>(base,'/rooms/'+id+'/messages?paged=1',{},token).then(data=>{
-    setMessageNextCursor(previous=>({...previous,[id]:data.nextCursor}))
+    setMessageNextCursor(previous=>id in previous?previous:{...previous,[id]:data.nextCursor})
     setChats(previous=>({...previous,[id]:mergeNotes(previous[id]??[],data.items)}))
   })
   const sendCall=async(signal:CallSignal)=>{
@@ -666,13 +666,17 @@ export default function App(props:Props){
     if(demo||!token||page!=='Chat'||!roomId)return
     let active=true
     let lastSync=0
-    setMessageLoading(!(chats[roomId]?.length))
+    let syncing=false
     const endpoint=base||((typeof window!=='undefined'&&window.location?.origin)||'')
     const url=endpoint.replace(/^http/,'ws').replace(/\/$/,'')+'/api/rooms/'+roomId+'/socket'
-    const refresh=()=>api<MessagePage>(base,'/rooms/'+roomId+'/messages?paged=1',{},token)
-      .then(data=>{if(active){lastSync=Date.now();setMessageNextCursor(previous=>({...previous,[roomId]:data.nextCursor}));setChats(previous=>({...previous,[roomId]:mergeNotes(previous[roomId]??[],data.items)}));setFeedError('');if(foreground()&&data.items.some(item=>!item.call&&item.author.id!==user.id&&!item.readAt))void api(base,'/rooms/'+roomId+'/read',{method:'PUT'},token).catch(()=>{})}})
+    const refresh=()=>{
+      if(syncing)return
+      syncing=true
+      return api<MessagePage>(base,'/rooms/'+roomId+'/messages?paged=1',{},token)
+      .then(data=>{if(active){lastSync=Date.now();setMessageNextCursor(previous=>roomId in previous?previous:{...previous,[roomId]:data.nextCursor});setChats(previous=>({...previous,[roomId]:mergeNotes(previous[roomId]??[],data.items)}));setFeedError('');if(foreground()&&data.items.some(item=>!item.call&&item.author.id!==user.id&&!item.readAt))void api(base,'/rooms/'+roomId+'/read',{method:'PUT'},token).catch(()=>{})}})
       .catch(reason=>{if(active)setFeedError(errorMessage(reason))})
-      .finally(()=>{if(active)setMessageLoading(false)})
+      .finally(()=>{syncing=false})
+    }
     const socket=new WebSocket(url,['dameeland','ticket.'+token])
     socket.onopen=()=>{if(active)void refresh()}
     socket.onmessage=event=>{
@@ -983,7 +987,7 @@ export default function App(props:Props){
       replyTimers.current.forEach(clearTimeout);replyTimers.current=[]
       scrollOffsets.current={};pendingOffset.current=null;setToast(null)
       roomCall.end();pageHistory.current=[];dismissOverlays();setToken('');setUser(me);setPage('Home');setStage('auth');setError('')
-      setPosts(props.demo?initialPosts:[]);setNotes({});setChats(props.demo?initialChats:{});setFollows({});setProfileStats(null)
+      setPosts(props.demo?initialPosts:[]);setNotes({});setChats(props.demo?initialChats:{});setMessageNextCursor({});setRoomsLoading(true);setRoomsNextCursor(null);setFollows({});setProfileStats(null)
       setNotificationItems([]);setNotificationCursor('');setNotificationNextCursor(null);setNotificationHistory([]);setUnread(false)
       setRooms(props.demo?localRooms:[]);setRoom(null);setDraft('');setAttachment(null);setPostSearchPublic(false);clearComment();setMessage('');setSeen(new Set());setOwnStory(null);setDemoEntered(false);setBirthdays([]);setBirthdayWall([]);setWishedBirthdays(new Set());setLiveStories([]);setStoryIndex(0);setStoryMedia(null);setWishes([]);setCompletedLessons([]);setLearningError(false);setVoicePlaying(false);setQuietMode(false);setFollowingOnly(false)
     }catch(reason){fail(reason)}
@@ -1368,7 +1372,7 @@ export default function App(props:Props){
           if(session===demoSession.current){setRooms(rooms.items);setRoomsNextCursor(rooms.nextCursor)}
         }else if(page==='Chat'&&room){
           const messages=await api<MessagePage>(base,'/rooms/'+room.id+'/messages?paged=1',{},token)
-          if(session===demoSession.current){setChats(previous=>({...previous,[room.id]:messages.items}));setMessageNextCursor(previous=>({...previous,[room.id]:messages.nextCursor}))}
+          if(session===demoSession.current){setChats(previous=>({...previous,[room.id]:mergeNotes(previous[room.id]??[],messages.items)}));setMessageNextCursor(previous=>room.id in previous?previous:{...previous,[room.id]:messages.nextCursor})}
         }else if(page==='Profile'){
           const [person,stats]=await Promise.all([
             api<Person|Viewer>(base,profile.id===user.id?'/me':'/people/'+encodeURIComponent(profile.id),{},token),
