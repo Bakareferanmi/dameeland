@@ -37,7 +37,6 @@ export function LoadingScreen({compact=false}:{compact?:boolean}){
   if(Platform.OS==='web'&&!compact)return React.createElement('div',{
     className:'dameen-loading-screen',role:'progressbar','aria-label':'Loading dameen','aria-busy':true,
   },React.createElement('svg',{className:'dameen-loading-mark',viewBox:'0 0 64 64','aria-hidden':true},
-    React.createElement('rect',{width:64,height:64,rx:18,fill:'#6A35F0'}),
     React.createElement('path',{d:'M10 52C10 32 19 18 32 18C45 18 54 32 54 52Q54 54 52 54H12Q10 54 10 52Z',fill:'#C8F53F'}),
     React.createElement('circle',{cx:24,cy:38,r:8.5,fill:'#fff'}),
     React.createElement('circle',{cx:40,cy:38,r:8.5,fill:'#fff'}),

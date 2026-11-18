@@ -80,5 +80,14 @@ const notifyDevice=async(title:string,body:string)=>{
 }
 if(import.meta.env.PROD&&!offline&&'serviceWorker' in navigator)window.addEventListener('load',()=>{void navigator.serviceWorker.register('/sw.js',{updateViaCache:'none'})})
 if(phone)document.body.classList.add('phone-preview')
-createRoot(document.getElementById('root')!).render(<App demo={demo} phone={phone} base={offline?'':import.meta.env.VITE_API_URL??'https://dameeland-api.bakareferanmi96.workers.dev'} renderIcon={HugeiconsIcon} initialTheme={initialTheme} font={font} loadToken={loadToken} saveToken={saveToken} openGoogle={openGoogle} pickMedia={()=>pickMedia()} pickCommentMedia={()=>pickMedia(true)} share={share} requestNotifications={requestNotifications} notifyDevice={notifyDevice}/>)
+let bootDismissed=false
+const dismissBoot=()=>{
+  if(bootDismissed)return
+  bootDismissed=true
+  const boot=document.getElementById('dameen-boot')
+  if(!boot)return
+  boot.classList.add('ready')
+  window.setTimeout(()=>boot.remove(),380)
+}
+createRoot(document.getElementById('dameen-app')!).render(<App demo={demo} phone={phone} base={offline?'':import.meta.env.VITE_API_URL??'https://dameeland-api.bakareferanmi96.workers.dev'} renderIcon={HugeiconsIcon} initialTheme={initialTheme} font={font} loadToken={loadToken} saveToken={saveToken} openGoogle={openGoogle} pickMedia={()=>pickMedia()} pickCommentMedia={()=>pickMedia(true)} share={share} requestNotifications={requestNotifications} notifyDevice={notifyDevice} onReady={dismissBoot}/>)
 
