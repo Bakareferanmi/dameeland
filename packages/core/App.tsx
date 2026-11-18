@@ -59,7 +59,7 @@ type Props={
   callMedia?:CallMedia;
   notificationTarget?:string;
   modalViewport?:React.ComponentType<{color:string;children:React.ReactNode}>;
-  pickMedia?:()=>Promise<Media|null>; renderGif?:GifRenderer; share?:(url:string)=>Promise<void>;
+  pickMedia?:()=>Promise<Media|null>; pickCommentMedia?:()=>Promise<Media|null>; renderGif?:GifRenderer; share?:(url:string)=>Promise<void>;
   requestNotifications?:()=>Promise<boolean>; getNotificationDevice?:()=>Promise<{platform:'android'|'ios';token:string}|null>; notifyDevice?:(title:string,body:string)=>Promise<void>;
 }
 type Overlay={kind:'connections';list:FollowListKind;person:Person}|{kind:'comments'|'share'|'post';post:Post;targetId?:string}|{kind:'story';person:Person}|{kind:'photo';person:Person;photo:'avatar'|'cover'}|{kind:'create'|'wish'|'newStory'|'editProfile'|'editUsername'}|{kind:'call';video:boolean;person:Person;ringing?:boolean;incoming?:boolean}
@@ -818,7 +818,7 @@ export default function App(props:Props){
     return ()=>clearTimeout(timer)
   },[voicePlaying])
   const showProfile=(person:Person)=>open('Profile',{profile:demo?demoAccounts.find(account=>account.person.id===person.id)?.person??person:person})
-  const sharedLink=(kind:'profile'|'post',id:string)=>kind==='profile'&&profile.username?'https://dameen.app/u/'+encodeURIComponent(profile.username):'https://dameen.app/?'+kind+'='+encodeURIComponent(id)
+  const sharedLink=(kind:'profile'|'post',id:string)=>kind==='post'?'https://dameen.app/p/'+encodeURIComponent(id):profile.username?'https://dameen.app/u/'+encodeURIComponent(profile.username):'https://dameen.app/?profile='+encodeURIComponent(id)
   useEffect(()=>{
     if(sharedLinkHandled.current||stage!=='app'||(!demo&&!token)||Platform.OS!=='web')return
     const params=new URLSearchParams(window.location.search)
@@ -1073,7 +1073,7 @@ export default function App(props:Props){
   async function pickCommentPhoto(){
     const revision=commentDraft.current
     try{
-      const media=await props.pickMedia?.()
+      const media=await (props.pickCommentMedia??props.pickMedia)?.()
       if(media&&revision===commentDraft.current)setCommentMedia(media)
     }catch(reason){if(revision===commentDraft.current)fail(reason)}
   }
@@ -1480,7 +1480,7 @@ export default function App(props:Props){
       replyTo={replyTarget} highlightId={overlay.targetId} onReply={item=>{commentDraft.current++;setReplyTarget(item)}} onCancelReply={()=>{commentDraft.current++;setReplyTarget(null)}} onLike={item=>void likeComment(overlay.post.id,item)}
       attachment={commentMedia&&'uri' in commentMedia?{kind:'image',url:commentMedia.uri}:commentMedia??undefined}
       onPreset={value=>{commentDraft.current+=1;setCommentMedia(value)}} onRemove={()=>{commentDraft.current+=1;setCommentMedia(null)}}
-      onPhoto={props.pickMedia?()=>void pickCommentPhoto():undefined} onPost={()=>void addComment(overlay.post)}
+      onPhoto={props.pickCommentMedia||props.pickMedia?()=>void pickCommentPhoto():undefined} onPost={()=>void addComment(overlay.post)}
       onProfile={showProfile}/>
   }else if(overlay?.kind==='editProfile'){
     sheet=<><Field label="Real name" value={profileNameDraft} onChangeText={setProfileNameDraft} maxLength={120} autoCapitalize="words"/>
@@ -1514,7 +1514,7 @@ export default function App(props:Props){
       <Button label={busy?'Sharing…':'Share story'} disabled={!valid||busy} onPress={()=>{if(!demo){void shareStory();return}setOwnStory({text:comment.trim(),image:storyMode==='Photo'?storyImage:undefined,videoPreview:storyMode==='Video',posted:Date.now(),background:storyMode==='Text'?storyBackground:undefined});modalClose();notify('Story shared in the preview. It disappears after 12 hours.')}}/>
     </>
   }else if(overlay?.kind==='share'){
-    sheet=<><Copy>{overlay.post.body||'Image post'}</Copy>{canShare&&<Button label="Share post link" onPress={()=>{void props.share?.(sharedLink('post',overlay.post.id)).then(()=>{modalClose();notify('Post link ready to share')}).catch(fail)}}/>}</>
+    sheet=<><Card style={{gap:12}}><View style={row}><Avatar person={overlay.post.author} size={42}/><View><PersonName person={overlay.post.author}/><Copy color={theme.muted} size={12}>Post on dameen</Copy></View></View><Copy>{overlay.post.body||'Shared a post'}</Copy>{overlay.post.media&&overlay.post.kind==='image'&&<Image source={{uri:overlay.post.media}} resizeMode="cover" style={{width:'100%',height:180,borderRadius:14}}/>}</Card>{canShare&&<Button label="Share post link" onPress={()=>{void props.share?.(sharedLink('post',overlay.post.id)).then(()=>{modalClose();notify('Post link ready to share')}).catch(fail)}}/>}</>
   }else if(overlay?.kind==='wish'){
     sheet=<><Avatar person={people[2]} size={65}/><Field label="Write a birthday wish" value={comment} onChangeText={setComment} maxLength={300}/><Button label="Send wish" disabled={!comment.trim()} variant="fun" onPress={()=>{setWishes(previous=>[...previous,comment.trim()]);modalClose();notify('Birthday wish sent in the preview')}}/></>
   }else if(overlay?.kind==='call'&&overlay.ringing){

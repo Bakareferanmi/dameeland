@@ -23,10 +23,10 @@ const openGoogle=async(getUrl:()=>Promise<string>)=>{
   catch(error){popup.close();throw error}
   return {close:()=>popup.close()}
 }
-const pickMedia=()=>{
+const pickMedia=(comment=false)=>{
   const input=document.createElement('input')
   input.type='file'
-  input.accept='image/png,image/jpeg,image/webp'
+  input.accept=comment?'image/png,image/jpeg,image/webp,image/gif':'image/png,image/jpeg,image/webp'
   return new Promise<{name:string;uri:string;data:File}|null>((resolve,reject)=>{
     input.oncancel=()=>resolve(null)
     input.onchange=()=>{
@@ -60,4 +60,4 @@ const notifyDevice=async(title:string,body:string)=>{
 }
 if(import.meta.env.PROD&&!offline&&'serviceWorker' in navigator)window.addEventListener('load',()=>{void navigator.serviceWorker.register('/sw.js',{updateViaCache:'none'})})
 if(phone)document.body.classList.add('phone-preview')
-createRoot(document.getElementById('root')!).render(<App demo={demo} phone={phone} base={offline?'':import.meta.env.VITE_API_URL??'https://dameeland-api.bakareferanmi96.workers.dev'} renderIcon={HugeiconsIcon} initialTheme={initialTheme} font={font} loadToken={loadToken} saveToken={saveToken} openGoogle={openGoogle} pickMedia={pickMedia} share={share} requestNotifications={requestNotifications} notifyDevice={notifyDevice}/>)
+createRoot(document.getElementById('root')!).render(<App demo={demo} phone={phone} base={offline?'':import.meta.env.VITE_API_URL??'https://dameeland-api.bakareferanmi96.workers.dev'} renderIcon={HugeiconsIcon} initialTheme={initialTheme} font={font} loadToken={loadToken} saveToken={saveToken} openGoogle={openGoogle} pickMedia={()=>pickMedia()} pickCommentMedia={()=>pickMedia(true)} share={share} requestNotifications={requestNotifications} notifyDevice={notifyDevice}/>)

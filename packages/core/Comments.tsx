@@ -19,6 +19,7 @@ function CommentMedia({attachment,renderGif:Gif}:{attachment:CommentAttachment;r
     const label=commentGifs[attachment.id],uri=gifImages[attachment.id]
     return Gif?<Gif uri={uri} label={label+' GIF'} animate={!reduced}/>:<Image accessibilityLabel={label+' GIF'} source={{uri}} style={{width:96,height:64,borderRadius:10}}/>
   }
+  if(attachment.url.toLowerCase().endsWith('.gif')&&Gif)return <Gif uri={attachment.url} label="Comment GIF" animate={!reduced}/>
   return <Image accessibilityLabel="Comment photo" source={{uri:attachment.url}} resizeMode="cover"
     style={{width:200,maxWidth:'100%',height:136,borderRadius:12,backgroundColor:theme.chip}}/>
 }

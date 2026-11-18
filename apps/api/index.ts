@@ -161,6 +161,14 @@ app.get('/api/public/profiles/:username',async c=>{
   const profile=person(account,c.req.url)
   return c.json({id:profile.id,username:profile.username,name:profile.name,bio:profile.bio,avatar:profile.avatar,cover:profile.cover,detail:profile.detail})
 })
+app.get('/api/public/posts/:id',async c=>{
+  const id=c.req.param('id')
+  if(!/^[a-z0-9-]{8,80}$/i.test(id))return c.json({error:'Post unavailable.'},404)
+  const post=await c.env.DB.prepare('SELECT p.id,p.body,p.media,p.media_kind,u.username,u.name,u.avatar_media FROM posts p JOIN users u ON u.id=p.author WHERE p.id=?').bind(id).first<{id:string;body:string;media:string|null;media_kind:string|null;username:string|null;name:string;avatar_media:string|null}>()
+  if(!post)return c.json({error:'Post unavailable.'},404)
+  c.header('Cache-Control','public, max-age=60')
+  return c.json({id:post.id,body:post.body,username:post.username||post.name,avatar:post.avatar_media?new URL('/api/media/'+post.avatar_media,c.req.url).href:undefined,image:post.media&&post.media_kind==='image'?new URL('/api/media/'+post.media,c.req.url).href:undefined})
+})
 const usernameOf=(value:unknown)=>typeof value==='string'?normalizeUsername(value):''
 const usernameTaken=(db:D1Database,username:string)=>db.prepare('SELECT 1 FROM users WHERE username=? COLLATE NOCASE').bind(username).first()
 app.get('/api/auth/username',async c=>{
@@ -645,12 +653,13 @@ app.put('/api/admin/accounts/:id',async c=>{
   if(!account)return c.json({error:'Account unavailable.'},404)
   return c.json(adminAccount(account,c.req.url))
 })
-async function imageType(file:File){
+async function imageType(file:File,allowGif=false){
   if(!file.size||file.size>5*1024*1024)return null
   const head=new Uint8Array(await file.slice(0,12).arrayBuffer())
   if([137,80,78,71,13,10,26,10].every((n,i)=>head[i]===n))return 'image/png'
   if(head[0]===255&&head[1]===216&&head[2]===255)return 'image/jpeg'
   if(String.fromCharCode(...head.slice(0,4))==='RIFF'&&String.fromCharCode(...head.slice(8))==='WEBP')return 'image/webp'
+  if(allowGif&&['GIF87a','GIF89a'].includes(String.fromCharCode(...head.slice(0,6))))return 'image/gif'
   return null
 }
 app.put('/api/me/photos/:kind',async c=>{
@@ -873,12 +882,12 @@ app.post('/api/posts/:id/comments',async c=>{
   if((gif!==undefined&&(typeof gif!=='string'||!Object.hasOwn(commentGifs,gif)))||
      (sticker!==undefined&&(typeof sticker!=='string'||!Object.hasOwn(commentStickers,sticker)))||
      (gif!==undefined&&sticker!==undefined))return c.json({error:'Choose a GIF or sticker from the picker.'},400)
-  const contentType=file instanceof File?await imageType(file):null
-  if(multipart&&(!contentType||!(file instanceof File)))return c.json({error:'Choose a PNG, JPEG or WebP image under 5 MB.'},400)
+  const contentType=file instanceof File?await imageType(file,true):null
+  if(multipart&&(!contentType||!(file instanceof File)))return c.json({error:'Choose a PNG, JPEG, WebP or GIF under 5 MB.'},400)
   if(!body&&!contentType&&gif===undefined&&sticker===undefined)return c.json({error:'Write a comment or add an attachment.'},400)
   const parent=parentId?await DB.prepare('SELECT x.author,u.username FROM comments x JOIN users u ON u.id=x.author WHERE x.id=? AND x.post_id=?').bind(parentId,post).first<{author:string;username:string|null}>():null
   if(parentId&&!parent)return c.json({error:'Reply target unavailable.'},404)
-  const media=contentType?id:null
+  const media=contentType?contentType==='image/gif'?id+'.gif':id:null
   if(media&&file instanceof File&&contentType)await MEDIA.put(media,await file.arrayBuffer(),{httpMetadata:{contentType}})
   const attachment={media,gif:(gif??null) as CommentRow['gif'],sticker:(sticker??null) as CommentRow['sticker']}
   try{

@@ -44,9 +44,9 @@ async function openGoogle(getUrl:()=>Promise<string>){
   await Linking.openURL(await getUrl())
   return {close:()=>{}}
 }
-async function pickMedia(){
+async function pickMedia(comment=false){
   const ImagePicker=await import('expo-image-picker')
-  const result=await ImagePicker.launchImageLibraryAsync({mediaTypes:['images'],quality:.8})
+  const result=await ImagePicker.launchImageLibraryAsync({mediaTypes:['images'],quality:comment?1:.8,allowsEditing:false})
   if(result.canceled)return null
   const image=result.assets[0]
   if(image.fileSize&&image.fileSize>5*1024*1024)throw new Error('Choose an image under 5 MB.')
@@ -85,5 +85,5 @@ export default function App(){
   const [loaded,error]=useFonts(offline?{}:{PlusJakartaSans_500Medium,PlusJakartaSans_700Bold,PlusJakartaSans_800ExtraBold})
   const base=process.env.EXPO_PUBLIC_API_URL?.trim()||'https://dameeland-api.bakareferanmi96.workers.dev'
   const demo=offline||process.env.EXPO_PUBLIC_DEMO==='1'
-  return <SafeAreaProvider><SafeAreaView style={{flex:1,backgroundColor:theme==='dark'?'#120D1F':'#FAF8FF'}}>{loaded||error?<Dameeland phone={offline} demo={demo} base={base} callMedia={callMedia} notificationTarget={notificationTarget} renderIcon={HugeiconsIcon} initialTheme={theme} font={error?()=>({}):font} loadToken={loadToken} saveToken={saveToken} openGoogle={openGoogle} modalViewport={Platform.OS==='web'?undefined:NativeModalViewport} pickMedia={pickMedia} renderGif={CommentGif} share={share} requestNotifications={requestNotifications} getNotificationDevice={getNotificationDevice} notifyDevice={notifyDevice}/>:<LoadingScreen/>}</SafeAreaView></SafeAreaProvider>
+  return <SafeAreaProvider><SafeAreaView style={{flex:1,backgroundColor:theme==='dark'?'#120D1F':'#FAF8FF'}}>{loaded||error?<Dameeland phone={offline} demo={demo} base={base} callMedia={callMedia} notificationTarget={notificationTarget} renderIcon={HugeiconsIcon} initialTheme={theme} font={error?()=>({}):font} loadToken={loadToken} saveToken={saveToken} openGoogle={openGoogle} modalViewport={Platform.OS==='web'?undefined:NativeModalViewport} pickMedia={()=>pickMedia()} pickCommentMedia={()=>pickMedia(true)} renderGif={CommentGif} share={share} requestNotifications={requestNotifications} getNotificationDevice={getNotificationDevice} notifyDevice={notifyDevice}/>:<LoadingScreen/>}</SafeAreaView></SafeAreaProvider>
 }
