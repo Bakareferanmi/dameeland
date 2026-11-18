@@ -98,13 +98,20 @@ function DefaultModalViewport({color,children}:{color:string;children:React.Reac
   return <View style={{flex:1,backgroundColor:color}}>{children}</View>
 }
 
-function Intro({step,onNext,onBack,onSkip,reduced,desktop}:{step:number;onNext:()=>void;onBack:()=>void;onSkip:()=>void;reduced:boolean;desktop:boolean}){
+function Intro({step,onNext,onBack,onSkip,reduced,desktop,showPublicBrand}:{step:number;onNext:()=>void;onBack:()=>void;onSkip:()=>void;reduced:boolean;desktop:boolean;showPublicBrand:boolean}){
+  const {font}=useDesign()
   const slide=slides[step]
+  const description=showPublicBrand&&step===0
+    ?'Chat with classmates and practise mathematics, English and digital technologies with short lessons.'
+    :slide.description
   const illustration:Glyph=(['book','grp','trophy'] as const)[step]
   return <ScrollView style={{backgroundColor:'#4F25D6'}} contentContainerStyle={{flexGrow:1,justifyContent:'center',padding:desktop?48:14}}>
     <View style={{alignSelf:'center',width:'100%',maxWidth:1056,minHeight:desktop?610:676,padding:desktop?38:18,overflow:'hidden',justifyContent:'space-between'}}>
       <View style={spread}>
-        <Logo variant="inverse" size={desktop?48:40}/>
+        <View style={row}>
+          <Logo variant="inverse" size={desktop?48:40}/>
+          {showPublicBrand&&<h1 style={{...font(800),margin:0,color:'#fff',fontSize:24,lineHeight:1.15}}>dameen</h1>}
+        </View>
         <Pressable onPress={onSkip} accessibilityRole="button" style={{minHeight:44,justifyContent:'center',paddingHorizontal:16,borderRadius:14,backgroundColor:'#FFFFFF16'}}><Copy color="#fff" weight={800}>Skip</Copy></Pressable>
       </View>
       <Motion key={step} reduced={reduced} axis="x" distance={14} style={{flexGrow:desktop?1:0,flexShrink:0,flexDirection:desktop?'row-reverse':'column',alignItems:desktop?'center':'stretch',justifyContent:'center',gap:desktop?48:16,paddingTop:desktop?12:0}}>
@@ -121,12 +128,13 @@ function Intro({step,onNext,onBack,onSkip,reduced,desktop}:{step:number;onNext:(
         <View style={{flex:desktop?1:undefined,gap:14,paddingHorizontal:desktop?10:2}}>
           <View accessibilityLabel={`Slide ${step+1} of 3`} style={{...row,gap:5}}>{slides.map((_,i)=><View key={i} style={{width:i===step?27:10,height:4,borderRadius:4,backgroundColor:i===step?lime:'#B69CF9'}}/>)}</View>
           <Copy color="#fff" weight={800} size={desktop?57:43}>{slide.title}</Copy>
-          <Copy color="#E9DFFF" size={desktop?18:15}>{slide.description}</Copy>
+          <Copy color="#E9DFFF" size={desktop?18:15}>{description}</Copy>
         </View>
       </Motion>
       <View style={{width:'100%',maxWidth:desktop?380:undefined,gap:6,paddingTop:18}}>
         <Button label={step===2?'Get started':'Continue'} variant="fun" onPress={onNext}/>
         {step>0&&<Pressable accessibilityRole="button" onPress={onBack} style={{...row,justifyContent:'center',minHeight:44}}><Icon name="back" color="#fff" size={17}/><Copy color="#fff" weight={800}>Back</Copy></Pressable>}
+        {showPublicBrand&&<a href="/about/" style={{...font(700),display:'flex',alignItems:'center',justifyContent:'center',minHeight:44,color:'#fff',fontSize:13}}>About dameen</a>}
       </View>
     </View>
   </ScrollView>
@@ -1516,7 +1524,7 @@ export default function App(props:Props){
   const storyPosted=demo?(story?.id===user.id?demoOwn?.posted:story?demoPosted[story.id]:undefined):liveItem?Date.parse(liveItem.created):undefined
   const storyText=demo?personalStory?.text??(story?.id==='ada'?'Study session after school. Bring your notes!':story?.id==='bello'?'Maths test is on Friday. Revise quadratics!':story?.id==='code'?'Code Club meets on Friday!':'See you at quiz night!'):liveItem?.text??''
   return <Design.Provider value={{theme,font,reduced,renderIcon:props.renderIcon}}><View style={{flex:1,backgroundColor:theme.bg,width:'100%'}}>
-    {starting||stage==='restore'?<LoadingScreen/>:stage==='intro'?<Intro desktop={desktop} step={step} reduced={reduced} onSkip={()=>setStage('auth')} onNext={()=>step===2?setStage('auth'):setStep(step+1)} onBack={()=>setStep(step-1)}/>:stage==='auth'?<Auth base={base} demo={demo} busy={busy} error={error} submit={authenticate} onGoogle={(mode,username,dob)=>void authenticateWithGoogle(mode,username,dob)} onCancelGoogle={()=>googleRequest.current?.abort()} googlePending={googlePending} onDemo={()=>{setDemoEntered(true);setPosts(initialPosts);setChats(initialChats);setRooms(localRooms);setUnread(true);setUser(me);setPage('Home');setStage('app')}} reduced={reduced} recovering={recovering} setRecovering={setRecovering}/>:
+    {starting||stage==='restore'?<LoadingScreen/>:stage==='intro'?<Intro desktop={desktop} step={step} reduced={reduced} showPublicBrand={Platform.OS==='web'&&!demo} onSkip={()=>setStage('auth')} onNext={()=>step===2?setStage('auth'):setStep(step+1)} onBack={()=>setStep(step-1)}/>:stage==='auth'?<Auth base={base} demo={demo} busy={busy} error={error} submit={authenticate} onGoogle={(mode,username,dob)=>void authenticateWithGoogle(mode,username,dob)} onCancelGoogle={()=>googleRequest.current?.abort()} googlePending={googlePending} onDemo={()=>{setDemoEntered(true);setPosts(initialPosts);setChats(initialChats);setRooms(localRooms);setUnread(true);setUser(me);setPage('Home');setStage('app')}} reduced={reduced} recovering={recovering} setRecovering={setRecovering}/>:
       <View style={{flex:1,flexDirection:'row',width:'100%',maxWidth:1360,alignSelf:'center'}}>
         {desktop&&<View style={{width:222,borderRightWidth:1,borderColor:theme.border,padding:18,gap:5,backgroundColor:theme.card}}>
           <View style={{minHeight:64,justifyContent:'center',marginBottom:14}}><Logo size={40}/></View>
