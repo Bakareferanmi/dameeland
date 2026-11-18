@@ -19,11 +19,21 @@ const Admin=lazy(()=>import('./Admin'))
 const FeatureScreen=lazy(()=>import('./FeatureScreens'))
 const FriendWhot=lazy(()=>import('./FriendWhot'))
 
+function ChatWhotPanel({close,...game}:React.ComponentProps<typeof FriendWhot>&{close:()=>void}){
+  const {theme}=useDesign()
+  return <ScrollView style={{flex:1,backgroundColor:theme.bg}} contentContainerStyle={{padding:20,gap:12,width:'100%',maxWidth:640,alignSelf:'center'}}>
+    <Button label="Back to chat" variant="plain" onPress={close}/>
+    <Suspense fallback={<Copy>Opening Whot…</Copy>}><FriendWhot {...game}/></Suspense>
+  </ScrollView>
+}
+
 function ChatWhot({base,token,room,opponent}:{base:string;token:string;room:string;opponent:string}){
   const [open,setOpen]=useState(false)
   return <>
-    <Button label={open?'Close Whot':'Play Whot together'} variant="plain" leading="game" onPress={()=>setOpen(!open)}/>
-    {open&&<Suspense fallback={<Copy>Opening Whot…</Copy>}><FriendWhot {...{base,token,room,opponent}}/></Suspense>}
+    <IconButton name="game" label="Play Whot together" onPress={()=>setOpen(true)}/>
+    {open&&<Modal visible animationType="fade" onRequestClose={()=>setOpen(false)}>
+      <ChatWhotPanel close={()=>setOpen(false)} {...{base,token,room,opponent}}/>
+    </Modal>}
   </>
 }
 
@@ -1536,7 +1546,6 @@ export default function App(props:Props){
   </>
   const lastOwnMessageId=room?[...(chats[room.id]??[])].reverse().find(note=>!note.call&&note.author.id===user.id)?.id:undefined
   const chat=room&&<>
-    {!demo&&page==='Chat'&&<ChatWhot key={room.id} base={base} token={token} room={room.id} opponent={displayHandle(room.person)}/>}
     {!demo&&callMedia&&deviceNotifications!=='granted'&&props.requestNotifications&&<View style={{alignItems:'center'}}><Button label="Enable call alerts" variant="plain" onPress={()=>void enableDeviceNotifications()}/></View>}
     {!demo&&!callMedia&&<Copy color={theme.muted} size={12}>Voice and video calls are available in the installed app build or a supported browser.</Copy>}
     {demo&&room.person.group&&<Card><Copy weight={800}>Pinned message</Copy><Copy>Bring one practice question to the next study session.</Copy><Button label="Join group voice call" leading="ph" variant="secondary" onPress={()=>selectOverlay({kind:'call',video:false,person:room.person,ringing:true})}/></Card>}
@@ -1749,6 +1758,7 @@ export default function App(props:Props){
                 </Pressable>
               </View>
               <View style={{...row,gap:0}}>
+                {!demo&&<ChatWhot key={room.id} base={base} token={token} room={room.id} opponent={displayHandle(room.person)}/>}
                 <IconButton name="ph" label="Voice call" onPress={()=>demo?selectOverlay({kind:'call',video:false,person:room.person}):callMedia?roomCall.start(false):notify('Calls need an installed app build or a supported browser.','error')}/>
                 <IconButton name="vid" label="Video call" onPress={()=>demo?selectOverlay({kind:'call',video:true,person:room.person}):callMedia?roomCall.start(true):notify('Calls need an installed app build or a supported browser.','error')}/>
               </View>
