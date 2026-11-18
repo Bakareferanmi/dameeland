@@ -102,7 +102,7 @@ export function Avatar({person,size=44,ring=false,seen=false}:{person:Person;siz
   return <View style={ring?{borderWidth:1.5,borderColor:seen?theme.border:theme.purple,borderRadius:radius+4,padding:3}:undefined}>
     <View style={{width:size,height:size,borderRadius:radius,backgroundColor:person.color,overflow:'hidden',alignItems:'center',justifyContent:'center'}}>
       <Copy color="#1B1233" size={size*.29} weight={800}>{initials}</Copy>
-      {person.avatar&&<Image accessibilityLabel={username+' profile photo'} source={{uri:person.avatar}} resizeMode="cover" style={{position:'absolute',width:size,height:size}}/>}
+      {person.avatar&&<Image accessibilityLabel={username+' profile photo'} source={{uri:person.avatar}} resizeMode="cover" style={{position:'absolute',width:size,height:size,borderRadius:radius}}/>}
     </View>
   </View>
 }

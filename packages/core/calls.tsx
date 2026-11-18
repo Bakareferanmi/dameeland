@@ -27,9 +27,10 @@ export type CallMedia={
   Surface:React.ComponentType<{stream:CallStream;local?:boolean;video:boolean;full?:boolean}>
 }
 export const callIceServers=[{urls:'stun:stun.cloudflare.com:3478'}]
+const videoCapture={width:1280,height:720,frameRate:24}
 export const callConstraints=(video:boolean)=>({
   audio:{echoCancellation:true,noiseSuppression:true,autoGainControl:true,channelCount:1},
-  video:video?{width:1280,height:720,frameRate:30,facingMode:'user'}:false,
+  video:video?{...videoCapture,facingMode:'user'}:false,
 })
 
 function WebSurface({stream,local,video,full}:{stream:CallStream;local?:boolean;video:boolean;full?:boolean}){
@@ -53,9 +54,13 @@ function WebSurface({stream,local,video,full}:{stream:CallStream;local?:boolean;
 
 export function browserCallMedia():CallMedia|undefined{
   if(Platform.OS!=='web'||typeof RTCPeerConnection==='undefined'||!globalThis.navigator?.mediaDevices?.getUserMedia)return
-  let facing:'user'|'environment'='user'
   return {
-    getStream:video=>navigator.mediaDevices.getUserMedia(callConstraints(video)),
+    getStream:async video=>{
+      const stream=await navigator.mediaDevices.getUserMedia(callConstraints(video))
+      const track=stream.getVideoTracks()[0]
+      if(track)track.contentHint='motion'
+      return stream
+    },
     createPeer:()=>{
       const peer=new RTCPeerConnection({iceServers:callIceServers})
       return {
@@ -80,11 +85,15 @@ export function browserCallMedia():CallMedia|undefined{
       }
     },
     switchCamera:async(stream,peer)=>{
-      facing=facing==='user'?'environment':'user'
-      const next=await navigator.mediaDevices.getUserMedia({audio:false,video:{width:1280,height:720,frameRate:30,facingMode:{ideal:facing}}})
+      const currentTrack=(stream as MediaStream).getVideoTracks()[0]
+      const facing=currentTrack.getSettings().facingMode==='environment'?'user':'environment'
+      const next=await navigator.mediaDevices.getUserMedia({audio:false,video:{...videoCapture,facingMode:{exact:facing}}})
       const nextTrack=next.getVideoTracks()[0]
       if(!nextTrack)throw new Error('The other camera is not available.')
-      await peer.replaceVideoTrack(nextTrack)
+      nextTrack.enabled=currentTrack.enabled
+      nextTrack.contentHint='motion'
+      try{await peer.replaceVideoTrack(nextTrack)}
+      catch(error){nextTrack.stop();throw error}
       stream.getVideoTracks().forEach(track=>track.stop())
       return new MediaStream([...stream.getAudioTracks() as MediaStreamTrack[],nextTrack])
     },
@@ -234,6 +243,8 @@ export function RoomCall({person,media,call,accept,end,switchCamera,canSwitchCam
   const {reduced}=useDesign()
   const {width}=useWindowDimensions()
   const wave=useRef(new Animated.Value(1)).current
+  const avatarSize=134
+  const frameRadius=(person.role==='tech'?avatarSize*.28:avatarSize/2)+10
   useEffect(()=>{
     if(reduced||call.video||call.state!=='connected'){wave.setValue(1);return}
     const animation=Animated.loop(Animated.sequence([Animated.timing(wave,{toValue:1.14,duration:650,useNativeDriver:Platform.OS!=='web',isInteraction:false}),Animated.timing(wave,{toValue:1,duration:650,useNativeDriver:Platform.OS!=='web',isInteraction:false})]))
@@ -253,7 +264,7 @@ export function RoomCall({person,media,call,accept,end,switchCamera,canSwitchCam
     {videoSurface&&<View style={{position:'absolute',inset:0}}><Surface stream={videoSurface} video full local={!call.remote}/></View>}
     {call.video&&call.remote&&call.local&&<View style={{position:'absolute',top:24,right:18,width:Math.min(128,width*.27),height:174,borderWidth:2,borderColor:'#FFFFFF88',borderRadius:18,overflow:'hidden',backgroundColor:'#211B32'}}><Surface stream={call.local} video full local/></View>}
     {!videoSurface&&<View style={{flex:1,alignItems:'center',justifyContent:'center',gap:25}}>
-      <Animated.View style={{padding:8,borderRadius:90,borderWidth:2,borderColor:'#C8F53F',transform:[{scale:wave}]}}><Avatar person={person} size={134}/></Animated.View>
+      <Animated.View style={{padding:8,borderRadius:frameRadius,borderWidth:2,borderColor:'#C8F53F',transform:[{scale:wave}]}}><Avatar person={person} size={avatarSize}/></Animated.View>
       <Copy color="#FFFFFF" size={31} weight={800} center>{displayHandle(person)}</Copy>
       <Copy color="#D3C7E8" size={16} center>{call.video?'Video call':'Voice call'}</Copy>
     </View>}
