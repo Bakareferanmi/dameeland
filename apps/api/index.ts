@@ -26,6 +26,8 @@ const person=(user:PublicAccount,url:string):Person=>({id:user.id,name:user.name
 const readBody=async(request:Request)=>request.json<Record<string,unknown>>().catch(()=>null)
 const time=(date:number)=>new Date(date).toISOString()
 const now=()=>Date.now()
+const sessionLifetime=30*86400000
+const sessionRefreshWindow=7*86400000
 const touchPresence=(db:D1Database,userId:string,online:boolean)=>db.prepare('INSERT INTO presence (user_id,online,last_seen) VALUES (?,?,?) ON CONFLICT(user_id) DO UPDATE SET online=excluded.online,last_seen=excluded.last_seen').bind(userId,online?1:0,now()).run()
 const base64Url=(bytes:ArrayBuffer)=>btoa(String.fromCharCode(...new Uint8Array(bytes))).replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,'')
 const ownerEmail='bakareferanmi96@gmail.com'
@@ -128,7 +130,7 @@ async function session(env:Env,ctx:WaitContext,account:PublicAccount,url:string)
     account={...account,role:'tech',verified:1,teacher:1}
   }
   const token=random(32)
-  await env.DB.prepare('INSERT INTO sessions VALUES (?,?,?)').bind(await hash(token),account.id,now()+7*86400000).run()
+  await env.DB.prepare('INSERT INTO sessions VALUES (?,?,?)').bind(await hash(token),account.id,now()+sessionLifetime).run()
   queueWelcomeEmail(env,ctx,account.id)
   return {token,user:viewer(env,account,url)}
 }
@@ -438,6 +440,7 @@ app.use('/api/*',async(c,next)=>{
   const tokenHash=await hash(token)
   let user=await c.env.DB.prepare('SELECT u.id,u.email,u.name,u.role,u.username,u.verified,u.teacher,u.dob,u.avatar_media,u.cover_media,u.bio,u.username_changed_at,u.search_public FROM users u JOIN sessions s ON s.user_id=u.id WHERE s.token_hash=? AND s.expires>?').bind(tokenHash,now()).first<PublicAccount>()
   if(!user) return c.json({error:'Your session has expired. Log in again.'},401)
+  await c.env.DB.prepare('UPDATE sessions SET expires=? WHERE token_hash=? AND expires<?').bind(now()+sessionLifetime,tokenHash,now()+sessionRefreshWindow).run()
   if(isOwner(user)&&(user.role!=='tech'||!user.verified||!user.teacher)){
     await c.env.DB.prepare("UPDATE users SET role='tech',verified=1,teacher=1 WHERE id=?").bind(user.id).run()
     user={...user,role:'tech',verified:1,teacher:1}

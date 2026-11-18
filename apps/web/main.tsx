@@ -13,8 +13,18 @@ const demo=offline||(import.meta.env.DEV&&params.get('demo')==='1')
 const initialTheme=params.get('theme')==='dark'||matchMedia('(prefers-color-scheme: dark)').matches?'dark':'light'
 const font=(weight:number)=>({fontFamily:'Plus Jakarta Sans Variable, sans-serif',fontWeight:String(weight)})
 const storageKey='dameeland-session'
-const loadToken=async()=>sessionStorage.getItem(storageKey)
-const saveToken=async(value:string|null)=>{if(value)sessionStorage.setItem(storageKey,value);else sessionStorage.removeItem(storageKey)}
+const loadToken=async()=>{
+  const saved=localStorage.getItem(storageKey)
+  if(saved)return saved
+  const current=sessionStorage.getItem(storageKey)
+  if(current){localStorage.setItem(storageKey,current);sessionStorage.removeItem(storageKey)}
+  return current
+}
+const saveToken=async(value:string|null)=>{
+  sessionStorage.removeItem(storageKey)
+  if(value)localStorage.setItem(storageKey,value)
+  else localStorage.removeItem(storageKey)
+}
 const openGoogle=async(getUrl:()=>Promise<string>)=>{
   const popup=window.open('about:blank','_blank','popup,width=500,height=650')
   if(!popup)throw new Error('Allow pop-ups to continue with Google.')
