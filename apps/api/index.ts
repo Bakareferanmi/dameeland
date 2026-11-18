@@ -1,5 +1,6 @@
 import {searchSitemap} from './searchSitemap'
 import {readCallSignal} from '@dameeland/core/call-signal'
+import {start as startWhot,play as playWhot,draw as drawWhot,shapes as whotShapes,type Match as WhotMatch,type Shape as WhotShape} from '@dameeland/core/whot'
 import {Hono} from 'hono'
 import {cors} from 'hono/cors'
 import {bodyLimit} from 'hono/body-limit'
@@ -1123,6 +1124,68 @@ app.post('/api/rooms',async c=>{
   await db.prepare('INSERT INTO rooms VALUES (?,?,?) ON CONFLICT DO NOTHING').bind(crypto.randomUUID(),first,second).run()
   const result=await db.prepare('SELECT id FROM rooms WHERE first_user=? AND second_user=?').bind(first,second).first<{id:string}>()
   return c.json(result)
+})
+type WhotRow={id:string;invited_by:string;accepted:number;version:number;state:string}
+function whotView(row:WhotRow,user:string){
+  const match=JSON.parse(row.state) as WhotMatch
+  const seat=row.invited_by===user?0:1
+  return {id:row.id,version:row.version,status:!row.accepted?(seat===0?'waiting':'invited'):match.winner===undefined?'playing':'finished',
+    hand:row.accepted?match.hands[seat]:[],opponentCount:match.hands[1-seat].length,
+    top:match.pile[0],shape:match.shape,yourTurn:Boolean(row.accepted)&&match.turn===seat,
+    won:match.winner===undefined?undefined:match.winner===seat}
+}
+app.get('/api/rooms/:id/whot',async c=>{
+  const room=c.req.param('id'), user=c.get('user').id, db=c.env.DB
+  if(!await member(db,room,user))return c.json({error:'Conversation unavailable.'},404)
+  const row=await db.prepare('SELECT * FROM whot_matches WHERE room=?').bind(room).first<WhotRow>()
+  c.header('Cache-Control','no-store')
+  return c.json(row?whotView(row,user):null)
+})
+app.post('/api/rooms/:id/whot',async c=>{
+  const room=c.req.param('id'), account=c.get('user'), db=c.env.DB
+  if(!await member(db,room,account.id))return c.json({error:'Conversation unavailable.'},404)
+  const input=await readBody(c.req.raw)
+  const row=await db.prepare('SELECT * FROM whot_matches WHERE room=?').bind(room).first<WhotRow>()
+  if(input?.action==='invite'){
+    if(row&&(JSON.parse(row.state) as WhotMatch).winner===undefined)return c.json({error:'There’s already a match in this chat.'},409)
+    const id=crypto.randomUUID()
+    const state=JSON.stringify(startWhot())
+    const created=now()
+    const statements=[
+      db.prepare('INSERT INTO whot_matches (room,id,invited_by,state) VALUES (?,?,?,?) ON CONFLICT(room) DO UPDATE SET id=excluded.id,invited_by=excluded.invited_by,state=excluded.state,accepted=0,version=0 WHERE whot_matches.id=? AND whot_matches.version=?').bind(room,id,account.id,state,row?.id??'',row?.version??-1),
+      db.prepare('INSERT INTO messages (id,room,author,body,created) SELECT ?,?,?,?,? WHERE EXISTS (SELECT 1 FROM whot_matches WHERE room=? AND id=?)').bind('whot-invite:'+id,room,account.id,'Invited you to play Whot. Open Whot in this chat to join.',created,room,id),
+    ]
+    const [write]=await db.batch(statements)
+    if(!write.meta.changes)return c.json({error:'There’s already a match in this chat.'},409)
+    c.executionCtx.waitUntil(c.env.ROOMS.getByName(room).fetch('https://room.internal/notify',{method:'POST',body:JSON.stringify({id:'whot-invite:'+id,author:person(account,c.req.url),body:'Invited you to play Whot. Open Whot in this chat to join.',createdAt:time(created)})}))
+    return c.json(whotView({id,invited_by:account.id,state,accepted:0,version:0},account.id))
+  }
+  if(!row||input?.id!==row.id||input.version!==row.version)return c.json({error:'The match changed. Wait for it to refresh.'},409)
+  if(!row.accepted){
+    if(input.action==='dismiss'){
+      const write=await db.prepare('DELETE FROM whot_matches WHERE room=? AND id=? AND version=? AND accepted=0').bind(room,row.id,row.version).run()
+      if(!write.meta.changes)return c.json({error:'The match changed.'},409)
+      return c.json(null)
+    }
+    if(input.action!=='accept'||account.id===row.invited_by)return c.json({error:'Only the invited player can join.'},403)
+    const write=await db.prepare('UPDATE whot_matches SET accepted=1,version=version+1 WHERE room=? AND id=? AND version=?').bind(room,row.id,row.version).run()
+    if(!write.meta.changes)return c.json({error:'The match changed.'},409)
+    return c.json(whotView({...row,accepted:1,version:row.version+1},account.id))
+  }
+  const match=JSON.parse(row.state) as WhotMatch
+  if(match.winner!==undefined||match.turn!==(row.invited_by===account.id?0:1))return c.json({error:'It’s not your turn.'},409)
+  const shape=whotShapes.includes(input.shape as WhotShape)?input.shape as WhotShape:undefined
+  const next=input.action==='draw'?drawWhot(match):input.action==='play'&&typeof input.index==='number'&&Number.isInteger(input.index)?playWhot(match,input.index,shape):match
+  if(next===match)return c.json({error:'Choose a matching card.'},400)
+  const version=row.version+1
+  const state=JSON.stringify(next)
+  const writes=[db.prepare('UPDATE whot_matches SET state=?,version=? WHERE room=? AND id=? AND version=?').bind(state,version,room,row.id,row.version)]
+  const result={id:'whot-result:'+row.id,author:person(account,c.req.url),body:account.name+' won the Whot match.',createdAt:time(now())}
+  if(next.winner!==undefined)writes.push(db.prepare('INSERT OR IGNORE INTO messages (id,room,author,body,created) SELECT ?,?,?,?,? WHERE changes()=1').bind(result.id,room,account.id,result.body,Date.parse(result.createdAt)))
+  const [write]=await db.batch(writes)
+  if(!write.meta.changes)return c.json({error:'The match changed.'},409)
+  if(next.winner!==undefined)c.executionCtx.waitUntil(c.env.ROOMS.getByName(room).fetch('https://room.internal/notify',{method:'POST',body:JSON.stringify(result)}))
+  return c.json(whotView({...row,state,version},account.id))
 })
 app.get('/api/rooms/:id/messages',async c=>{
   const room=c.req.param('id')

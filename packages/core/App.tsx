@@ -17,6 +17,15 @@ import type {AdminAccount,AdminOverview,CommentAttachment,Viewer} from './index'
 
 const Admin=lazy(()=>import('./Admin'))
 const FeatureScreen=lazy(()=>import('./FeatureScreens'))
+const FriendWhot=lazy(()=>import('./FriendWhot'))
+
+function ChatWhot({base,token,room,opponent}:{base:string;token:string;room:string;opponent:string}){
+  const [open,setOpen]=useState(false)
+  return <>
+    <Button label={open?'Close Whot':'Play Whot together'} variant="plain" leading="game" onPress={()=>setOpen(!open)}/>
+    {open&&<Suspense fallback={<Copy>Opening Whot…</Copy>}><FriendWhot {...{base,token,room,opponent}}/></Suspense>}
+  </>
+}
 
 const sampleFollows:Record<string,string[]>={ada:['tobi','zee'],tobi:['ada','code'],zee:['ada','bello'],bello:['ada'],code:['tobi'],maths:['bello'],squad:['code']}
 
@@ -1527,6 +1536,7 @@ export default function App(props:Props){
   </>
   const lastOwnMessageId=room?[...(chats[room.id]??[])].reverse().find(note=>!note.call&&note.author.id===user.id)?.id:undefined
   const chat=room&&<>
+    {!demo&&page==='Chat'&&<ChatWhot key={room.id} base={base} token={token} room={room.id} opponent={displayHandle(room.person)}/>}
     {!demo&&callMedia&&deviceNotifications!=='granted'&&props.requestNotifications&&<View style={{alignItems:'center'}}><Button label="Enable call alerts" variant="plain" onPress={()=>void enableDeviceNotifications()}/></View>}
     {!demo&&!callMedia&&<Copy color={theme.muted} size={12}>Voice and video calls are available in the installed app build or a supported browser.</Copy>}
     {demo&&room.person.group&&<Card><Copy weight={800}>Pinned message</Copy><Copy>Bring one practice question to the next study session.</Copy><Button label="Join group voice call" leading="ph" variant="secondary" onPress={()=>selectOverlay({kind:'call',video:false,person:room.person,ringing:true})}/></Card>}

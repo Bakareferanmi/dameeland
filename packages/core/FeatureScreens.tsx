@@ -1,6 +1,7 @@
 import React,{useEffect,useState} from 'react'
 import {View} from 'react-native'
 import WhotGame from './WhotGame'
+import LudoGame from './LudoGame'
 import {lime,people,type Person} from './index'
 import {Avatar,Button,Card,Copy,Field,IconTile,Logo,PersonName,ScreenLinks,Segmented,row,spread,stack,useDesign,type Glyph} from './ui'
 
@@ -71,15 +72,19 @@ function Events(){
 
 function Games({startQuiz}:{startQuiz:()=>void}){
   const [whot,setWhot]=useState(false)
+  const [ludo,setLudo]=useState(false)
   const [mode,setMode]=useState<'Word Sprint'|'Number Dash'|null>(null)
   const [answer,setAnswer]=useState('')
   const [result,setResult]=useState('')
   const start=(game:'Word Sprint'|'Number Dash')=>{setMode(game);setAnswer('');setResult('')}
   if(whot)return <><Button label="Back to games" variant="plain" onPress={()=>setWhot(false)}/><WhotGame/></>
+  if(ludo)return <><Button label="Back to games" variant="plain" onPress={()=>setLudo(false)}/><LudoGame/></>
   return <>
     <FeatureIntro title="Games hub" detail="Pick a quick game to play." glyph="game"/>
     <Button label="Play Quiz Duel" onPress={startQuiz}/>
     <Button label="Play Whot vs computer" leading="game" onPress={()=>setWhot(true)}/>
+    <Copy>To play Whot with a friend, open your messages with them and tap Play Whot together.</Copy>
+    <Button label="Play Ludo" leading="game" onPress={()=>setLudo(true)}/>
     <View style={{...row,flexWrap:'wrap'}}><Button label="Word Sprint" variant="secondary" onPress={()=>start('Word Sprint')}/><Button label="Number Dash" variant="secondary" onPress={()=>start('Number Dash')}/></View>
     {mode&&<Card><Copy size={20} weight={800}>{mode}</Copy><Copy>{mode==='Word Sprint'?'Unscramble OKBO.':'What is 12 × 4?'}</Copy><Field label="Your answer" value={answer} onChangeText={setAnswer}/><Button label="Check answer" disabled={!answer.trim()} onPress={()=>setResult(answer.trim().toLowerCase()===(mode==='Word Sprint'?'book':'48')?'Correct!':'Try again.')}/>{!!result&&<Copy weight={800}>{result}</Copy>}</Card>}
   </>
