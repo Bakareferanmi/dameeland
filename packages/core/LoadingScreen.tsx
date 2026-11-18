@@ -1,5 +1,5 @@
 import React,{useEffect,useRef,useState} from 'react'
-import {AccessibilityInfo,Animated,Easing,Image,Platform,View,useWindowDimensions} from 'react-native'
+import {AccessibilityInfo,Animated,Easing,Image,Platform,View} from 'react-native'
 import {art} from './art'
 
 const logoSize=116
@@ -9,8 +9,6 @@ const eyeCentres=[20/56,36/56]
 const pupilTop=30/56*logoSize-pupilSize/2
 
 export function LoadingScreen({compact=false}:{compact?:boolean}){
-  const {width}=useWindowDimensions()
-  const desktop=width>=760
   const look=useRef(new Animated.Value(0)).current
   const pulse=useRef(new Animated.Value(1)).current
   const [animate,setAnimate]=useState(false)
@@ -37,8 +35,7 @@ export function LoadingScreen({compact=false}:{compact?:boolean}){
   },[animate,pulse])
   const translateX=look.interpolate({inputRange:[-1,1],outputRange:[-5,5]})
   return <View testID="dameeland-loading" accessibilityRole="progressbar" accessibilityLabel="Loading dameen" accessibilityState={{busy:true}}
-    style={{flex:compact?undefined:1,minHeight:compact?208:0,alignItems:compact?'center':undefined,justifyContent:compact?'center':undefined,backgroundColor:'#4F25D6',borderRadius:compact?20:0}}>
-    <View style={compact?undefined:{width:'100%',maxWidth:1056,alignSelf:'center',paddingHorizontal:desktop?38:18,paddingTop:desktop?38:18,alignItems:'flex-start'}}>
+    style={{flex:compact?undefined:1,minHeight:compact?208:0,alignItems:'center',justifyContent:'center',backgroundColor:'#4F25D6',borderRadius:compact?20:0}}>
     <Animated.View style={{width:logoSize,height:logoSize,transform:[{scale:pulse}]}} accessibilityElementsHidden importantForAccessibility="no-hide-descendants">
       <Image source={{uri:art.loadingLogo}} resizeMode="contain" style={{width:logoSize,height:logoSize}}/>
       {eyeCentres.map(centre=><Animated.View key={centre} testID="logo-pupil" style={{
@@ -46,6 +43,5 @@ export function LoadingScreen({compact=false}:{compact?:boolean}){
         borderRadius:pupilSize/2,backgroundColor:'#1B1233',transform:[{translateX}],
       }}/>)}
     </Animated.View>
-    </View>
   </View>
 }
