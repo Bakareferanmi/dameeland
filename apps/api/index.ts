@@ -90,7 +90,7 @@ const welcomeEmailHtml=`<!doctype html>
     <tr><td align="center" style="padding:24px 12px">
       <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="max-width:520px;background:#fff;border:1px solid #e9e0ff;border-radius:16px">
         <tr><td style="padding:28px;font-size:16px;line-height:1.55">
-          <img src="${welcomeSite}/og-image.png" alt="dameen logo" width="64" height="64" style="display:block;border-radius:14px">
+          <img src="${welcomeSite}/icon-192.png" alt="dameen logo" width="64" height="64" style="display:block;border-radius:14px">
           <h1 style="margin:18px 0 8px;font-size:28px;line-height:1.2">${welcomeTitle}</h1>
           <p style="margin:0 0 22px">${welcomeIntro}</p>
           <p style="margin:0 0 24px"><a href="${welcomeSite}" style="display:inline-block;padding:10px 16px;background:#6a35f0;color:#fff;border-radius:8px;font-weight:bold;text-decoration:none">Open dameen</a></p>

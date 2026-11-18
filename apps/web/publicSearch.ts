@@ -36,7 +36,7 @@ export function renderSearchPage(request: Request, page: SearchPage) {
   const url = escapeHtml(site + page.path)
   return new Response(`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <title>${title}</title><meta name="description" content="${description}"><meta name="robots" content="${robots}">
-<link rel="canonical" href="${url}"><link rel="icon" type="image/svg+xml" href="/dameeland-logo.svg">
+<link rel="canonical" href="${url}"><link rel="icon" type="image/png" sizes="48x48" href="/favicon-48.png"><link rel="icon" type="image/svg+xml" href="/dameeland-logo.svg">
 <meta property="og:type" content="${page.type}"><meta property="og:site_name" content="dameen"><meta property="og:title" content="${title}">
 <meta property="og:description" content="${description}"><meta property="og:image" content="${image}"><meta property="og:image:alt" content="${title}"><meta property="og:url" content="${url}">
 <meta name="twitter:card" content="${page.wideImage ? 'summary_large_image' : 'summary'}"><meta name="twitter:title" content="${title}"><meta name="twitter:description" content="${description}"><meta name="twitter:image" content="${image}">
