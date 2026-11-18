@@ -358,16 +358,23 @@ app.get('/api/google/callback',async c=>{
     if(!response.ok||!sub||!email||info.email_verified!==true)return fail('Google did not provide a verified email.')
     let account=await DB.prepare('SELECT id FROM users WHERE google_sub=?').bind(sub).first<{id:string}>()
     if(!account){
-      if(await DB.prepare('SELECT id FROM users WHERE email=?').bind(email).first())return fail('An account already uses this email. Log in with your password.')
-      if(!attempt.username)return fail('No Google account found on dameen. Choose Sign up first.')
-      const first=capitalizeName(clean(info.given_name,60)),last=capitalizeName(clean(info.family_name,60))
-      if(!first||!last)return fail('Add a first and last name to your Google profile or sign up with email.')
-      await DB.prepare('INSERT INTO users(id,email,name,role,salt,password_hash,first_name,last_name,google_sub,username,dob) VALUES (?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT DO NOTHING')
-        .bind(crypto.randomUUID(),email,first+' '+last,'student',random(16),random(32),first,last,sub,attempt.username,attempt.dob).run()
-      account=await DB.prepare('SELECT id FROM users WHERE google_sub=?').bind(sub).first<{id:string}>()
-      if(!account){
-        if(await usernameTaken(DB,attempt.username))return fail('That username is taken. Choose another and try again.')
-        return fail('An account already uses this email. Log in with your password.')
+      const emailAccount=await DB.prepare('SELECT id,google_sub FROM users WHERE email=?').bind(email).first<{id:string;google_sub:string|null}>()
+      if(emailAccount){
+        if(emailAccount.google_sub&&emailAccount.google_sub!==sub)return fail('This email is already linked to another Google account.')
+        const linked=await DB.prepare('UPDATE users SET google_sub=? WHERE id=? AND (google_sub IS NULL OR google_sub=?) RETURNING id').bind(sub,emailAccount.id,sub).first<{id:string}>()
+        account=linked??await DB.prepare('SELECT id FROM users WHERE google_sub=?').bind(sub).first<{id:string}>()
+        if(!account)return fail('This account could not be linked to Google. Try again.')
+      }else{
+        if(!attempt.username)return fail('No Google account found on dameen. Choose Sign up first.')
+        const first=capitalizeName(clean(info.given_name,60)),last=capitalizeName(clean(info.family_name,60))
+        if(!first||!last)return fail('Add a first and last name to your Google profile or sign up with email.')
+        await DB.prepare('INSERT INTO users(id,email,name,role,salt,password_hash,first_name,last_name,google_sub,username,dob) VALUES (?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT DO NOTHING')
+          .bind(crypto.randomUUID(),email,first+' '+last,'student',random(16),random(32),first,last,sub,attempt.username,attempt.dob).run()
+        account=await DB.prepare('SELECT id FROM users WHERE google_sub=?').bind(sub).first<{id:string}>()
+        if(!account){
+          if(await usernameTaken(DB,attempt.username))return fail('That username is taken. Choose another and try again.')
+          return fail('An account already uses this email. Try Google login instead.')
+        }
       }
     }
     await DB.prepare("UPDATE google_attempts SET status='complete',user_id=? WHERE state=?").bind(account.id,state).run()
