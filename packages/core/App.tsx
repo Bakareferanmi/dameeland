@@ -500,16 +500,26 @@ export default function App(props:Props){
   useEffect(()=>{
     if(stage!=='restore')return
     let alive=true
+    const controller=new AbortController()
+    const timeout=setTimeout(()=>{
+      if(!alive)return
+      alive=false
+      controller.abort()
+      setError('Couldn’t restore your session. Check your connection and sign in again.')
+      setStage('auth')
+    },10000)
     async function restore(){
       try{
         const stored=await props.loadToken?.()
+        if(!alive)return
         if(!stored){if(alive)setStage('intro');return}
-        const account=await api<Viewer>(base,'/me',{},stored)
+        const account=await api<Viewer>(base,'/me',{signal:controller.signal},stored)
         if(alive){setToken(stored);setUser(account);setStage('app')}
       }catch{if(alive)setStage('intro')}
+      finally{clearTimeout(timeout)}
     }
     void restore()
-    return ()=>{alive=false}
+    return ()=>{alive=false;clearTimeout(timeout);controller.abort()}
   },[stage,base,props.loadToken])
   useEffect(()=>{
     if(demo||!token||page!=='Home')return
