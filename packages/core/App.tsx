@@ -490,6 +490,7 @@ export default function App(props:Props){
     return ()=>{viewport.removeEventListener('resize',update);viewport.removeEventListener('scroll',update);setCommentKeyboardInset(0)}
   },[overlay?.kind])
   const [unread,setUnread]=useState(demo)
+  const [messageUnread,setMessageUnread]=useState(demo?2:0)
   const [notifications,setNotifications]=useState(true)
   const [deviceNotifications,setDeviceNotifications]=useState<'unknown'|'granted'|'denied'>(props.requestNotifications?'unknown':'denied')
   const [notificationItems,setNotificationItems]=useState<NotificationItem[]>([])
@@ -512,6 +513,7 @@ export default function App(props:Props){
   const refreshLock=useRef(false)
   const pullStart=useRef<{x:number;y:number}|null>(null)
   const call=<T,>(path:string,options?:RequestInit)=>api<T>(base,path,options,token)
+  const markRoomRead=(id:string)=>api<{messageUnread:number}>(base,'/rooms/'+id+'/read',{method:'PUT'},token).then(data=>setMessageUnread(data.messageUnread)).catch(()=>{})
   const notify=(message:string,tone:ToastMessage['tone']='success')=>setToast({id:uid(),message,tone})
   const dismissToast=(id:string)=>setToast(current=>current?.id===id?null:current)
   const fail=(reason:unknown)=>notify(errorMessage(reason),'error')
@@ -653,14 +655,14 @@ export default function App(props:Props){
     if(demo||!token||page!=='Notifications')return
     let alive=true
     setNotificationsLoading(true)
-    api<{unread:number;items:NotificationItem[];nextCursor:string|null}>(base,'/notifications'+(notificationCursor?'?cursor='+encodeURIComponent(notificationCursor):''),{},token).then(data=>{if(alive){setNotificationItems(data.items);setNotificationNextCursor(data.nextCursor);setUnread(data.unread>0)}}).catch(reason=>{if(alive)notify(errorMessage(reason),'error')}).finally(()=>{if(alive)setNotificationsLoading(false)})
+    api<{unread:number;messageUnread:number;items:NotificationItem[];nextCursor:string|null}>(base,'/notifications'+(notificationCursor?'?cursor='+encodeURIComponent(notificationCursor):''),{},token).then(data=>{if(alive){setNotificationItems(data.items);setNotificationNextCursor(data.nextCursor);setUnread(data.unread>0);setMessageUnread(data.messageUnread)}}).catch(reason=>{if(alive)notify(errorMessage(reason),'error')}).finally(()=>{if(alive)setNotificationsLoading(false)})
     return ()=>{alive=false}
   },[base,demo,token,page,retry,notificationCursor])
   useEffect(()=>{
     if(demo||!token||stage!=='app')return
     let active=true
-    const refresh=()=>api<{unread:number;items:NotificationItem[];nextCursor:string|null}>(base,'/notifications',{},token).then(data=>{
-      if(active){if(page!=='Notifications'||!notificationCursor){setNotificationItems(data.items);setNotificationNextCursor(data.nextCursor)}setUnread(data.unread>0)}
+    const refresh=()=>api<{unread:number;messageUnread:number;items:NotificationItem[];nextCursor:string|null}>(base,'/notifications',{},token).then(data=>{
+      if(active){if(page!=='Notifications'||!notificationCursor){setNotificationItems(data.items);setNotificationNextCursor(data.nextCursor)}setUnread(data.unread>0);setMessageUnread(data.messageUnread)}
     }).catch(()=>{})
     void refresh()
     const interval=setInterval(()=>{if(AppState.currentState==='active')void refresh()},30000)
@@ -753,7 +755,7 @@ export default function App(props:Props){
       if(syncing)return
       syncing=true
       return api<MessagePage>(base,'/rooms/'+roomId+'/messages?paged=1',{},token)
-      .then(data=>{if(active){lastSync=Date.now();setMessageNextCursor(previous=>roomId in previous?previous:{...previous,[roomId]:data.nextCursor});setChats(previous=>({...previous,[roomId]:mergeNotes(previous[roomId]??[],data.items)}));setFeedError('');if(foreground()&&data.items.some(item=>!item.call&&item.author.id!==user.id&&!item.readAt))void api(base,'/rooms/'+roomId+'/read',{method:'PUT'},token).catch(()=>{})}})
+      .then(data=>{if(active){lastSync=Date.now();setMessageNextCursor(previous=>roomId in previous?previous:{...previous,[roomId]:data.nextCursor});setChats(previous=>({...previous,[roomId]:mergeNotes(previous[roomId]??[],data.items)}));setFeedError('');if(foreground()&&data.items.some(item=>!item.call&&item.author.id!==user.id&&!item.readAt))void markRoomRead(roomId)}})
       .catch(reason=>{if(active)setFeedError(errorMessage(reason))})
       .finally(()=>{syncing=false})
     }
@@ -785,7 +787,7 @@ export default function App(props:Props){
       const item=data as Note
       setChats(previous=>({...previous,[roomId]:[...(previous[roomId]??[]).filter(m=>m.id!==item.id),item]}))
       if(item.author.id!==user.id){
-        if(foreground())void api(base,'/rooms/'+roomId+'/read',{method:'PUT'},token).catch(()=>{})
+        if(foreground())void markRoomRead(roomId)
         void props.notifyDevice?.(item.author.name,'New message: '+item.body)
       }
     }
@@ -1084,7 +1086,7 @@ export default function App(props:Props){
       scrollOffsets.current={};pendingOffset.current=null;setToast(null)
       roomCall.end();pageHistory.current=[];dismissOverlays();setToken('');setUser(me);setPage('Home');setStage('auth');setError('')
       setPosts(props.demo?initialPosts:[]);setNotes({});setChats(props.demo?initialChats:{});setMessageNextCursor({});setRoomsLoading(true);setRoomsNextCursor(null);setFollows({});setProfileStats(null)
-      setNotificationItems([]);setNotificationCursor('');setNotificationNextCursor(null);setNotificationHistory([]);setUnread(false)
+      setNotificationItems([]);setNotificationCursor('');setNotificationNextCursor(null);setNotificationHistory([]);setUnread(false);setMessageUnread(0)
       setRooms(props.demo?localRooms:[]);setRoom(null);setDraft('');setAttachment(null);setPostSearchPublic(false);clearComment();setMessage('');setSeen(new Set());setOwnStory(null);setDemoEntered(false);setBirthdays([]);setBirthdayWall([]);setWishedBirthdays(new Set());setLiveStories([]);setStoryIndex(0);setStoryMedia(null);setWishes([]);setCompletedLessons([]);setLearningError(false);setVoicePlaying(false);setQuietMode(false);setFollowingOnly(false)
     }catch(reason){fail(reason)}
   }
@@ -1590,8 +1592,8 @@ export default function App(props:Props){
           const preferences=await api<{quiet_start?:string|null;quiet_end?:string|null}>(base,'/notification-preferences',{},token)
           if(session===demoSession.current){setQuietStart(preferences.quiet_start??'');setQuietEnd(preferences.quiet_end??'')}
         }else if(page==='Notifications'){
-          const notifications=await api<{unread:number;items:NotificationItem[];nextCursor:string|null}>(base,'/notifications'+(notificationCursor?'?cursor='+encodeURIComponent(notificationCursor):''),{},token)
-          if(session===demoSession.current){setNotificationItems(notifications.items);setNotificationNextCursor(notifications.nextCursor);setUnread(notifications.unread>0)}
+          const notifications=await api<{unread:number;messageUnread:number;items:NotificationItem[];nextCursor:string|null}>(base,'/notifications'+(notificationCursor?'?cursor='+encodeURIComponent(notificationCursor):''),{},token)
+          if(session===demoSession.current){setNotificationItems(notifications.items);setNotificationNextCursor(notifications.nextCursor);setUnread(notifications.unread>0);setMessageUnread(notifications.messageUnread)}
         }else setRetry(value=>value+1)
       }
     }catch(reason){if(session===demoSession.current)fail(reason)}
@@ -1656,6 +1658,7 @@ export default function App(props:Props){
   const compose=()=>selectOverlay({kind:'create'})
   const section=(title:string)=> <Copy size={19} weight={800}>{title}</Copy>
   const failure=<Empty title="Couldn’t connect" detail={feedError} action="Try again" onPress={()=>setRetry(n=>n+1)}/>
+  const messageBadge=messageUnread>99?'99+':String(messageUnread)
   const navButton=(name:Page,glyph:Glyph)=>{
     const nearestTab=pageHistory.current.filter(entry=>tabs.some(([tab])=>entry.page===tab)).at(-1)?.page
     const active=page===name||name==='Messages'&&page==='Chat'||!tabs.some(([tab])=>page===tab)&&nearestTab===name
@@ -1664,8 +1667,10 @@ export default function App(props:Props){
       style={({pressed})=>({...row,flexDirection:desktop?'row':'column',justifyContent:desktop?'flex-start':'center',minHeight:desktop?48:54,flex:desktop?0:1,paddingHorizontal:desktop?12:0,gap:desktop?12:3,borderRadius:13,backgroundColor:desktop&&active?theme.chip:'transparent',opacity:pressed?.68:1})}>
       <View style={{width:desktop?26:38,height:desktop?28:28,borderRadius:9,alignItems:'center',justifyContent:'center',backgroundColor:active&&!desktop?theme.chip:'transparent'}}>
         <Icon name={glyph} color={color} size={desktop?21:20} strong={active}/>
+        {!desktop&&name==='Messages'&&messageUnread>0&&<View pointerEvents="none" style={{position:'absolute',right:-7,top:-7,minWidth:18,height:18,paddingHorizontal:4,borderRadius:9,alignItems:'center',justifyContent:'center',backgroundColor:'#E64661',borderWidth:2,borderColor:theme.card}}><Copy color="#FFFFFF" size={9} weight={800}>{messageBadge}</Copy></View>}
       </View>
       <Copy color={color} weight={active?800:700} size={desktop?14:10}>{name}</Copy>
+      {desktop&&name==='Messages'&&messageUnread>0&&<View style={{marginLeft:'auto',minWidth:22,height:22,paddingHorizontal:6,borderRadius:11,alignItems:'center',justifyContent:'center',backgroundColor:'#E64661'}}><Copy color="#FFFFFF" size={10} weight={800}>{messageBadge}</Copy></View>}
       {desktop&&name==='Notifications'&&unread&&<View style={{marginLeft:'auto',width:7,height:7,borderRadius:4,backgroundColor:theme.purple}}/>}
     </Pressable>
   }
@@ -1935,7 +1940,7 @@ export default function App(props:Props){
   const storyExpires=liveItem?Date.parse(liveItem.expires):storyPosted!==undefined?storyPosted+(story?.verified?verifiedStoryLifetime:storyLifetime):undefined
   const storyText=demo?personalStory?.text??(story?.id==='ada'?'Study session after school. Bring your notes!':story?.id==='bello'?'Maths test is on Friday. Revise quadratics!':story?.id==='code'?'Code Club meets on Friday!':'See you at quiz night!'):liveItem?.text??''
   return <Design.Provider value={{theme,font,reduced,renderIcon:props.renderIcon,renderVideo:props.renderVideo}}><View style={{flex:1,backgroundColor:theme.bg,width:'100%'}}>
-    {starting?<LoadingScreen/>:stage==='restore'?(restoreError?<View style={{flex:1,justifyContent:'center',padding:24}}><Empty title="Couldn’t reconnect" detail="Check your connection and try again. Your saved session is still on this device." action="Try again" onPress={()=>{setRestoreError(false);setRestoreAttempt(value=>value+1)}}/></View>:<LoadingScreen/>):stage==='intro'?<Intro desktop={desktop} step={step} reduced={reduced} showPublicBrand={Platform.OS==='web'&&!demo} onSkip={()=>setStage('auth')} onNext={()=>step===2?setStage('auth'):setStep(step+1)} onBack={()=>setStep(step-1)}/>:stage==='auth'?<Auth base={base} demo={demo} busy={busy} error={error} submit={authenticate} onGoogle={(mode,username,dob)=>void authenticateWithGoogle(mode,username,dob)} onCancelGoogle={()=>googleRequest.current?.abort()} googlePending={googlePending} onDemo={()=>{setDemoEntered(true);setPosts(initialPosts);setChats(initialChats);setRooms(localRooms);setUnread(true);setUser(me);setPage('Home');setStage('app')}} reduced={reduced} recovering={recovering} setRecovering={setRecovering}/>:
+    {starting?<LoadingScreen/>:stage==='restore'?(restoreError?<View style={{flex:1,justifyContent:'center',padding:24}}><Empty title="Couldn’t reconnect" detail="Check your connection and try again. Your saved session is still on this device." action="Try again" onPress={()=>{setRestoreError(false);setRestoreAttempt(value=>value+1)}}/></View>:<LoadingScreen/>):stage==='intro'?<Intro desktop={desktop} step={step} reduced={reduced} showPublicBrand={Platform.OS==='web'&&!demo} onSkip={()=>setStage('auth')} onNext={()=>step===2?setStage('auth'):setStep(step+1)} onBack={()=>setStep(step-1)}/>:stage==='auth'?<Auth base={base} demo={demo} busy={busy} error={error} submit={authenticate} onGoogle={(mode,username,dob)=>void authenticateWithGoogle(mode,username,dob)} onCancelGoogle={()=>googleRequest.current?.abort()} googlePending={googlePending} onDemo={()=>{setDemoEntered(true);setPosts(initialPosts);setChats(initialChats);setRooms(localRooms);setUnread(true);setMessageUnread(2);setUser(me);setPage('Home');setStage('app')}} reduced={reduced} recovering={recovering} setRecovering={setRecovering}/>:
       <View style={{flex:1,flexDirection:'row',width:'100%',maxWidth:1360,alignSelf:'center'}}>
         {desktop&&page!=='Chat'&&page!=='Messages'&&<View style={{width:222,borderRightWidth:1,borderColor:theme.border,padding:18,gap:5,backgroundColor:theme.card}}>
           <View style={{minHeight:64,justifyContent:'center',marginBottom:14}}><Logo size={40}/></View>
@@ -1971,7 +1976,7 @@ export default function App(props:Props){
             </View>
             <View style={{...row,gap:0}}>
               <IconButton name={themeName==='dark'?'sun':'moon'} label="Toggle light or dark mode" onPress={()=>setAppearance(themeName==='light'?'dark':'light')}/>
-              {!desktop&&<><View><IconButton name="bell" label="Notifications" onPress={()=>open('Notifications')}/>{unread&&<View pointerEvents="none" style={{position:'absolute',right:8,top:7,width:7,height:7,borderRadius:5,backgroundColor:theme.purple}}/>}</View><IconButton name="msg" label="Messages" onPress={()=>open('Messages')}/><Pressable accessibilityRole="button" accessibilityLabel="Your profile" style={{width:44,height:44,alignItems:'center',justifyContent:'center'}} onPress={()=>showProfile(user)}><Avatar person={user} size={31}/></Pressable></>}
+              {!desktop&&<><View><IconButton name="bell" label="Notifications" onPress={()=>open('Notifications')}/>{unread&&<View pointerEvents="none" style={{position:'absolute',right:8,top:7,width:7,height:7,borderRadius:5,backgroundColor:theme.purple}}/>}</View><View><IconButton name="msg" label={messageUnread?`Messages, ${messageUnread} unread`:'Messages'} onPress={()=>open('Messages')}/>{messageUnread>0&&<View pointerEvents="none" style={{position:'absolute',right:2,top:0,minWidth:19,height:19,paddingHorizontal:4,borderRadius:10,alignItems:'center',justifyContent:'center',backgroundColor:'#E64661',borderWidth:2,borderColor:theme.card}}><Copy color="#FFFFFF" size={9} weight={800}>{messageBadge}</Copy></View>}</View><Pressable accessibilityRole="button" accessibilityLabel="Your profile" style={{width:44,height:44,alignItems:'center',justifyContent:'center'}} onPress={()=>showProfile(user)}><Avatar person={user} size={31}/></Pressable></>}
             </View>
             </>}
           </View>
