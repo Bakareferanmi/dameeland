@@ -98,6 +98,17 @@ type PageEntry={page:Page;profile:Person;room:Room|null;overlays:Overlay[];scrol
 const tabs:[Page,Glyph][]=[['Home','home'],['Learn','book'],['Explore','search'],['Play','game']]
 const localRooms=people.filter(p=>p.id in initialChats).map(person=>({id:person.id,person}))
 const storyPeople=[people[0],people[3],people[4],people[2],people[1]]
+const arrangeFeed=(items:Post[],mixOlder=false)=>{
+  const ordered=[...items].sort((a,b)=>(b.createdAt??0)-(a.createdAt??0))
+  if(!mixOlder||ordered.length<=6||Math.random()>=.45)return ordered
+  const latest=ordered.slice(0,5)
+  const older=ordered.slice(5)
+  for(let index=older.length-1;index>0;index--){
+    const swap=Math.floor(Math.random()*(index+1))
+    ;[older[index],older[swap]]=[older[swap],older[index]]
+  }
+  return [...latest,...older]
+}
 const hour=3600000
 // Demo stories carry a posted time and disappear 12 hours later, like real ones. Zee's is about to expire.
 const demoPosted:Record<string,number>={ada:Date.now()-2*hour,bello:Date.now()-4*hour,code:Date.now()-9*hour,zee:Date.now()-storyLifetime+4*60000,tobi:Date.now()-hour}
@@ -555,7 +566,7 @@ export default function App(props:Props){
     let alive=true
     setLoading(true);setFeedError('')
     api<Post[]>(base,'/feed'+(followingOnly?'?following=1':''),{},token)
-      .then(data=>{if(alive)setPosts(data)})
+      .then(data=>{if(alive)setPosts(arrangeFeed(data))})
       .catch(reason=>{if(alive)setFeedError(errorMessage(reason))})
       .finally(()=>{if(alive)setLoading(false)})
     return ()=>{alive=false}
@@ -1403,11 +1414,11 @@ export default function App(props:Props){
       if(!demo&&token){
         if(page==='Home'){
           const [feed,stories,birthdays]=await Promise.all([
-            api<Post[]>(base,'/feed'+(followingOnly?'?following=1':''),{},token),
+            api<Post[]>(base,'/feed?refresh='+Date.now()+(followingOnly?'&following=1':''),{cache:'no-store'},token),
             api<StoryGroup[]>(base,'/stories',{},token),
             api<BirthdayEntry[]>(base,'/birthdays',{},token),
           ])
-          if(session===demoSession.current){setPosts(feed);setLiveStories(stories);setBirthdays(birthdays);setFeedError('')}
+          if(session===demoSession.current){setPosts(arrangeFeed(feed,true));setLiveStories(stories);setBirthdays(birthdays);setFeedError('')}
         }else if(page==='Explore'){
           const people=await api<(Person&{following:boolean})[]>(base,'/people?q='+encodeURIComponent(query),{},token)
           if(session===demoSession.current){setResults(people);setFollows(previous=>({...previous,...Object.fromEntries(people.map(person=>[person.id,person.following]))}));setSearchError('')}

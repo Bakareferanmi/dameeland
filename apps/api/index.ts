@@ -856,15 +856,15 @@ const postProjection=`
       / (1 + ((strftime('%s','now') * 1000 - p.created) / 3600000.0) / 12.0) rank_score
     FROM posts p JOIN users u ON u.id=p.author
 `
-const postView=(r:PostRow,url:string)=>({id:r.post_id,author:person(r,url),body:r.body,time:time(r.created),editedAt:r.edited_at?time(r.edited_at):undefined,likes:r.likes,liked:Boolean(r.liked),comments:r.comments,reposts:r.reposts,reposted:Boolean(r.reposted),searchPublic:Boolean(r.search_public),kind:r.media_kind??undefined,media:r.media?new URL('/api/media/'+r.media,url).href:undefined})
+const postView=(r:PostRow,url:string)=>({id:r.post_id,author:person(r,url),body:r.body,time:time(r.created),createdAt:r.created,editedAt:r.edited_at?time(r.edited_at):undefined,likes:r.likes,liked:Boolean(r.liked),comments:r.comments,reposts:r.reposts,reposted:Boolean(r.reposted),searchPublic:Boolean(r.search_public),kind:r.media_kind??undefined,media:r.media?new URL('/api/media/'+r.media,url).href:undefined})
 app.get('/api/feed',async c=>{
   const id=c.get('user').id
   const following=c.req.query('following')==='1'
   const {results}=await c.env.DB.prepare(`${postProjection}
     WHERE ?=0 OR p.author=? OR EXISTS(SELECT 1 FROM follows WHERE follower=? AND target=p.author)
-    ORDER BY CASE WHEN ?=1 THEN p.created ELSE rank_score END DESC LIMIT 60
-  `).bind(id,id,Number(following),id,id,Number(following)).all<PostRow>()
-  c.header('Cache-Control','private, max-age=15, stale-while-revalidate=30')
+    ORDER BY p.created DESC LIMIT 60
+  `).bind(id,id,Number(following),id,id).all<PostRow>()
+  c.header('Cache-Control',c.req.query('refresh')?'no-store':'private, max-age=15, stale-while-revalidate=30')
   return c.json(results.map(r=>postView(r,c.req.url)))
 })
 app.get('/api/posts/:id',async c=>{
