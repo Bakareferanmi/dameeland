@@ -2,7 +2,7 @@ import React,{useEffect,useRef,useState} from 'react'
 import {Animated,Image,Pressable,ScrollView,View,Platform} from 'react-native'
 import {commentGifs,commentStickers,type CommentAttachment,type Note,type Person} from './index'
 import {gifImages} from './commentGifs'
-import {Avatar,Button,Copy,displayHandle,Field,Icon,IconButton,PersonName,row,spread,useDesign} from './ui'
+import {Avatar,Button,Copy,displayHandle,Field,Icon,IconButton,LinkedText,PersonName,row,spread,useDesign} from './ui'
 
 export type GifRenderer=React.ComponentType<{uri:string;label:string;animate:boolean}>
 type Preset=Exclude<CommentAttachment,{kind:'image'}>
@@ -29,7 +29,11 @@ function CommentEntry({item,onProfile,onReply,onLike,highlighted,renderGif}:{ite
   useEffect(()=>{if(reduced){progress.setValue(1);return}Animated.timing(progress,{toValue:1,duration:220,useNativeDriver:Platform.OS!=='web',isInteraction:false}).start()},[progress,reduced])
   return <Animated.View style={{...row,alignItems:'flex-start',marginLeft:item.parentId?28:0,padding:highlighted?8:0,borderRadius:12,backgroundColor:highlighted?theme.chip:'transparent',opacity:progress,transform:[{translateY:progress.interpolate({inputRange:[0,1],outputRange:[8,0]})}]}}>
     <Pressable accessibilityRole="button" accessibilityLabel={'Open '+displayHandle(item.author)+' profile'} onPress={()=>onProfile(item.author)} hitSlop={4} style={{minWidth:40,minHeight:40,justifyContent:'center',alignItems:'center'}}><Avatar person={item.author} size={36}/></Pressable>
-    <View style={{flex:1,gap:5}}><Pressable accessibilityRole="button" onPress={()=>onProfile(item.author)} style={{alignSelf:'flex-start',minHeight:24,justifyContent:'center'}}><PersonName person={item.author}/></Pressable>{item.replyTo&&<Copy size={12} color={theme.muted}>Replying to {item.replyTo}</Copy>}{!!item.body&&<Copy>{item.body}</Copy>}{item.attachment&&<CommentMedia attachment={item.attachment} renderGif={renderGif}/>}
+    <View style={{flex:1,gap:5}}>
+      <Pressable accessibilityRole="button" onPress={()=>onProfile(item.author)} style={{alignSelf:'flex-start',minHeight:24,justifyContent:'center'}}><PersonName person={item.author}/></Pressable>
+      {item.replyTo&&<Copy size={12} color={theme.muted}>Replying to {item.replyTo}</Copy>}
+      {!!item.body&&<LinkedText>{item.body}</LinkedText>}
+      {item.attachment&&<CommentMedia attachment={item.attachment} renderGif={renderGif}/>}
       <View style={row}><Button label={item.liked?'Unlike comment':'Like comment'} variant="plain" onPress={()=>onLike(item)}/>{!!item.likes&&<Copy size={12}>{item.likes}</Copy>}<Button label="Reply" variant="plain" onPress={()=>onReply(item)}/></View>
     </View>
   </Animated.View>

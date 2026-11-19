@@ -1,5 +1,5 @@
 import React,{createContext,useContext,useEffect,useRef,useState} from 'react'
-import {Animated,Image,Platform,Pressable,Text,TextInput,View,type TextInputProps,type ViewStyle} from 'react-native'
+import {Animated,Image,Linking,Platform,Pressable,Text,TextInput,View,type TextInputProps,type ViewStyle} from 'react-native'
 import {danger,lime,teacherGold,themes,type Person} from './index'
 import {art} from './art'
 import {glyphs,type Glyph,type IconRendererProps} from './icons'
@@ -21,6 +21,20 @@ export function Copy({children,size=14,weight=500,color,center=false}:{children:
   const {theme,font}=useDesign()
   const lineHeight=Math.ceil(size*(size>=30?1.1:size>=20?1.22:1.42))
   return <Text style={[{color:color??theme.text,fontSize:size,lineHeight,letterSpacing:size>=24?-size*.035:size>=18?-.35:0,textAlign:center?'center':'left'},font(weight)]}>{children}</Text>
+}
+
+const postedLink=/((?:https?:\/\/|www\.)[^\s<]+)/gi
+export function LinkedText({children,size=14,weight=500,color,linkColor}:{children:string;size?:number;weight?:number;color?:string;linkColor?:string}){
+  const {theme,font}=useDesign()
+  const lineHeight=Math.ceil(size*(size>=30?1.1:size>=20?1.22:1.42))
+  const pieces=children.split(postedLink)
+  return <Text style={[{color:color??theme.text,fontSize:size,lineHeight},font(weight)]}>{pieces.map((piece,index)=>{
+    if(!/^(?:https?:\/\/|www\.)/i.test(piece))return piece
+    const match=piece.match(/^(.*?)([.,!?;:)}\]]*)$/)
+    const label=match?.[1]??piece,suffix=match?.[2]??''
+    const url=/^www\./i.test(label)?'https://'+label:label
+    return <React.Fragment key={index}><Text accessibilityRole="link" accessibilityLabel={'Open '+label} onPress={event=>{event.stopPropagation?.();void Linking.openURL(url)}} style={[{color:linkColor??theme.purple,textDecorationLine:'underline'},font(800)]}>{label}</Text>{suffix}</React.Fragment>
+  })}</Text>
 }
 
 export function ScreenLinks<Page extends string>({items,open}:{items:readonly (readonly [Page,Glyph])[];open:(page:Page)=>void}){
