@@ -1103,12 +1103,12 @@ export default function App(props:Props){
       let attempt:GoogleStart|undefined
       googleWindow=await props.openGoogle(async()=>{
         attempt=await api<GoogleStart>(base,'/google/start',{...json({mode,username,dob,referralCode}),signal:controller.signal})
+        storeGoogleAttempt({state:attempt.state,exchange:attempt.exchange,expires:Date.now()+600000})
         return attempt.url
       })
       if(!attempt)throw new Error('Google sign-in could not start.')
       const {state,exchange}=attempt
       const deadline=Date.now()+600000
-      storeGoogleAttempt({state,exchange,expires:deadline})
       while(!controller.signal.aborted&&Date.now()<deadline){
         try{
           const result=await api<Session|{pending:true}>(base,'/google/exchange',{...json({state,exchange}),signal:controller.signal})
