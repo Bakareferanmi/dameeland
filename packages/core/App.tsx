@@ -86,6 +86,7 @@ type GoogleWindow={close:()=>void}
 type Media={name:string;uri:string;data:Blob|{uri:string;name:string;type:string};kind?:'image'|'video'|'audio';duration?:number}
 type Props={
   demo:boolean; base:string; phone?:boolean; initialTheme:Theme; font:(weight:number)=>object; renderIcon:React.ComponentType<IconRendererProps>;
+  initialUrl?:string;
   loadToken?:()=>Promise<string|null>; saveToken?:(token:string|null)=>Promise<void>;
   openGoogle?:(getUrl:()=>Promise<string>)=>Promise<GoogleWindow>;
   callMedia?:CallMedia;
@@ -463,11 +464,14 @@ export default function App(props:Props){
   const [personalAnalytics,setPersonalAnalytics]=useState<{posts:number;followers:number;following:number;likes:number;comments:number;reposts:number;invites:number}|null>(null)
   const [inviteInfo,setInviteInfo]=useState<{code:string;url:string;count:number}|null>(null)
   const referralCode=React.useMemo(()=>{
-    if(Platform.OS!=='web')return ''
-    const incoming=new URLSearchParams(window.location.search).get('ref')?.trim().slice(0,32)??''
-    if(incoming)window.localStorage.setItem('dameeland-referral',incoming)
-    return incoming||(window.localStorage.getItem('dameeland-referral')??'')
-  },[])
+    const source=Platform.OS==='web'?window.location.href:props.initialUrl
+    const incoming=source?new URL(source).searchParams.get('ref')?.trim().slice(0,32)??'':''
+    if(Platform.OS==='web'){
+      if(incoming)window.localStorage.setItem('dameeland-referral',incoming)
+      return incoming||(window.localStorage.getItem('dameeland-referral')??'')
+    }
+    return incoming
+  },[props.initialUrl])
   const clearReferral=()=>{if(Platform.OS==='web')window.localStorage.removeItem('dameeland-referral')}
   const [presenceById,setPresenceById]=useState<Record<string,Presence>>({})
   const sharedLinkHandled=useRef(false)
@@ -1018,10 +1022,12 @@ export default function App(props:Props){
     void props.share?.(sharedLink('profile',person.username),{title:handle+' on dameen',message:'View '+handle+' on dameen'}).then(()=>notify('Profile link ready to share')).catch(fail)
   }
   useEffect(()=>{
-    if(sharedLinkHandled.current||stage!=='app'||(!demo&&!token)||Platform.OS!=='web')return
-    const params=new URLSearchParams(window.location.search)
-    const postId=params.get('post')
-    const profileId=params.get('profile')
+    if(sharedLinkHandled.current||stage!=='app'||(!demo&&!token))return
+    const source=Platform.OS==='web'?window.location.href:props.initialUrl
+    if(!source)return
+    const url=new URL(source),params=url.searchParams
+    const postId=params.get('post')??url.pathname.match(/^\/p\/([^/]+)/)?.[1]
+    const profileId=params.get('profile')??url.pathname.match(/^\/u\/([^/]+)/)?.[1]
     const groupCode=params.get('group')
     if(!postId&&!profileId&&!groupCode)return
     sharedLinkHandled.current=true
@@ -1036,7 +1042,7 @@ export default function App(props:Props){
     }else if(groupCode&&!demo){
       void call<Room>('/groups/join/'+encodeURIComponent(groupCode),{method:'POST'}).then(joined=>{setRooms(previous=>[joined,...previous.filter(saved=>saved.id!==joined.id)]);openRoom(joined);notify('You joined '+joined.person.name)}).catch(fail)
     }
-  },[stage,token,demo])
+  },[stage,token,demo,props.initialUrl])
   const selectOverlay=(value:Overlay)=>{
     if(value.kind==='editProfile'){setProfileNameDraft(user.name);setBioDraft(user.bio??'');setProfileSearchPublic(Boolean(user.searchPublic))}
     if(value.kind==='editUsername')setUsernameDraft(user.username??'')
@@ -1102,7 +1108,7 @@ export default function App(props:Props){
     try{
       let attempt:GoogleStart|undefined
       googleWindow=await props.openGoogle(async()=>{
-        attempt=await api<GoogleStart>(base,'/google/start',{...json({mode,username,dob,referralCode}),signal:controller.signal})
+        attempt=await api<GoogleStart>(base,'/google/start',{...json({mode,username,dob,referralCode,client:Platform.OS==='web'?'web':'mobile'}),signal:controller.signal})
         storeGoogleAttempt({state:attempt.state,exchange:attempt.exchange,expires:Date.now()+600000})
         return attempt.url
       })
