@@ -536,6 +536,19 @@ export default function App(props:Props){
     }catch(reason){setDeviceNotifications('unknown');fail(reason)}
   }
   useEffect(()=>{
+    if(demo||!token||stage!=='app'||!props.getNotificationDevice)return
+    let active=true
+    const register=async()=>{
+      const device=await props.getNotificationDevice?.()
+      if(!device||!active)return
+      await api(base,'/notifications/devices',json(device),token)
+      if(active)setDeviceNotifications('granted')
+    }
+    void register().catch(()=>{})
+    const subscription=AppState.addEventListener('change',state=>{if(state==='active')void register().catch(()=>{})})
+    return ()=>{active=false;subscription.remove()}
+  },[base,demo,stage,token])
+  useEffect(()=>{
     let alive=true
     AccessibilityInfo.isReduceMotionEnabled?.().then(value=>{if(alive)setReduced(value)})
     const sub=AccessibilityInfo.addEventListener?.('reduceMotionChanged',setReduced)

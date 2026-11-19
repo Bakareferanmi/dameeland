@@ -55,9 +55,9 @@ async function sendPush(env:Env,db:D1Database,devices:PushDevice[],title:string,
       catch(error){const status=error instanceof webpush.WebPushError?error.statusCode:0;if(status===404||status===410)dead.push(device.id)}
     }))
   }
-  const expo=devices.filter(device=>device.token?.startsWith('ExponentPushToken['))
+  const expo=devices.filter(device=>/^(?:Exponent|Expo)PushToken\[[^\]]+\]$/.test(device.token??''))
   if(expo.length){
-    const response=await fetch('https://exp.host/--/api/v2/push/send',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(expo.map(device=>({to:device.token,title,body,data:{entityId,notificationId,kind},sound:'default',priority:kind==='call'?'high':'normal',...(kind==='call'&&device.platform==='android'?{channelId:'calls'}:{})})))})
+    const response=await fetch('https://exp.host/--/api/v2/push/send',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(expo.map(device=>({to:device.token,title,body,data:{entityId,notificationId,kind},sound:'default',priority:'high',...(device.platform==='android'?{channelId:kind==='call'?'calls':'default'}:{})})))})
     if(response.ok){const result=await response.json<{data?:Array<{status:string;details?:{error?:string}}>}>();result.data?.forEach((item,index)=>{if(item.status==='error'&&item.details?.error==='DeviceNotRegistered')dead.push(expo[index].id)})}
   }
   if(dead.length)await db.prepare('DELETE FROM notification_devices WHERE id IN ('+dead.map(()=>'?').join(',')+')').bind(...dead).run()

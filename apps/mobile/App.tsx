@@ -10,6 +10,7 @@ import {PlusJakartaSans_700Bold} from '@expo-google-fonts/plus-jakarta-sans/700B
 import {PlusJakartaSans_800ExtraBold} from '@expo-google-fonts/plus-jakarta-sans/800ExtraBold'
 import * as SecureStore from 'expo-secure-store'
 import * as Notifications from 'expo-notifications'
+import Constants from 'expo-constants'
 import Dameeland from '@dameeland/core/app'
 import {LoadingScreen} from '@dameeland/core/loading'
 import NativeVideo from './NativeVideo'
@@ -24,17 +25,24 @@ const share=async(url:string,details?:{title:string;message:string})=>{
   await Share.share(Platform.OS==='ios'?{url,message:details?.message,title:details?.title}:{message,title:details?.title})
 }
 Notifications.setNotificationHandler({handleNotification:async()=>({shouldShowAlert:true,shouldShowBanner:true,shouldShowList:true,shouldPlaySound:true,shouldSetBadge:true})})
+const configureNotificationChannels=async()=>{
+  if(Platform.OS!=='android')return
+  await Notifications.setNotificationChannelAsync('default',{name:'Dameen notifications',importance:Notifications.AndroidImportance.HIGH,sound:'default',vibrationPattern:[0,250,150,250]})
+  await Notifications.setNotificationChannelAsync('calls',{name:'Incoming calls',importance:Notifications.AndroidImportance.MAX,sound:'default',vibrationPattern:[0,500,250,500]})
+}
 const requestNotifications=async()=>{
-  if(Platform.OS==='android')await Notifications.setNotificationChannelAsync('default',{name:'Dameen notifications',importance:Notifications.AndroidImportance.DEFAULT,sound:'default'})
-  if(Platform.OS==='android')await Notifications.setNotificationChannelAsync('calls',{name:'Incoming calls',importance:Notifications.AndroidImportance.MAX,sound:'default',vibrationPattern:[0,500,250,500]})
+  await configureNotificationChannels()
   const current=await Notifications.getPermissionsAsync()
   if(current.granted)return true
   const next=await Notifications.requestPermissionsAsync()
   return next.granted
 }
 const getNotificationDevice=async()=>{
+  await configureNotificationChannels()
   if(!(await Notifications.getPermissionsAsync()).granted)return null
-  const token=await Notifications.getExpoPushTokenAsync()
+  const projectId=Constants.expoConfig?.extra?.eas?.projectId??Constants.easConfig?.projectId
+  if(!projectId)throw new Error('This build is not linked to its Expo project. Rebuild the app with EAS.')
+  const token=await Notifications.getExpoPushTokenAsync({projectId})
   return {platform:Platform.OS==='ios'?'ios':'android',token:token.data} as {platform:'android'|'ios';token:string}
 }
 const notifyDevice=async(title:string,body:string)=>{await Notifications.scheduleNotificationAsync({content:{title,body,sound:'default'},trigger:null})}
