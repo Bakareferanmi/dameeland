@@ -26,6 +26,11 @@ const saveToken=async(value:string|null)=>{
   else localStorage.removeItem(storageKey)
 }
 const openGoogle=async(getUrl:()=>Promise<string>)=>{
+  if(matchMedia('(max-width: 760px), (pointer: coarse)').matches){
+    const url=await getUrl()
+    location.assign(url)
+    return {close:()=>{}}
+  }
   const popup=window.open('about:blank','_blank','popup,width=500,height=650')
   if(!popup)throw new Error('Allow pop-ups to continue with Google.')
   try{popup.location.href=await getUrl()}
