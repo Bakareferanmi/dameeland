@@ -4,7 +4,7 @@ import {browserCallMedia,RoomCall,useRoomCall,type CallMedia} from './calls'
 import {readCallSignal,type CallSignal} from './callSignal'
 import React,{lazy,Suspense,useCallback,useEffect,useLayoutEffect,useRef,useState} from 'react'
 import {AccessibilityInfo,Animated,AppState,BackHandler,Easing,Image,KeyboardAvoidingView,Modal,PanResponder,Platform,Pressable,RefreshControl,ScrollView,Switch,TextInput,View,useWindowDimensions,type ViewStyle} from 'react-native'
-import {api,birthdayToday,validBirthDate,storyLifetime,verifiedStoryLifetime,storyVideoLimit,verifiedStoryVideoLimit,verifiedStoryLimit,capitalizeName,normalizeUsername,usernameHint,validUsername,initialChats,initialComments,initialPosts,initials,lime,me,people,questions,slides,themes,type FollowListKind,type FollowPage,type FollowStats,type Note,type Person,type Post,type BirthdayEntry,type Role,type Story,type StoryGroup,type Theme} from './index'
+import {api,ApiError,birthdayToday,validBirthDate,storyLifetime,verifiedStoryLifetime,storyVideoLimit,verifiedStoryVideoLimit,verifiedStoryLimit,capitalizeName,normalizeUsername,usernameHint,validUsername,initialChats,initialComments,initialPosts,initials,lime,me,people,questions,slides,themes,type FollowListKind,type FollowPage,type FollowStats,type Note,type Person,type Post,type BirthdayEntry,type Role,type Story,type StoryGroup,type Theme} from './index'
 import {Avatar,Button,Card,Copy,Design,displayHandle,Field,Icon,IconButton,IconTile,Logo,PersonName,ScreenLinks,Segmented,VerifiedBadge,row,spread,stack,useDesign,type Glyph,type IconRendererProps} from './ui'
 import type {ExtraPage} from './FeatureScreens'
 import {LoadingScreen} from './LoadingScreen'
@@ -373,6 +373,8 @@ export default function App(props:Props){
   const theme=themes[themeName]
   const [reduced,setReduced]=useState(false)
   const [starting,setStarting]=useState(true)
+  const [restoreError,setRestoreError]=useState(false)
+  const [restoreAttempt,setRestoreAttempt]=useState(0)
   const [stage,setStage]=useState<'intro'|'auth'|'app'|'restore'>(props.loadToken&&!demo?'restore':'intro')
   const [step,setStep]=useState(0)
   const [recovering,setRecovering]=useState(false)
@@ -499,11 +501,12 @@ export default function App(props:Props){
       }
       if(granted&&Platform.OS!=='web'&&token&&props.getNotificationDevice){
         const device=await props.getNotificationDevice()
-        if(device)await call('/notifications/devices',json(device))
+        if(!device)throw new Error('Couldn’t register this phone for push notifications.')
+        await call('/notifications/devices',json(device))
       }
       setDeviceNotifications(granted?'granted':'denied')
       notify(granted?'Device notifications enabled.':'Notifications were not enabled.',granted?'success':'error')
-    }catch(reason){setDeviceNotifications('denied');fail(reason)}
+    }catch(reason){setDeviceNotifications('unknown');fail(reason)}
   }
   useEffect(()=>{
     let alive=true
@@ -516,8 +519,8 @@ export default function App(props:Props){
     return ()=>clearTimeout(timer)
   },[])
   useEffect(()=>{
-    if(!starting&&stage!=='restore')props.onReady?.()
-  },[starting,stage,props.onReady])
+    if(!starting&&(stage!=='restore'||restoreError))props.onReady?.()
+  },[starting,stage,restoreError,props.onReady])
   useEffect(()=>{
     if(stage!=='restore')return
     let alive=true
@@ -526,8 +529,7 @@ export default function App(props:Props){
       if(!alive)return
       alive=false
       controller.abort()
-      setError('Couldn’t restore your session. Check your connection and sign in again.')
-      setStage('auth')
+      setRestoreError(true)
     },10000)
     async function restore(){
       try{
@@ -536,12 +538,18 @@ export default function App(props:Props){
         if(!stored){if(alive)setStage('intro');return}
         const account=await api<Viewer>(base,'/me',{signal:controller.signal},stored)
         if(alive){setToken(stored);setUser(account);setStage('app')}
-      }catch{if(alive)setStage('intro')}
+      }catch(reason){
+        if(!alive)return
+        if(reason instanceof ApiError&&reason.status===401){
+          setError('Your session has expired. Sign in again to continue.')
+          setStage('auth')
+        }else setRestoreError(true)
+      }
       finally{clearTimeout(timeout)}
     }
     void restore()
     return ()=>{alive=false;clearTimeout(timeout);controller.abort()}
-  },[stage,base,props.loadToken])
+  },[stage,base,props.loadToken,restoreAttempt])
   useEffect(()=>{
     if(demo||!token||page!=='Home')return
     let alive=true
@@ -1741,7 +1749,7 @@ export default function App(props:Props){
   const storyExpires=liveItem?Date.parse(liveItem.expires):storyPosted!==undefined?storyPosted+(story?.verified?verifiedStoryLifetime:storyLifetime):undefined
   const storyText=demo?personalStory?.text??(story?.id==='ada'?'Study session after school. Bring your notes!':story?.id==='bello'?'Maths test is on Friday. Revise quadratics!':story?.id==='code'?'Code Club meets on Friday!':'See you at quiz night!'):liveItem?.text??''
   return <Design.Provider value={{theme,font,reduced,renderIcon:props.renderIcon,renderVideo:props.renderVideo}}><View style={{flex:1,backgroundColor:theme.bg,width:'100%'}}>
-    {starting||stage==='restore'?<LoadingScreen/>:stage==='intro'?<Intro desktop={desktop} step={step} reduced={reduced} showPublicBrand={Platform.OS==='web'&&!demo} onSkip={()=>setStage('auth')} onNext={()=>step===2?setStage('auth'):setStep(step+1)} onBack={()=>setStep(step-1)}/>:stage==='auth'?<Auth base={base} demo={demo} busy={busy} error={error} submit={authenticate} onGoogle={(mode,username,dob)=>void authenticateWithGoogle(mode,username,dob)} onCancelGoogle={()=>googleRequest.current?.abort()} googlePending={googlePending} onDemo={()=>{setDemoEntered(true);setPosts(initialPosts);setChats(initialChats);setRooms(localRooms);setUnread(true);setUser(me);setPage('Home');setStage('app')}} reduced={reduced} recovering={recovering} setRecovering={setRecovering}/>:
+    {starting?<LoadingScreen/>:stage==='restore'?(restoreError?<View style={{flex:1,justifyContent:'center',padding:24}}><Empty title="Couldn’t reconnect" detail="Check your connection and try again. Your saved session is still on this device." action="Try again" onPress={()=>{setRestoreError(false);setRestoreAttempt(value=>value+1)}}/></View>:<LoadingScreen/>):stage==='intro'?<Intro desktop={desktop} step={step} reduced={reduced} showPublicBrand={Platform.OS==='web'&&!demo} onSkip={()=>setStage('auth')} onNext={()=>step===2?setStage('auth'):setStep(step+1)} onBack={()=>setStep(step-1)}/>:stage==='auth'?<Auth base={base} demo={demo} busy={busy} error={error} submit={authenticate} onGoogle={(mode,username,dob)=>void authenticateWithGoogle(mode,username,dob)} onCancelGoogle={()=>googleRequest.current?.abort()} googlePending={googlePending} onDemo={()=>{setDemoEntered(true);setPosts(initialPosts);setChats(initialChats);setRooms(localRooms);setUnread(true);setUser(me);setPage('Home');setStage('app')}} reduced={reduced} recovering={recovering} setRecovering={setRecovering}/>:
       <View style={{flex:1,flexDirection:'row',width:'100%',maxWidth:1360,alignSelf:'center'}}>
         {desktop&&page!=='Chat'&&page!=='Messages'&&<View style={{width:222,borderRightWidth:1,borderColor:theme.border,padding:18,gap:5,backgroundColor:theme.card}}>
           <View style={{minHeight:64,justifyContent:'center',marginBottom:14}}><Logo size={40}/></View>

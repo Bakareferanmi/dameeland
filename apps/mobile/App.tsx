@@ -25,6 +25,7 @@ const share=async(url:string,details?:{title:string;message:string})=>{
 }
 Notifications.setNotificationHandler({handleNotification:async()=>({shouldShowAlert:true,shouldShowBanner:true,shouldShowList:true,shouldPlaySound:true,shouldSetBadge:true})})
 const requestNotifications=async()=>{
+  if(Platform.OS==='android')await Notifications.setNotificationChannelAsync('default',{name:'Dameen notifications',importance:Notifications.AndroidImportance.DEFAULT,sound:'default'})
   if(Platform.OS==='android')await Notifications.setNotificationChannelAsync('calls',{name:'Incoming calls',importance:Notifications.AndroidImportance.MAX,sound:'default',vibrationPattern:[0,500,250,500]})
   const current=await Notifications.getPermissionsAsync()
   if(current.granted)return true
@@ -32,6 +33,7 @@ const requestNotifications=async()=>{
   return next.granted
 }
 const getNotificationDevice=async()=>{
+  if(!(await Notifications.getPermissionsAsync()).granted)return null
   const token=await Notifications.getExpoPushTokenAsync()
   return {platform:Platform.OS==='ios'?'ios':'android',token:token.data} as {platform:'android'|'ios';token:string}
 }

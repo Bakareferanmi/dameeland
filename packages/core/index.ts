@@ -99,13 +99,20 @@ export const initialChats:Record<string,Note[]> = {
   code:[{id:'m4',author:people[4],body:'We’re meeting after school on Friday.'}],
 }
 export const initials = (name:string) => name.trim().split(/\s+/).slice(0,2).map(part=>part[0]?.toUpperCase()).join('')
+export class ApiError extends Error {
+  constructor(message:string,readonly status:number){super(message);this.name='ApiError'}
+}
+
 export async function api<T>(base:string,path:string,options:RequestInit={},token?:string):Promise<T>{
   const headers = new Headers(options.headers)
   if(typeof options.body === 'string') headers.set('Content-Type','application/json')
   if(token) headers.set('Authorization','Bearer '+token)
   const response = await fetch(base.replace(/\/$/,'')+'/api'+path,{...options,headers})
-  const result = await response.json() as {error?:string}
-  if(!response.ok) throw new Error(result.error ?? 'Something went wrong. Try again.')
+  if(!response.ok){
+    const result=await response.json().catch(()=>null) as {error?:string}|null
+    throw new ApiError(result?.error ?? 'Something went wrong. Try again.',response.status)
+  }
+  const result=await response.json()
   return result as unknown as T
 }
 
