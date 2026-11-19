@@ -2,6 +2,7 @@ import StickerIcon from '@hugeicons/core-free-icons/StickerIcon'
 import ArrowLeft01Icon from '@hugeicons/core-free-icons/ArrowLeft01Icon'
 import ArrowRight01Icon from '@hugeicons/core-free-icons/ArrowRight01Icon'
 import BookOpen01Icon from '@hugeicons/core-free-icons/BookOpen01Icon'
+import BluetoothIcon from '@hugeicons/core-free-icons/BluetoothIcon'
 import BubbleChatIcon from '@hugeicons/core-free-icons/BubbleChatIcon'
 import Calculator01Icon from '@hugeicons/core-free-icons/Calculator01Icon'
 import Call02Icon from '@hugeicons/core-free-icons/Call02Icon'
@@ -29,6 +30,7 @@ import Sun03Icon from '@hugeicons/core-free-icons/Sun03Icon'
 import TextFontIcon from '@hugeicons/core-free-icons/TextFontIcon'
 import Tick02Icon from '@hugeicons/core-free-icons/Tick02Icon'
 import TrophyIcon from '@hugeicons/core-free-icons/TrophyIcon'
+import VolumeHighIcon from '@hugeicons/core-free-icons/VolumeHighIcon'
 import UserGroupIcon from '@hugeicons/core-free-icons/UserGroupIcon'
 import Video01Icon from '@hugeicons/core-free-icons/Video01Icon'
 import VideoOffIcon from '@hugeicons/core-free-icons/VideoOffIcon'
@@ -45,7 +47,7 @@ export const glyphs = {
   settings:Settings02Icon, check:Tick02Icon, arrow:ArrowRight01Icon,
   gift:GiftIcon, bolt:ZapIcon, trophy:TrophyIcon, maths:Calculator01Icon,
   type:TextFontIcon, code:CodeIcon, eye:ViewIcon, eyeOff:ViewOffIcon,
-  play:PlayIcon, send:SentIcon, sticker:StickerIcon,
+  play:PlayIcon, send:SentIcon, sticker:StickerIcon, speaker:VolumeHighIcon, bluetooth:BluetoothIcon,
 }
 export type Glyph = keyof typeof glyphs
 export type IconRendererProps = {icon: typeof Home01Icon; size:number; color:string; strokeWidth:number; fill?:string}

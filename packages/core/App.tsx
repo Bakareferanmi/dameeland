@@ -2010,14 +2010,14 @@ export default function App(props:Props){
               {props.pickCamera&&<Button label="Camera" leading="vid" variant="secondary" onPress={()=>void pickChatMedia('camera',false)}/>}
               {verifiedBenefits&&<Button label="View once" leading="eye" variant="secondary" onPress={()=>void pickChatMedia('gallery',true)}/>}
               {verifiedBenefits&&props.pickCamera&&<Button label="Camera once" leading="eye" variant="secondary" onPress={()=>void pickChatMedia('camera',true)}/>}
-              {props.voiceRecorder&&<Button label={voiceRecording?'Stop recording':'Voice note'} leading="mic" variant={voiceRecording?'danger':'secondary'} onPress={()=>void toggleVoiceNote()}/>}
             </View>}
             {chatMedia&&<View style={{...row,paddingHorizontal:14,paddingTop:8,backgroundColor:theme.card}}><Icon name={chatMedia.kind==='audio'?'mic':chatMedia.kind==='video'?'vid':'image'} color={theme.purple}/><View style={{flex:1}}><Copy weight={800}>{chatViewOnce?'View once ':''}{chatMedia.kind==='audio'?'voice note':chatMedia.kind}</Copy><Copy size={11} color={theme.muted}>Compressed and ready to send</Copy></View><IconButton name="close" label="Remove chat media" onPress={()=>{setChatMedia(null);setChatViewOnce(false)}}/></View>}
             <View style={{...row,paddingHorizontal:12,paddingVertical:9,borderTopWidth:1,borderColor:theme.border,backgroundColor:theme.card}}>
-              {props.pickMedia&&<IconButton name={chatTools?'close':'plus'} label={chatTools?'Close media tools':'Add media or voice note'} active={chatTools} onPress={()=>setChatTools(value=>!value)}/>}
+              {props.pickMedia&&<IconButton name={chatTools?'close':'plus'} label={chatTools?'Close media tools':'Add media'} active={chatTools} onPress={()=>setChatTools(value=>!value)}/>}
               <View style={{flex:1,minWidth:0,borderRadius:23,backgroundColor:theme.chip,borderWidth:1,borderColor:theme.border}}>
                 <TextInput accessibilityLabel="Message" placeholder="Message" placeholderTextColor={theme.muted} value={message} onChangeText={setMessage} multiline maxLength={800} style={[{color:theme.text,fontSize:15,minHeight:44,maxHeight:120,paddingHorizontal:15,paddingVertical:10,textAlignVertical:'center'},font(500)]}/>
               </View>
+              {props.voiceRecorder&&<IconButton name={voiceRecording?'micOff':'mic'} label={voiceRecording?'Stop voice-note recording':'Record voice note'} active={voiceRecording} onPress={()=>void toggleVoiceNote()}/>}
               <View style={{opacity:busy||(!message.trim()&&!chatMedia)?.5:1}}><IconButton name="send" label="Send" solid onPress={()=>void send()}/></View>
             </View>
           </KeyboardAvoidingView>}

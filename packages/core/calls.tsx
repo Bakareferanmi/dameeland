@@ -24,6 +24,9 @@ export type CallMedia={
   getStream:(video:boolean)=>Promise<CallStream>
   createPeer:()=>CallPeer
   switchCamera?:(stream:CallStream,peer:CallPeer)=>Promise<CallStream>
+  startAudioSession?:(video:boolean)=>void
+  stopAudioSession?:()=>void
+  setAudioRoute?:(route:'phone'|'speaker'|'bluetooth')=>Promise<void>
   Surface:React.ComponentType<{stream:CallStream;local?:boolean;video:boolean;full?:boolean}>
 }
 export const callIceServers=[{urls:'stun:stun.cloudflare.com:3478'}]
@@ -124,7 +127,7 @@ export function useRoomCall(media:CallMedia|undefined,roomKey:string|undefined,s
   const clear=()=>{
     const active=current.current
     current.current=null
-    if(active){clearTimeout(active.timer);active.peer?.close();stop(active.local);stop(active.remote)}
+    if(active){clearTimeout(active.timer);active.peer?.close();stop(active.local);stop(active.remote);media?.stopAudioSession?.()}
     setCall(null)
   }
   function end(message?:string,signal=true){
@@ -144,6 +147,7 @@ export function useRoomCall(media:CallMedia|undefined,roomKey:string|undefined,s
     if(!media)return
     active.state='preparing';update(active)
     try{
+      media.startAudioSession?.(active.video)
       const local=await media.getStream(active.video)
       if(current.current!==active){stop(local);return}
       active.local=local
@@ -239,6 +243,7 @@ function CallControl({label,glyph,onPress,danger=false,active=false}:{label:stri
 export function RoomCall({person,media,call,accept,end,switchCamera,canSwitchCamera}:{person:Person;media:CallMedia;call:ActiveCall;accept:()=>void;end:()=>void;switchCamera:()=>void;canSwitchCamera:boolean}){
   const [muted,setMuted]=useState(false)
   const [cameraOff,setCameraOff]=useState(false)
+  const [audioRoute,setAudioRoute]=useState<'phone'|'speaker'|'bluetooth'>(call.video?'speaker':'phone')
   const [tick,setTick]=useState(0)
   const {reduced}=useDesign()
   const {width}=useWindowDimensions()
@@ -259,6 +264,10 @@ export function RoomCall({person,media,call,accept,end,switchCamera,canSwitchCam
   const videoSurface=call.video&&(call.remote??call.local)
   const duration=call.connectedAt?formatDuration(Math.max(0,Math.floor((Date.now()-call.connectedAt)/1000))):undefined
   void tick
+  const chooseAudioRoute=async(route:'phone'|'speaker'|'bluetooth')=>{
+    if(!media.setAudioRoute)return
+    try{await media.setAudioRoute(route);setAudioRoute(route)}catch{/* The requested device may not be connected. */}
+  }
   return <View accessibilityLabel={call.video?'Video call screen':'Voice call screen'} style={{flex:1,backgroundColor:'#130D25',overflow:'hidden'}}>
     {!call.video&&call.remote&&<Surface stream={call.remote} video={false}/>}
     {videoSurface&&<View style={{position:'absolute',inset:0}}><Surface stream={videoSurface} video full local={!call.remote}/></View>}
@@ -277,6 +286,9 @@ export function RoomCall({person,media,call,accept,end,switchCamera,canSwitchCam
         {call.local&&<CallControl label={muted?'Unmute':'Mute'} glyph={muted?'micOff':'mic'} active={muted} onPress={()=>{call.local?.getAudioTracks().forEach(track=>{track.enabled=muted});setMuted(!muted)}}/>}
         {call.local&&call.video&&<CallControl label={cameraOff?'Camera on':'Camera off'} glyph={cameraOff?'vidOff':'vid'} active={cameraOff} onPress={()=>{call.local?.getVideoTracks().forEach(track=>{track.enabled=cameraOff});setCameraOff(!cameraOff)}}/>}
         {call.local&&call.video&&canSwitchCamera&&<CallControl label="Switch camera" glyph="rp" onPress={switchCamera}/>} 
+        {call.local&&media.setAudioRoute&&<CallControl label="Phone" glyph="ph" active={audioRoute==='phone'} onPress={()=>void chooseAudioRoute('phone')}/>}
+        {call.local&&media.setAudioRoute&&<CallControl label="Speaker" glyph="speaker" active={audioRoute==='speaker'} onPress={()=>void chooseAudioRoute('speaker')}/>}
+        {call.local&&media.setAudioRoute&&<CallControl label="Bluetooth" glyph="bluetooth" active={audioRoute==='bluetooth'} onPress={()=>void chooseAudioRoute('bluetooth')}/>}
         {call.state==='incoming'&&<CallControl label="Accept call" glyph="ph" active onPress={accept}/>}
         <CallControl label={call.state==='incoming'?'Decline call':'End call'} glyph="hangup" danger onPress={end}/>
       </View>
