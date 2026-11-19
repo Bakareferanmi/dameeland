@@ -475,6 +475,17 @@ const notificationView=(row:NotificationRow,url:string)=>({id:row.id,kind:row.ki
 const notificationSelect=`SELECT n.id,n.kind,n.entity_id,n.body,n.group_key,n.created,n.read,
   u.id actor_id,u.name actor_name,u.role actor_role,u.username actor_username,u.verified actor_verified,u.teacher actor_teacher,u.dob actor_dob,u.avatar_media actor_avatar_media,u.cover_media actor_cover_media
   FROM notifications n LEFT JOIN users u ON u.id=n.actor_id`
+const unreadMessageCount=(db:D1Database,user:string)=>db.prepare(`
+  WITH viewer(id) AS (VALUES (?))
+  SELECT COUNT(*) count FROM messages m CROSS JOIN viewer v
+  LEFT JOIN chat_read_state r ON r.room=m.room AND r.user_id=v.id
+  WHERE m.author!=v.id
+    AND (
+      EXISTS(SELECT 1 FROM rooms d WHERE d.id=m.room AND (d.first_user=v.id OR d.second_user=v.id))
+      OR EXISTS(SELECT 1 FROM group_members g WHERE g.group_id=m.room AND g.user_id=v.id)
+    )
+    AND ((r.last_read_at IS NOT NULL AND m.created>r.last_read_at) OR (r.last_read_at IS NULL AND m.read_at IS NULL))
+`).bind(user).first<{count:number}>()
 app.get('/api/notifications',async c=>{
   const user=c.get('user').id
   const cursor=c.req.query('cursor')??''
@@ -488,7 +499,7 @@ app.get('/api/notifications',async c=>{
   `).bind(user,cutoff,cutoff,lastId).all<NotificationRow>()
   const [unread,messageUnread]=await Promise.all([
     c.env.DB.prepare('SELECT COUNT(*) count FROM notifications WHERE user_id=? AND read=0').bind(user).first<{count:number}>(),
-    c.env.DB.prepare("SELECT COUNT(*) count FROM notifications WHERE user_id=? AND kind='message' AND read=0").bind(user).first<{count:number}>(),
+    unreadMessageCount(c.env.DB,user),
   ])
   const items=results.slice(0,12),last=items.at(-1)
   c.header('Cache-Control','no-store')
@@ -1384,8 +1395,9 @@ app.put('/api/rooms/:id/read',async c=>{
   if(!await member(c.env.DB,room,user))return c.json({error:'Conversation unavailable.'},404)
   const at=now()
   const {results}=await c.env.DB.prepare('UPDATE messages SET read_at=? WHERE room=? AND author!=? AND read_at IS NULL RETURNING id').bind(at,room,user).all<{id:string}>()
+  await c.env.DB.prepare('INSERT INTO chat_read_state(room,user_id,last_read_at) VALUES (?,?,?) ON CONFLICT(room,user_id) DO UPDATE SET last_read_at=excluded.last_read_at').bind(room,user,at).run()
   await c.env.DB.prepare("UPDATE notifications SET read=1 WHERE user_id=? AND kind='message' AND entity_id=? AND read=0").bind(user,room).run()
-  const remaining=await c.env.DB.prepare("SELECT COUNT(*) count FROM notifications WHERE user_id=? AND kind='message' AND read=0").bind(user).first<{count:number}>()
+  const remaining=await unreadMessageCount(c.env.DB,user)
   const ids=results.map(item=>item.id)
   const readAt=time(at)
   if(ids.length)c.executionCtx.waitUntil(c.env.ROOMS.getByName(room).fetch('https://room.internal/notify',{method:'POST',body:JSON.stringify({type:'read',ids,readAt})}))
