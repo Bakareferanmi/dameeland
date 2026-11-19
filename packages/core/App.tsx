@@ -539,7 +539,8 @@ export default function App(props:Props){
     if(demo||!token||stage!=='app'||!props.getNotificationDevice)return
     let active=true
     const register=async()=>{
-      const device=await props.getNotificationDevice?.()
+      let device=await props.getNotificationDevice?.()
+      if(!device&&Platform.OS!=='web'&&props.requestNotifications&&await props.requestNotifications())device=await props.getNotificationDevice?.()
       if(!device||!active)return
       await api(base,'/notifications/devices',json(device),token)
       if(active)setDeviceNotifications('granted')
