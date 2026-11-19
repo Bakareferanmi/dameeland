@@ -159,7 +159,8 @@ const allowedOrigins=(env:Env)=>[
 app.use('/api/*',async(c,next)=>cors({origin:allowedOrigins(c.env),allowMethods:['GET','POST','PUT','DELETE','OPTIONS'],allowHeaders:['Authorization','Content-Type']})(c,next))
 app.use('/api/*',async(c,next)=>{
   if(c.req.method!=='POST'&&c.req.method!=='PUT')return next()
-  const maxSize=c.req.path==='/api/posts'||c.req.path==='/api/stories'?30000000:c.req.path.startsWith('/api/me/photos/')||/^\/api\/posts\/[^/]+\/comments$/.test(c.req.path)?5300000:8192
+  const mediaUpload=c.req.path==='/api/posts'||c.req.path==='/api/stories'||/^\/api\/rooms\/[^/]+\/messages$/.test(c.req.path)
+  const maxSize=mediaUpload?30000000:c.req.path.startsWith('/api/me/photos/')||/^\/api\/posts\/[^/]+\/comments$/.test(c.req.path)?5300000:8192
   return bodyLimit({maxSize,onError:()=>{throw new HTTPException(413,{message:'The request is too large.'})}})(c,next)
 })
 app.get('/api/health',c=>c.json({ok:true}))
