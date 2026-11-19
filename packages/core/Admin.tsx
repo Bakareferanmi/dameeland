@@ -104,6 +104,7 @@ export default function Admin({base,token,sample,onSampleChange}:{base:string;to
           <View style={row}><Avatar person={account.person}/><View style={{flex:1}}><PersonName person={account.person}/>
             <Copy size={12} color={theme.muted}>{account.person.username?account.person.username+' · ':''}{account.person.teacher?'Teacher':account.person.role==='tech'?'Tech creator':'Student'}</Copy>
             {!!account.email&&<Copy size={12} color={theme.muted}>{account.email}</Copy>}
+            <Copy size={12} color={theme.muted}>{account.inviteCount.toLocaleString()} successful {account.inviteCount===1?'invite':'invites'}</Copy>
           </View></View>
           <View style={{...row,flexWrap:'wrap'}}>
             <Button label={account.person.teacher?'Remove gold check':'Give gold check'} variant="secondary" disabled={!!saving}

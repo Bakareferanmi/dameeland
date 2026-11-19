@@ -410,7 +410,7 @@ export default function App(props:Props){
   const pageScroll=useRef(0)
   const [toast,setToast]=useState<ToastMessage|null>(null)
   const [seen,setSeen]=useState(new Set<string>())
-  const [demoAccounts,setDemoAccounts]=useState<AdminAccount[]>(()=>people.filter(person=>!person.group).map(person=>({person,email:'',created:null,independentlyVerified:person.role!=='tech'&&!!person.verified})))
+  const [demoAccounts,setDemoAccounts]=useState<AdminAccount[]>(()=>people.filter(person=>!person.group).map((person,index)=>({person,email:'',created:null,independentlyVerified:person.role!=='tech'&&!!person.verified,inviteCount:index===0?3:0})))
   const [ownStory,setOwnStory]=useState<{text:string;image?:string;videoPreview?:boolean;posted:number;background?:string}|null>(null)
   const [storyMode,setStoryMode]=useState('Text')
   const [storyImage,setStoryImage]=useState<string>()
@@ -454,7 +454,9 @@ export default function App(props:Props){
   const [photoBusy,setPhotoBusy]=useState<'avatar'|'cover'|null>(null)
   const photoLock=useRef(false)
   const [profileStats,setProfileStats]=useState<{id:string; data?:FollowStats; error?:boolean}|null>(null)
-  const [personalAnalytics,setPersonalAnalytics]=useState<{posts:number;followers:number;following:number;likes:number;comments:number;reposts:number}|null>(null)
+  const [personalAnalytics,setPersonalAnalytics]=useState<{posts:number;followers:number;following:number;likes:number;comments:number;reposts:number;invites:number}|null>(null)
+  const [inviteInfo,setInviteInfo]=useState<{code:string;url:string;count:number}|null>(null)
+  const referralCode=React.useMemo(()=>Platform.OS==='web'?new URLSearchParams(window.location.search).get('ref')?.trim().slice(0,32)??'':'',[])
   const [presenceById,setPresenceById]=useState<Record<string,Presence>>({})
   const sharedLinkHandled=useRef(false)
   const [statsRefresh,refreshStats]=useState(0)
@@ -930,6 +932,8 @@ export default function App(props:Props){
     let active=true
     api<NonNullable<typeof personalAnalytics>>(base,'/me/analytics',{},token)
       .then(data=>{if(active)setPersonalAnalytics(data)}).catch(()=>{})
+    api<{code:string;url:string;count:number}>(base,'/me/invite',{},token)
+      .then(data=>{if(active)setInviteInfo(data)}).catch(()=>{})
     return ()=>{active=false}
   },[base,demo,token,page,profile.id,user.id,statsRefresh,posts.length])
   const presenceTarget=page==='Chat'?room?.person.id:page==='Profile'?profile.id:undefined
@@ -1016,7 +1020,7 @@ export default function App(props:Props){
         if(mode==='signup')welcomeAccounts.set(email,{user:account,password:values.password})
         setUser(account)
       }else{
-        const result=await api<Session>(base,'/auth/'+mode,json(mode==='signup'?{...values,email,firstName,lastName,username}:{identifier:email,password:values.password}))
+        const result=await api<Session>(base,'/auth/'+mode,json(mode==='signup'?{...values,email,firstName,lastName,username,referralCode}:{identifier:email,password:values.password}))
         setToken(result.token);setUser(result.user)
         try{await props.saveToken?.(result.token)}catch{notify('You’re signed in for this session.')}
       }
@@ -1038,7 +1042,7 @@ export default function App(props:Props){
     try{
       let attempt:GoogleStart|undefined
       googleWindow=await props.openGoogle(async()=>{
-        attempt=await api<GoogleStart>(base,'/google/start',{...json({mode,username,dob}),signal:controller.signal})
+        attempt=await api<GoogleStart>(base,'/google/start',{...json({mode,username,dob,referralCode}),signal:controller.signal})
         return attempt.url
       })
       if(!attempt)throw new Error('Google sign-in could not start.')
@@ -1769,7 +1773,8 @@ export default function App(props:Props){
         </View>
       </View>
     </Card>
-    {ownProfile&&personalAnalytics&&<Card><Copy weight={800} size={18}>Your analytics</Copy><View style={{...row,flexWrap:'wrap',gap:18}}>{([{label:'Posts',value:personalAnalytics.posts},{label:'Likes received',value:personalAnalytics.likes},{label:'Comments received',value:personalAnalytics.comments},{label:'Reposts',value:personalAnalytics.reposts},{label:'Followers',value:personalAnalytics.followers},{label:'Following',value:personalAnalytics.following}]).map(item=><View key={item.label} style={{minWidth:95,gap:2}}><Copy weight={800} size={20}>{item.value.toLocaleString()}</Copy><Copy color={theme.muted} size={12}>{item.label}</Copy></View>)}</View></Card>}
+    {ownProfile&&personalAnalytics&&<Card><Copy weight={800} size={18}>Your analytics</Copy><View style={{...row,flexWrap:'wrap',gap:18}}>{([{label:'Posts',value:personalAnalytics.posts},{label:'Likes received',value:personalAnalytics.likes},{label:'Comments received',value:personalAnalytics.comments},{label:'Reposts',value:personalAnalytics.reposts},{label:'Followers',value:personalAnalytics.followers},{label:'Following',value:personalAnalytics.following},{label:'Successful invites',value:personalAnalytics.invites}]).map(item=><View key={item.label} style={{minWidth:95,gap:2}}><Copy weight={800} size={20}>{item.value.toLocaleString()}</Copy><Copy color={theme.muted} size={12}>{item.label}</Copy></View>)}</View></Card>}
+    {ownProfile&&inviteInfo&&<Card><Copy weight={800} size={18}>Invite friends to dameen</Copy><Copy color={theme.muted}>Share your personal link. New accounts created through it are added to your invite count.</Copy><Copy size={13} weight={700}>{inviteInfo.url}</Copy><Button label="Share my invite link" leading="sh" onPress={()=>void props.share?.(inviteInfo.url,{title:'Join me on dameen',message:'Join me on dameen to learn, build, play and connect.'}).catch(fail)}/></Card>}
     {profile.role==='tech'&&<Card><View style={row}><IconTile name="code"/><View style={{flex:1}}><Copy weight={800}>Tech creator</Copy></View></View></Card>}
     {section('Posts')}
     {posts.filter(p=>p.author.id===profile.id).map(post=><PostCard key={post.id} post={post} onReact={react} onOverlay={selectOverlay} onProfile={showProfile}/>)}

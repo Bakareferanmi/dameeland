@@ -295,7 +295,9 @@ app.post('/api/auth/:action',async c=>{
     const salt=random(16)
     const role='student' as const
     account={id:crypto.randomUUID(),email,name,role,salt,username,dob:dob as string,password_hash:await passwordHash(password,salt)}
-    const write=await db.prepare('INSERT INTO users(id,email,name,role,salt,password_hash,first_name,last_name,username,dob) VALUES (?,?,?,?,?,?,?,?,?,?) ON CONFLICT DO NOTHING').bind(account.id,email,name,role,salt,account.password_hash,firstName,lastName,username,dob as string).run()
+    const referralCode=clean(body?.referralCode,32)
+    const inviter=referralCode?await db.prepare('SELECT id FROM users WHERE invite_code=?').bind(referralCode).first<{id:string}>():null
+    const write=await db.prepare('INSERT INTO users(id,email,name,role,salt,password_hash,first_name,last_name,username,dob,created,invited_by) VALUES (?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT DO NOTHING').bind(account.id,email,name,role,salt,account.password_hash,firstName,lastName,username,dob as string,now(),inviter?.id??null).run()
     if(!write.meta.changes){
       if(await usernameTaken(db,username))return c.json({error:'That username is taken.'},409)
       return c.json({error:'An account already uses this email.'},409)
@@ -307,7 +309,7 @@ app.post('/api/auth/:action',async c=>{
   return c.json(await session(c.env,c.executionCtx,account,c.req.url),action==='signup'?201:200)
 })
 
-type GoogleAttempt={username:string|null;dob:string|null;verifier:string;status:string;user_id:string|null;error:string|null}
+type GoogleAttempt={username:string|null;dob:string|null;referral_code:string|null;verifier:string;status:string;user_id:string|null;error:string|null}
 app.post('/api/google/start',async c=>{
   const {DB,GOOGLE_CLIENT_ID,GOOGLE_CLIENT_SECRET,GOOGLE_REDIRECT_URI}=c.env
   if(!GOOGLE_CLIENT_ID||!GOOGLE_CLIENT_SECRET||!GOOGLE_REDIRECT_URI)return c.json({error:'Google sign-in is not configured.'},503)
@@ -318,12 +320,13 @@ app.post('/api/google/start',async c=>{
   if(username&&await usernameTaken(DB,username))return c.json({error:'That username is taken.'},409)
   const dob=body?.mode==='signup'?body.dob:null
   if(dob!==null&&!validBirthDate(dob))return c.json({error:'Enter your date of birth.'},400)
+  const referralCode=body?.mode==='signup'?clean(body.referralCode,32):''
   const state=random(24),exchange=random(32),verifier=random(48)
   const challenge=base64Url(await crypto.subtle.digest('SHA-256',encoder.encode(verifier)))
   await DB.batch([
     DB.prepare('DELETE FROM google_attempts WHERE expires<=?').bind(now()),
     DB.prepare('DELETE FROM auth_limits WHERE expires<?').bind(now()),
-    DB.prepare('INSERT INTO google_attempts(state,exchange_hash,verifier,role,expires,username,dob) VALUES (?,?,?,?,?,?,?)').bind(state,await hash(exchange),verifier,'student',now()+180000,username,dob),
+    DB.prepare('INSERT INTO google_attempts(state,exchange_hash,verifier,role,expires,username,dob,referral_code) VALUES (?,?,?,?,?,?,?,?)').bind(state,await hash(exchange),verifier,'student',now()+180000,username,dob,referralCode||null),
   ])
   const url=new URL('https://accounts.google.com/o/oauth2/v2/auth')
   url.search=new URLSearchParams({client_id:GOOGLE_CLIENT_ID,redirect_uri:GOOGLE_REDIRECT_URI,response_type:'code',scope:'openid email profile',state,code_challenge:challenge,code_challenge_method:'S256',prompt:'select_account'}).toString()
@@ -339,7 +342,7 @@ app.get('/api/google/callback',async c=>{
     ?'<title>dameen</title><p>Google sign-in completed. Return to dameen to continue.</p>'
     :'<title>dameen</title><p>Google sign-in did not complete. Return to dameen for details.</p>',ok?200:400)
   if(!/^[a-f0-9]{48}$/.test(state)||!GOOGLE_CLIENT_ID||!GOOGLE_CLIENT_SECRET||!GOOGLE_REDIRECT_URI)return complete(false)
-  const attempt=await DB.prepare("UPDATE google_attempts SET status='processing' WHERE state=? AND status='pending' AND expires>? RETURNING verifier,username,dob").bind(state,now()).first<GoogleAttempt>()
+  const attempt=await DB.prepare("UPDATE google_attempts SET status='processing' WHERE state=? AND status='pending' AND expires>? RETURNING verifier,username,dob,referral_code").bind(state,now()).first<GoogleAttempt>()
   if(!attempt)return complete(false)
   const fail=async(error:string)=>{
     await DB.prepare("UPDATE google_attempts SET status='error',error=? WHERE state=?").bind(error,state).run()
@@ -370,8 +373,9 @@ app.get('/api/google/callback',async c=>{
         if(!attempt.username)return fail('No Google account found on dameen. Choose Sign up first.')
         const first=capitalizeName(clean(info.given_name,60)),last=capitalizeName(clean(info.family_name,60))
         if(!first||!last)return fail('Add a first and last name to your Google profile or sign up with email.')
-        await DB.prepare('INSERT INTO users(id,email,name,role,salt,password_hash,first_name,last_name,google_sub,username,dob) VALUES (?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT DO NOTHING')
-          .bind(crypto.randomUUID(),email,first+' '+last,'student',random(16),random(32),first,last,sub,attempt.username,attempt.dob).run()
+        const inviter=attempt.referral_code?await DB.prepare('SELECT id FROM users WHERE invite_code=?').bind(attempt.referral_code).first<{id:string}>():null
+        await DB.prepare('INSERT INTO users(id,email,name,role,salt,password_hash,first_name,last_name,google_sub,username,dob,created,invited_by) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT DO NOTHING')
+          .bind(crypto.randomUUID(),email,first+' '+last,'student',random(16),random(32),first,last,sub,attempt.username,attempt.dob,now(),inviter?.id??null).run()
         account=await DB.prepare('SELECT id FROM users WHERE google_sub=?').bind(sub).first<{id:string}>()
         if(!account){
           if(await usernameTaken(DB,attempt.username))return fail('That username is taken. Choose another and try again.')
@@ -578,9 +582,22 @@ app.get('/api/me/analytics',async c=>{
     (SELECT COUNT(*) FROM follows WHERE follower=?1) following,
     (SELECT COUNT(*) FROM reactions r JOIN posts p ON p.id=r.post_id WHERE p.author=?1 AND r.kind='like') likes,
     (SELECT COUNT(*) FROM reactions r JOIN posts p ON p.id=r.post_id WHERE p.author=?1 AND r.kind='repost') reposts,
-    (SELECT COUNT(*) FROM comments x JOIN posts p ON p.id=x.post_id WHERE p.author=?1) comments`).bind(c.get('user').id).first()
+    (SELECT COUNT(*) FROM comments x JOIN posts p ON p.id=x.post_id WHERE p.author=?1) comments,
+    (SELECT COUNT(*) FROM users WHERE invited_by=?1) invites`).bind(c.get('user').id).first()
   c.header('Cache-Control','no-store')
   return c.json(data)
+})
+app.get('/api/me/invite',async c=>{
+  const id=c.get('user').id,db=c.env.DB
+  let row=await db.prepare('SELECT invite_code FROM users WHERE id=?').bind(id).first<{invite_code:string|null}>()
+  if(!row?.invite_code){
+    const code=random(6)
+    await db.prepare('UPDATE users SET invite_code=? WHERE id=? AND invite_code IS NULL').bind(code,id).run()
+    row=await db.prepare('SELECT invite_code FROM users WHERE id=?').bind(id).first<{invite_code:string|null}>()
+  }
+  const count=await db.prepare('SELECT COUNT(*) count FROM users WHERE invited_by=?').bind(id).first<{count:number}>()
+  c.header('Cache-Control','no-store')
+  return c.json({code:row?.invite_code,url:'https://dameen.app/?ref='+row?.invite_code,count:count?.count??0})
 })
 app.get('/api/me/lessons',async c=>{
   c.header('Cache-Control','no-store')
@@ -651,9 +668,9 @@ app.use('/api/admin/*',async(c,next)=>{
   c.header('Cache-Control','no-store')
   await next()
 })
-type AdminUserRow=PublicAccount&{email:string;created:number|null}
+type AdminUserRow=PublicAccount&{email:string;created:number|null;invite_count:number}
 const adminAccount=(r:AdminUserRow,url:string):AdminAccount=>({
-  person:person(r,url),email:r.email,created:r.created,independentlyVerified:Boolean(r.verified),
+  person:person(r,url),email:r.email,created:r.created,independentlyVerified:Boolean(r.verified),inviteCount:r.invite_count??0,
 })
 app.get('/api/admin/overview',async c=>{
   const updatedAt=now()
@@ -711,9 +728,10 @@ app.get('/api/admin/accounts',async c=>{
   const q=clean(c.req.query('q'),100).toLowerCase().replace(/^@/,'')
   const cursor=clean(c.req.query('cursor'),64)
   const {results}=await c.env.DB.prepare(`
-    SELECT id,name,email,role,username,verified,teacher,dob,avatar_media,cover_media,bio,created FROM users
-    WHERE id>? AND (instr(lower(name),?)>0 OR instr(username,?)>0 OR instr(email,?)>0)
-    ORDER BY id LIMIT 26
+    SELECT u.id,u.name,u.email,u.role,u.username,u.verified,u.teacher,u.dob,u.avatar_media,u.cover_media,u.bio,u.created,
+      (SELECT COUNT(*) FROM users invited WHERE invited.invited_by=u.id) invite_count FROM users u
+    WHERE u.id>? AND (instr(lower(u.name),?)>0 OR instr(u.username,?)>0 OR instr(u.email,?)>0)
+    ORDER BY u.id LIMIT 26
   `).bind(cursor,q,q,q).all<AdminUserRow>()
   return c.json({accounts:results.slice(0,25).map(r=>adminAccount(r,c.req.url)),nextCursor:results.length>25?results[24].id:null})
 })
@@ -726,9 +744,10 @@ app.put('/api/admin/accounts/:id',async c=>{
       verified=CASE WHEN lower(email)=? THEN 1 ELSE ? END,
       teacher=CASE WHEN lower(email)=? THEN 1 ELSE COALESCE(?,teacher) END WHERE id=?
     RETURNING id,name,email,role,username,verified,teacher,dob,avatar_media,cover_media,bio,created
-  `).bind(ownerEmail,payload.role,ownerEmail,Number(payload.verified),ownerEmail,payload.teacher===undefined?null:Number(payload.teacher),c.req.param('id')).first<AdminUserRow>()
+  `).bind(ownerEmail,payload.role,ownerEmail,Number(payload.verified),ownerEmail,payload.teacher===undefined?null:Number(payload.teacher),c.req.param('id')).first<Omit<AdminUserRow,'invite_count'>>()
   if(!account)return c.json({error:'Account unavailable.'},404)
-  return c.json(adminAccount(account,c.req.url))
+  const invites=await c.env.DB.prepare('SELECT COUNT(*) count FROM users WHERE invited_by=?').bind(account.id).first<{count:number}>()
+  return c.json(adminAccount({...account,invite_count:invites?.count??0},c.req.url))
 })
 async function imageType(file:File,allowGif=false){
   if(!file.size||file.size>5*1024*1024)return null
