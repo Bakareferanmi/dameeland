@@ -340,7 +340,7 @@ app.get('/api/google/callback',async c=>{
   c.header('Referrer-Policy','no-referrer')
   const state=c.req.query('state')??''
   const complete=(ok:boolean)=>c.html(ok
-    ?'<title>dameen</title><p>Google sign-in completed. Return to dameen to continue.</p>'
+    ?`<title>dameen</title><meta name="viewport" content="width=device-width"><p>Google sign-in completed. Returning to dameen…</p><script>if(window.opener){window.opener.postMessage({type:'dameen-google-complete'},'https://dameen.app');window.close()}else{location.replace('https://dameen.app/?google=complete')}</script>`
     :'<title>dameen</title><p>Google sign-in did not complete. Return to dameen for details.</p>',ok?200:400)
   if(!/^[a-f0-9]{48}$/.test(state)||!GOOGLE_CLIENT_ID||!GOOGLE_CLIENT_SECRET||!GOOGLE_REDIRECT_URI)return complete(false)
   const attempt=await DB.prepare("UPDATE google_attempts SET status='processing' WHERE state=? AND status='pending' AND expires>? RETURNING verifier,username,dob,referral_code,mode").bind(state,now()).first<GoogleAttempt>()
