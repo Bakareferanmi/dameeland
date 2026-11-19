@@ -456,7 +456,13 @@ export default function App(props:Props){
   const [profileStats,setProfileStats]=useState<{id:string; data?:FollowStats; error?:boolean}|null>(null)
   const [personalAnalytics,setPersonalAnalytics]=useState<{posts:number;followers:number;following:number;likes:number;comments:number;reposts:number;invites:number}|null>(null)
   const [inviteInfo,setInviteInfo]=useState<{code:string;url:string;count:number}|null>(null)
-  const referralCode=React.useMemo(()=>Platform.OS==='web'?new URLSearchParams(window.location.search).get('ref')?.trim().slice(0,32)??'':'',[])
+  const referralCode=React.useMemo(()=>{
+    if(Platform.OS!=='web')return ''
+    const incoming=new URLSearchParams(window.location.search).get('ref')?.trim().slice(0,32)??''
+    if(incoming)window.localStorage.setItem('dameeland-referral',incoming)
+    return incoming||(window.localStorage.getItem('dameeland-referral')??'')
+  },[])
+  const clearReferral=()=>{if(Platform.OS==='web')window.localStorage.removeItem('dameeland-referral')}
   const [presenceById,setPresenceById]=useState<Record<string,Presence>>({})
   const sharedLinkHandled=useRef(false)
   const [statsRefresh,refreshStats]=useState(0)
@@ -1037,7 +1043,7 @@ export default function App(props:Props){
         setUser(account)
       }else{
         const result=await api<Session>(base,'/auth/'+mode,json(mode==='signup'?{...values,email,firstName,lastName,username,referralCode}:{identifier:email,password:values.password}))
-        setToken(result.token);setUser(result.user)
+        setToken(result.token);setUser(result.user);clearReferral()
         try{await props.saveToken?.(result.token)}catch{notify('You’re signed in for this session.')}
       }
       setPage('Home');setStage('app')
@@ -1063,14 +1069,19 @@ export default function App(props:Props){
       })
       if(!attempt)throw new Error('Google sign-in could not start.')
       const {state,exchange}=attempt
-      const deadline=Date.now()+180000
+      const deadline=Date.now()+600000
       while(!controller.signal.aborted&&Date.now()<deadline){
-        const result=await api<Session|{pending:true}>(base,'/google/exchange',{...json({state,exchange}),signal:controller.signal})
-        if('token' in result){
-          setToken(result.token);setUser(result.user)
-          try{await props.saveToken?.(result.token)}catch{notify('You’re signed in for this session.')}
-          setPage('Home');setStage('app')
-          return
+        try{
+          const result=await api<Session|{pending:true}>(base,'/google/exchange',{...json({state,exchange}),signal:controller.signal})
+          if('token' in result){
+            setToken(result.token);setUser(result.user);clearReferral()
+            try{await props.saveToken?.(result.token)}catch{notify('You’re signed in for this session.')}
+            setPage('Home');setStage('app')
+            return
+          }
+        }catch(reason){
+          if(reason instanceof ApiError&&(reason.status===400||reason.status===410))throw reason
+          if(controller.signal.aborted)throw reason
         }
         await new Promise(resolve=>setTimeout(resolve,2000))
       }
