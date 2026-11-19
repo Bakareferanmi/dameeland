@@ -432,7 +432,7 @@ export default function App(props:Props){
   const [voicePlaying,setVoicePlaying]=useState(false)
   const [quietMode,setQuietMode]=useState(false)
   const [query,setQuery]=useState(''),[results,setResults]=useState<(Person&{followsViewer?:boolean})[]>([])
-  const [groupName,setGroupName]=useState(''),[groupPeople,setGroupPeople]=useState<Person[]>([])
+  const [groupName,setGroupName]=useState(''),[groupQuery,setGroupQuery]=useState(''),[groupPeople,setGroupPeople]=useState<Person[]>([])
   const [groupMembers,setGroupMembers]=useState<Set<string>>(()=>new Set())
   const [groupLoading,setGroupLoading]=useState(false)
   const [searching,setSearching]=useState(false),[searchError,setSearchError]=useState('')
@@ -1344,7 +1344,8 @@ export default function App(props:Props){
     }catch(reason){fail(reason)}
   }
   async function openGroupCreator(){
-    setGroupName('');setGroupMembers(new Set());setGroupLoading(true);selectOverlay({kind:'createGroup'})
+    if(groupLoading||busy)return
+    setGroupName('');setGroupQuery('');setGroupMembers(new Set());setGroupLoading(true);selectOverlay({kind:'createGroup'})
     try{setGroupPeople(demo?people.filter(person=>!person.group&&person.id!==user.id):await call<Person[]>('/people?q='))}
     catch(reason){fail(reason)}finally{setGroupLoading(false)}
   }
@@ -1625,11 +1626,12 @@ export default function App(props:Props){
     <ScreenLinks items={ [['Games','game'],...(demo?[['Leaderboard','trophy'] as const,['Rewards','gift'] as const]:[])] } open={open}/>
   </>
   const roomList=rooms.filter(r=>inboxTab==='Chats'?!r.person.group:inboxTab==='Groups'?r.person.group:false)
+  const groupChoices=groupPeople.filter(person=>(person.name+' '+displayHandle(person)).toLowerCase().includes(groupQuery.trim().toLowerCase()))
   const inbox=<>
     <Segmented options={['Chats','Groups','Requests']} selected={inboxTab} onSelect={setInboxTab}/>
-    {inboxTab==='Groups'&&<Button label="Create group" leading="grp" variant="secondary" onPress={()=>void openGroupCreator()}/>}
+    {inboxTab==='Groups'&&<View style={{...spread,flexWrap:'wrap',gap:10,paddingTop:2}}><View style={{gap:2}}><Copy size={19} weight={800}>Your groups</Copy><Copy size={12} color={theme.muted}>Create spaces for classes, clubs and friends.</Copy></View><Button label="New group" leading="plus" onPress={()=>void openGroupCreator()}/></View>}
     {demo&&inboxTab==='Chats'&&<Card>{section('Active now')}<View style={row}>{[people[0],people[1],people[2]].map(person=><Pressable key={person.id} accessibilityRole="button" accessibilityLabel={'Message '+person.name} onPress={()=>void messagePerson(person)}><Avatar person={person} ring size={42}/></Pressable>)}</View></Card>}
-    {feedError&&!rooms.length?failure:roomsLoading&&!rooms.length?<Loading/>:roomList.length?<>{roomList.map(r=><Motion key={r.id} reduced={reduced} distance={4}><Pressable accessibilityRole="button" accessibilityLabel={'Open conversation with '+displayHandle(r.person)} onPress={()=>openRoom(r)}><Card style={{...row,minHeight:72}}><Avatar person={r.person} size={50}/><View style={{flex:1,minWidth:0,gap:3}}><View style={spread}><PersonName person={r.person}/>{r.lastActivityAt&&<Copy color={theme.muted} size={11}>{shortTime(r.lastActivityAt)}</Copy>}</View><Copy color={theme.muted} size={12}>{chats[r.id]?.at(-1)?.body??r.lastActivity??'Open conversation'}</Copy></View></Card></Pressable></Motion>)}{roomsNextCursor&&inboxTab==='Chats'&&<Button label={roomsLoadingMore?'Loading conversations…':'Load more conversations'} variant="secondary" disabled={roomsLoadingMore} onPress={()=>void loadMoreRooms()}/>}</>:<Empty title={inboxTab==='Chats'?'No messages yet':inboxTab==='Groups'?'No groups yet':'No message requests'} detail={inboxTab==='Chats'?'Find a classmate and start a chat.':inboxTab==='Groups'?'Create a group for your class, club or friends.':'New requests will appear here.'} action={inboxTab==='Chats'?'Find people':inboxTab==='Groups'?'Create group':undefined} onPress={inboxTab==='Groups'?()=>void openGroupCreator():()=>open('Explore')}/>}
+    {feedError&&!rooms.length?failure:roomsLoading&&!rooms.length?<Loading/>:roomList.length?<>{roomList.map(r=><Motion key={r.id} reduced={reduced} distance={4}><Pressable accessibilityRole="button" accessibilityLabel={'Open conversation with '+displayHandle(r.person)} onPress={()=>openRoom(r)}><Card style={{...row,minHeight:72}}><Avatar person={r.person} size={50}/><View style={{flex:1,minWidth:0,gap:3}}><View style={spread}><PersonName person={r.person}/>{r.lastActivityAt&&<Copy color={theme.muted} size={11}>{shortTime(r.lastActivityAt)}</Copy>}</View><Copy color={theme.muted} size={12}>{chats[r.id]?.at(-1)?.body??r.lastActivity??'Open conversation'}</Copy></View></Card></Pressable></Motion>)}{roomsNextCursor&&inboxTab==='Chats'&&<Button label={roomsLoadingMore?'Loading conversations…':'Load more conversations'} variant="secondary" disabled={roomsLoadingMore} onPress={()=>void loadMoreRooms()}/>}</>:<Empty title={inboxTab==='Chats'?'No messages yet':inboxTab==='Groups'?'No groups yet':'No message requests'} detail={inboxTab==='Chats'?'Find a classmate and start a chat.':inboxTab==='Groups'?'Use the New group button above to create your first group.':'New requests will appear here.'} action={inboxTab==='Chats'?'Find people':undefined} onPress={()=>open('Explore')}/>}
   </>
   const lastOwnMessageId=room?[...(chats[room.id]??[])].reverse().find(note=>!note.call&&note.author.id===user.id)?.id:undefined
   const chat=room&&<>
@@ -1783,14 +1785,16 @@ export default function App(props:Props){
       <Button label={busy?'Posting…':'Publish post'} onPress={()=>void createPost()} disabled={busy||(!draft.trim()&&!attachment)}/></>
   }else if(overlay?.kind==='createGroup'){
     sheet=<>
+      <Copy color={theme.muted}>Give the group a clear name, then choose the people you want to add.</Copy>
       <Field label="Group name" placeholder="e.g. SS2 Study Squad" value={groupName} onChangeText={setGroupName} maxLength={50}/>
-      <Copy weight={800}>Choose members · {groupMembers.size} selected</Copy>
-      {groupLoading?<Loading/>:<View style={{gap:8,maxHeight:360}}>{groupPeople.map(person=>{
+      <Field label="Find members" placeholder="Search name or username" glyph="search" value={groupQuery} onChangeText={setGroupQuery} autoCapitalize="none" autoCorrect={false}/>
+      <View style={spread}><Copy weight={800}>Choose members</Copy><Copy color={groupMembers.size?theme.purple:theme.muted} weight={800}>{groupMembers.size} selected</Copy></View>
+      {groupLoading?<Loading/>:groupChoices.length?<View style={{gap:8}}>{groupChoices.map(person=>{
         const selected=groupMembers.has(person.id)
         return <Pressable key={person.id} accessibilityRole="checkbox" accessibilityState={{checked:selected}} onPress={()=>setGroupMembers(previous=>{const next=new Set(previous);selected?next.delete(person.id):next.add(person.id);return next})}>
           <Card style={{...row,padding:11,borderColor:selected?theme.purple:theme.border}}><Avatar person={person} size={40}/><View style={{flex:1}}><PersonName person={person}/><Copy size={12} color={theme.muted}>@{displayHandle(person)}</Copy></View><Icon name={selected?'check':'plus'} color={selected?theme.purple:theme.muted}/></Card>
         </Pressable>
-      })}</View>}
+      })}</View>:<Empty title="No members found" detail="Try another name or username."/>}
       <Button label={busy?'Creating…':'Create group'} leading="grp" disabled={busy||groupName.trim().length<2||!groupMembers.size} onPress={()=>void createGroup()}/>
     </>
   }else if(overlay?.kind==='newStory'){
