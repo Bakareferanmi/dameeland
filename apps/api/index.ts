@@ -1113,33 +1113,34 @@ const member=(db:D1Database,room:string,user:string)=>db.prepare(`
   UNION ALL SELECT group_id id FROM group_members WHERE group_id=? AND user_id=? LIMIT 1
 `).bind(room,user,user,room,user).first()
 const streakView=async(db:D1Database,room:string)=>{
-  const row=await db.prepare('SELECT count,last_completed_day FROM chat_streaks WHERE room=?').bind(room).first<{count:number;last_completed_day:number|null}>()
+  const row=await db.prepare('SELECT count,last_completed_at,first_sent_at,second_sent_at,expires_at FROM chat_streaks WHERE room=?').bind(room).first<{count:number;last_completed_at:number|null;first_sent_at:number|null;second_sent_at:number|null;expires_at:number|null}>()
   if(!row)return null
-  const day=Math.floor(now()/86400000)
-  return {count:row.last_completed_day!==null&&row.last_completed_day<day-1?0:row.count,nextMilestone:[3,7,14,30,50,100].find(value=>value>row.count)??null}
+  if(!row.expires_at||row.expires_at<=now()){await db.prepare('DELETE FROM chat_streaks WHERE room=?').bind(room).run();return null}
+  return {count:row.count,status:row.count?'active':'pending',expiresAt:time(row.expires_at),nextMilestone:[3,7,14,30,50,100].find(value=>value>row.count)??null}
 }
 async function recordStreakMessage(db:D1Database,room:string,user:string){
   const direct=await db.prepare('SELECT first_user,second_user FROM rooms WHERE id=?').bind(room).first<{first_user:string;second_user:string}>()
   if(!direct)return
-  const day=Math.floor(now()/86400000),column=user===direct.first_user?'first_sent_day':'second_sent_day'
-  await db.prepare(`UPDATE chat_streaks SET
-    count=CASE WHEN COALESCE(last_completed_day,-2)<?-1 THEN 0 ELSE count END,
-    first_sent_day=CASE WHEN COALESCE(last_completed_day,-2)<?-1 THEN NULL ELSE first_sent_day END,
-    second_sent_day=CASE WHEN COALESCE(last_completed_day,-2)<?-1 THEN NULL ELSE second_sent_day END,
-    ${column}=? WHERE room=?`).bind(day,day,day,day,room).run()
-  await db.prepare(`UPDATE chat_streaks SET count=count+1,last_completed_day=?
-    WHERE room=? AND first_sent_day=? AND second_sent_day=? AND COALESCE(last_completed_day,-1)!=?`).bind(day,room,day,day,day).run()
+  const at=now(),column=user===direct.first_user?'first_sent_at':'second_sent_at'
+  const current=await db.prepare('SELECT expires_at FROM chat_streaks WHERE room=?').bind(room).first<{expires_at:number|null}>()
+  if(!current)return
+  if(!current.expires_at||current.expires_at<=at){await db.prepare('DELETE FROM chat_streaks WHERE room=?').bind(room).run();return}
+  await db.prepare(`UPDATE chat_streaks SET ${column}=? WHERE room=?`).bind(at,room).run()
+  await db.prepare(`UPDATE chat_streaks SET count=count+1,last_completed_at=?,expires_at=?,first_sent_at=NULL,second_sent_at=NULL
+    WHERE room=? AND first_sent_at IS NOT NULL AND second_sent_at IS NOT NULL`).bind(at,at+86400000,room).run()
 }
 app.get('/api/rooms',async c=>{
   const user=c.get('user').id
   const paged=c.req.query('paged')==='1'
   const cursor=Math.max(0,Math.min(10000,Number.parseInt(c.req.query('cursor')??'0',10)||0))
   const [{results},{results:groupResults}]=await Promise.all([c.env.DB.prepare(`SELECT r.id room,u.id,u.name,u.role,u.username,u.verified,u.teacher,u.dob,u.avatar_media,u.cover_media,u.bio,
-    m.body last_body,m.created message_at,x.video call_video,x.caller call_caller,x.state call_state,x.connected_at call_connected_at,x.ended_at call_ended_at,x.created call_at
+    m.body last_body,m.created message_at,x.video call_video,x.caller call_caller,x.state call_state,x.connected_at call_connected_at,x.ended_at call_ended_at,x.created call_at,
+    s.count streak_count,s.expires_at streak_expires
     FROM rooms r JOIN users u ON u.id=CASE WHEN r.first_user=? THEN r.second_user ELSE r.first_user END
     LEFT JOIN messages m ON m.id=(SELECT id FROM messages WHERE room=r.id ORDER BY created DESC LIMIT 1)
     LEFT JOIN calls x ON x.id=(SELECT id FROM calls WHERE room=r.id AND (state IN ('ended','declined') OR (state IN ('offered','ringing') AND expires<?)) ORDER BY created DESC LIMIT 1)
-    WHERE r.first_user=? OR r.second_user=? ORDER BY MAX(COALESCE(m.created,0),COALESCE(x.created,0)) DESC LIMIT 60`).bind(user,now(),user,user).all<PublicAccount&{room:string;last_body:string|null;message_at:number|null;call_video:number|null;call_caller:string|null;call_state:string|null;call_connected_at:number|null;call_ended_at:number|null;call_at:number|null}>(),c.env.DB.prepare(`
+    LEFT JOIN chat_streaks s ON s.room=r.id AND s.expires_at>?
+    WHERE r.first_user=? OR r.second_user=? ORDER BY MAX(COALESCE(m.created,0),COALESCE(x.created,0)) DESC LIMIT 60`).bind(user,now(),now(),user,user).all<PublicAccount&{room:string;last_body:string|null;message_at:number|null;call_video:number|null;call_caller:string|null;call_state:string|null;call_connected_at:number|null;call_ended_at:number|null;call_at:number|null;streak_count:number|null;streak_expires:number|null}>(),c.env.DB.prepare(`
     SELECT g.id room,g.name,g.created,COUNT(gm2.user_id) members,m.body last_body,m.created message_at
     FROM chat_groups g JOIN group_members mine ON mine.group_id=g.id AND mine.user_id=?
     JOIN group_members gm2 ON gm2.group_id=g.id
@@ -1151,7 +1152,7 @@ app.get('/api/rooms',async c=>{
     const duration=r.call_connected_at?Math.max(0,Math.floor(((r.call_ended_at??now())-r.call_connected_at)/1000)):0
     const label=r.call_video?'video call':'voice call'
     const callActivity=r.call_connected_at?`${r.call_video?'Video call':'Voice call'} · ${Math.floor(duration/60)}m ${String(duration%60).padStart(2,'0')}s`:r.call_state==='declined'?r.call_caller===user?'Call declined':'Declined '+label:r.call_caller===user?'No answer':'Missed '+label
-    return {id:r.room,person:person(r,c.req.url),lastActivity:latestCall?callActivity:r.last_body??undefined,lastActivityAt:r.call_at&&latestCall?time(r.call_at):r.message_at?time(r.message_at):undefined}
+    return {id:r.room,person:person(r,c.req.url),lastActivity:latestCall?callActivity:r.last_body??undefined,lastActivityAt:r.call_at&&latestCall?time(r.call_at):r.message_at?time(r.message_at):undefined,streak:r.streak_expires?{count:r.streak_count??0,status:r.streak_count?'active':'pending',expiresAt:time(r.streak_expires)}:undefined}
   })
   const groupRooms=groupResults.map(r=>({id:r.room,person:{id:r.room,name:r.name,initials:initials(r.name),role:'tech' as const,color:'#C8F53F',detail:'Group · '+r.members+' members',group:true},lastActivity:r.last_body??'Group created',lastActivityAt:time(r.message_at??r.created)}))
   const merged=[...directRooms,...groupRooms].sort((a,b)=>Date.parse(b.lastActivityAt??'')-Date.parse(a.lastActivityAt??''))
@@ -1178,7 +1179,9 @@ app.post('/api/rooms/:id/streak',async c=>{
   const room=c.req.param('id'),account=c.get('user'),db=c.env.DB
   if(!hasVerifiedBenefits(account))return c.json({error:'Chat streaks are currently available to verified users.'},403)
   if(!await member(db,room,account.id)||!await db.prepare('SELECT id FROM rooms WHERE id=?').bind(room).first())return c.json({error:'Start streaks in direct chats only.'},400)
-  await db.prepare('INSERT INTO chat_streaks(room,started_by,created) VALUES (?,?,?) ON CONFLICT DO NOTHING').bind(room,account.id,now()).run()
+  const at=now(),direct=await db.prepare('SELECT first_user FROM rooms WHERE id=?').bind(room).first<{first_user:string}>()
+  await db.prepare(`INSERT INTO chat_streaks(room,started_by,created,first_sent_at,second_sent_at,expires_at)
+    VALUES (?,?,?,?,?,?) ON CONFLICT(room) DO NOTHING`).bind(room,account.id,at,direct?.first_user===account.id?at:null,direct?.first_user===account.id?null:at,at+86400000).run()
   const other=await db.prepare('SELECT CASE WHEN first_user=? THEN second_user ELSE first_user END target FROM rooms WHERE id=?').bind(account.id,room).first<{target:string}>()
   if(other)await createNotification(c.env,c.executionCtx,db,other.target,account.id,'message',room,account.name+' started a chat streak with you 🔥','streak:'+room)
   return c.json(await streakView(db,room),201)

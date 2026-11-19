@@ -40,7 +40,7 @@ function ChatWhot({base,token,room,opponent}:{base:string;token:string;room:stri
 const sampleFollows:Record<string,string[]>={ada:['tobi','zee'],tobi:['ada','code'],zee:['ada','bello'],bello:['ada'],code:['tobi'],maths:['bello'],squad:['code']}
 
 type Page=ExtraPage|'Home'|'Learn'|'Explore'|'Play'|'Messages'|'Chat'|'Notifications'|'Profile'|'Settings'|'Quiz'|'Admin'
-type Room={id:string;person:Person;lastActivity?:string;lastActivityAt?:string}
+type Room={id:string;person:Person;lastActivity?:string;lastActivityAt?:string;streak?:ChatStreak}
 type RoomPage={items:Room[];nextCursor:string|null}
 type MessagePage={items:Note[];nextCursor:string|null}
 type Session={token:string;user:Viewer}
@@ -50,7 +50,7 @@ type NotificationItem={id:string;kind:string;entityId?:string;body:string;create
 type Presence={online:boolean;lastSeen:string|null}
 type IncomingCall={id:string;room:string;person:Person;video:boolean;offer:string;state:string;expires:string}
 type CallStatus={id:string;room:string;state:string;answer?:string;offer?:string;expires:string}
-type ChatStreak={count:number;nextMilestone:number|null}
+type ChatStreak={count:number;status:'pending'|'active';expiresAt:string;nextMilestone?:number|null}
 type BirthDraft={day:string;month:string;year:string}
 const emptyBirth:BirthDraft={day:'',month:'',year:''}
 const digits=(value:string,max:number)=>value.replace(/\D/g,'').slice(0,max)
@@ -125,6 +125,10 @@ const shortTime=(value:string)=>{
   if(!value.includes('T')) return value
   const minutes=Math.max(0,Math.floor((Date.now()-Date.parse(value))/60000))
   return minutes<1?'Just now':minutes<60?minutes+'m':minutes<1440?Math.floor(minutes/60)+'h':Math.floor(minutes/1440)+'d'
+}
+const streakRemaining=(expiresAt:string)=>{
+  const minutes=Math.max(0,Math.ceil((Date.parse(expiresAt)-Date.now())/60000))
+  return minutes>=60?Math.ceil(minutes/60)+'h left':minutes+'m left'
 }
 const withinEditWindow=(value:string|undefined)=>!!value&&Number.isFinite(Date.parse(value))&&Date.now()-Date.parse(value)<=3600000
 const callLength=(seconds:number)=>seconds<60?seconds+'s':Math.floor(seconds/60)+'m '+String(seconds%60).padStart(2,'0')+'s'
@@ -778,7 +782,7 @@ export default function App(props:Props){
   useEffect(()=>{
     if(demo||!token||page!=='Chat'||!roomId||room?.person.group){setStreak(null);return}
     let active=true
-    api<ChatStreak|null>(base,'/rooms/'+roomId+'/streak',{},token).then(value=>{if(active)setStreak(value)}).catch(()=>{if(active)setStreak(null)})
+    api<ChatStreak|null>(base,'/rooms/'+roomId+'/streak',{},token).then(value=>{if(active){setStreak(value);setRooms(previous=>previous.map(item=>item.id===roomId?{...item,streak:value??undefined}:item))}}).catch(()=>{if(active)setStreak(null)})
     return ()=>{active=false}
   },[base,demo,token,page,roomId,room?.person.group])
   useEffect(()=>{
@@ -1418,7 +1422,7 @@ export default function App(props:Props){
       }else item=await call<Note>('/rooms/'+id+'/messages',json({body:message}))
       stickToChatEnd.current=true
       append(item);setMessage('');setChatMedia(null);setChatViewOnce(false);setChatTools(false)
-      if(!demo&&!room.person.group)setStreak(await call<ChatStreak|null>('/rooms/'+id+'/streak'))
+      if(!demo&&!room.person.group){const latest=await call<ChatStreak|null>('/rooms/'+id+'/streak');setStreak(latest);setRooms(previous=>previous.map(saved=>saved.id===id?{...saved,streak:latest??undefined}:saved))}
       if(demo){
         const session=demoSession.current
         replyTimers.current.push(setTimeout(()=>{if(session===demoSession.current){append({id:uid(),author:room.person,body:'Thanks for the message! See you at school.'});void props.notifyDevice?.(room.person.name,'Thanks for the message! See you at school.')}},950))
@@ -1448,7 +1452,7 @@ export default function App(props:Props){
   async function startStreak(){
     if(!room||busy||room.person.group)return
     setBusy(true)
-    try{setStreak(await call<ChatStreak>('/rooms/'+room.id+'/streak',{method:'POST'}));notify('Streak started. Message each other daily to grow it.')}
+    try{const latest=await call<ChatStreak>('/rooms/'+room.id+'/streak',{method:'POST'});setStreak(latest);setRooms(previous=>previous.map(saved=>saved.id===room.id?{...saved,streak:latest}:saved));notify('Streak started. '+displayHandle(room.person)+' has 24 hours to reply.')}
     catch(reason){fail(reason)}finally{setBusy(false)}
   }
   async function openViewOnce(item:Note){
@@ -1646,12 +1650,12 @@ export default function App(props:Props){
     <Segmented options={['Chats','Groups','Requests']} selected={inboxTab} onSelect={setInboxTab}/>
     {inboxTab==='Groups'&&<View style={{...spread,flexWrap:'wrap',gap:10,paddingTop:2}}><View style={{gap:2}}><Copy size={19} weight={800}>Your groups</Copy><Copy size={12} color={theme.muted}>Create spaces for classes, clubs and friends.</Copy></View><Button label="New group" leading="plus" onPress={()=>void openGroupCreator()}/></View>}
     {demo&&inboxTab==='Chats'&&<Card>{section('Active now')}<View style={row}>{[people[0],people[1],people[2]].map(person=><Pressable key={person.id} accessibilityRole="button" accessibilityLabel={'Message '+person.name} onPress={()=>void messagePerson(person)}><Avatar person={person} ring size={42}/></Pressable>)}</View></Card>}
-    {feedError&&!rooms.length?failure:roomsLoading&&!rooms.length?<Loading/>:roomList.length?<>{roomList.map(r=><Motion key={r.id} reduced={reduced} distance={4}><Pressable accessibilityRole="button" accessibilityLabel={'Open conversation with '+displayHandle(r.person)} onPress={()=>openRoom(r)}><Card style={{...row,minHeight:72}}><Avatar person={r.person} size={50}/><View style={{flex:1,minWidth:0,gap:3}}><View style={spread}><PersonName person={r.person}/>{r.lastActivityAt&&<Copy color={theme.muted} size={11}>{shortTime(r.lastActivityAt)}</Copy>}</View><Copy color={theme.muted} size={12}>{chats[r.id]?.at(-1)?.body??r.lastActivity??'Open conversation'}</Copy></View></Card></Pressable></Motion>)}{roomsNextCursor&&inboxTab==='Chats'&&<Button label={roomsLoadingMore?'Loading conversations…':'Load more conversations'} variant="secondary" disabled={roomsLoadingMore} onPress={()=>void loadMoreRooms()}/>}</>:<Empty title={inboxTab==='Chats'?'No messages yet':inboxTab==='Groups'?'No groups yet':'No message requests'} detail={inboxTab==='Chats'?'Find a classmate and start a chat.':inboxTab==='Groups'?'Use the New group button above to create your first group.':'New requests will appear here.'} action={inboxTab==='Chats'?'Find people':undefined} onPress={()=>open('Explore')}/>}
+    {feedError&&!rooms.length?failure:roomsLoading&&!rooms.length?<Loading/>:roomList.length?<>{roomList.map(r=><Motion key={r.id} reduced={reduced} distance={4}><Pressable accessibilityRole="button" accessibilityLabel={'Open conversation with '+displayHandle(r.person)} onPress={()=>openRoom(r)}><Card style={{...row,minHeight:78}}><Avatar person={r.person} size={50}/><View style={{flex:1,minWidth:0,gap:3}}><View style={spread}><PersonName person={r.person}/>{r.lastActivityAt&&<Copy color={theme.muted} size={11}>{shortTime(r.lastActivityAt)}</Copy>}</View><Copy color={theme.muted} size={12}>{chats[r.id]?.at(-1)?.body??r.lastActivity??'Open conversation'}</Copy>{r.streak&&<View style={{...row,gap:5}}><Copy size={12}>🔥</Copy><Copy size={11} weight={800} color={theme.purple}>{r.streak.status==='pending'?'Streak pending':r.streak.count+' day streak'} · {streakRemaining(r.streak.expiresAt)}</Copy></View>}</View></Card></Pressable></Motion>)}{roomsNextCursor&&inboxTab==='Chats'&&<Button label={roomsLoadingMore?'Loading conversations…':'Load more conversations'} variant="secondary" disabled={roomsLoadingMore} onPress={()=>void loadMoreRooms()}/>}</>:<Empty title={inboxTab==='Chats'?'No messages yet':inboxTab==='Groups'?'No groups yet':'No message requests'} detail={inboxTab==='Chats'?'Find a classmate and start a chat.':inboxTab==='Groups'?'Use the New group button above to create your first group.':'New requests will appear here.'} action={inboxTab==='Chats'?'Find people':undefined} onPress={()=>open('Explore')}/>}
   </>
   const lastOwnMessageId=room?[...(chats[room.id]??[])].reverse().find(note=>!note.call&&note.author.id===user.id)?.id:undefined
   const chat=room&&<>
     {!room.person.group&&verifiedBenefits&&!streak&&<Card style={{...row,backgroundColor:'#F4FFD7',borderColor:lime,borderWidth:2}}><View style={{width:46,height:46,borderRadius:23,backgroundColor:lime,alignItems:'center',justifyContent:'center'}}><Copy size={23}>🔥</Copy></View><View style={{flex:1,gap:3}}><Copy color="#25163F" size={17} weight={800}>Start a streak</Copy><Copy size={12} color="#5A4C70">Message each other daily and unlock milestones.</Copy></View><Button label="Start" variant="fun" disabled={busy} onPress={()=>void startStreak()}/></Card>}
-    {!room.person.group&&streak&&<Card style={{...row,backgroundColor:theme.chip}}><Copy size={24}>🔥</Copy><View style={{flex:1,gap:3}}><Copy weight={800}>{streak.count} day streak</Copy><Copy size={12} color={theme.muted}>{streak.nextMilestone?streak.nextMilestone-streak.count+' days to the '+streak.nextMilestone+'-day milestone':'100-day milestone unlocked'}</Copy></View></Card>}
+    {!room.person.group&&streak&&<Card style={{...row,backgroundColor:theme.chip,borderColor:lime}}><Copy size={24}>🔥</Copy><View style={{flex:1,gap:3}}><Copy weight={800}>{streak.status==='pending'?'Streak invitation sent':streak.count+' day streak'}</Copy><Copy size={12} color={theme.muted}>{streak.status==='pending'?'Waiting for '+displayHandle(room.person)+' to reply · ':streak.nextMilestone?streak.nextMilestone-streak.count+' days to the '+streak.nextMilestone+'-day milestone · ':''}{streakRemaining(streak.expiresAt)}</Copy></View></Card>}
     {!room.person.group&&!demo&&callMedia&&deviceNotifications!=='granted'&&props.requestNotifications&&<View style={{alignItems:'center'}}><Button label="Enable call alerts" variant="plain" onPress={()=>void enableDeviceNotifications()}/></View>}
     {!room.person.group&&!demo&&!callMedia&&<Copy color={theme.muted} size={12}>Voice and video calls are available in the installed app build or a supported browser.</Copy>}
     {demo&&room.person.group&&<Card><Copy weight={800}>Pinned message</Copy><Copy>Bring one practice question to the next study session.</Copy><Button label="Join group voice call" leading="ph" variant="secondary" onPress={()=>selectOverlay({kind:'call',video:false,person:room.person,ringing:true})}/></Card>}
