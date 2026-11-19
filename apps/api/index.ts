@@ -339,8 +339,8 @@ app.get('/api/google/callback',async c=>{
   c.header('Cache-Control','no-store')
   c.header('Referrer-Policy','no-referrer')
   const state=c.req.query('state')??''
-  const complete=(ok:boolean)=>c.html(ok
-    ?`<title>dameen</title><meta name="viewport" content="width=device-width"><p>Google sign-in completed. Returning to dameen…</p><script>if(window.opener){window.opener.postMessage({type:'dameen-google-complete'},'https://dameen.app');window.close()}else{location.replace('https://dameen.app/?google=complete')}</script>`
+  const complete=(ok:boolean,token?:string)=>c.html(ok
+    ?`<title>dameen</title><meta name="viewport" content="width=device-width"><p>Google sign-in completed. Returning to dameen…</p><script>try{localStorage.setItem('dameeland-session',${JSON.stringify(token??'')});localStorage.removeItem('dameeland-google-attempt');localStorage.removeItem('dameeland-referral')}catch{}location.replace('https://dameen.app/?google=complete')</script>`
     :'<title>dameen</title><p>Google sign-in did not complete. Return to dameen for details.</p>',ok?200:400)
   if(!/^[a-f0-9]{48}$/.test(state)||!GOOGLE_CLIENT_ID||!GOOGLE_CLIENT_SECRET||!GOOGLE_REDIRECT_URI)return complete(false)
   const attempt=await DB.prepare("UPDATE google_attempts SET status='processing' WHERE state=? AND status='pending' AND expires>? RETURNING verifier,username,dob,referral_code,mode").bind(state,now()).first<GoogleAttempt>()
@@ -385,7 +385,10 @@ app.get('/api/google/callback',async c=>{
       }
     }
     await DB.prepare("UPDATE google_attempts SET status='complete',user_id=? WHERE state=?").bind(account.id,state).run()
-    return complete(true)
+    const signedAccount=await DB.prepare('SELECT id,email,name,role,username,verified,teacher,dob,avatar_media,cover_media,bio,username_changed_at,search_public FROM users WHERE id=?').bind(account.id).first<PublicAccount>()
+    if(!signedAccount)return fail('Account unavailable after Google sign-in.')
+    const signed=await session(c.env,c.executionCtx,signedAccount,c.req.url)
+    return complete(true,signed.token)
   }catch{return fail('Google sign-in could not be completed. Please try again.')}
 })
 app.post('/api/google/exchange',async c=>{
