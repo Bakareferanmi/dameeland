@@ -81,16 +81,16 @@ function SearchVisibility({label,detail,value,onChange,disabled}:{label:string;d
 
 type GoogleStart={url:string;state:string;exchange:string}
 type GoogleWindow={close:()=>void}
-type Media={name:string;uri:string;data:Blob|{uri:string;name:string;type:string};kind?:'image'|'video';duration?:number}
+type Media={name:string;uri:string;data:Blob|{uri:string;name:string;type:string};kind?:'image'|'video'|'audio';duration?:number}
 type Props={
   demo:boolean; base:string; phone?:boolean; initialTheme:Theme; font:(weight:number)=>object; renderIcon:React.ComponentType<IconRendererProps>;
   loadToken?:()=>Promise<string|null>; saveToken?:(token:string|null)=>Promise<void>;
   openGoogle?:(getUrl:()=>Promise<string>)=>Promise<GoogleWindow>;
   callMedia?:CallMedia;
-  renderVideo?:React.ComponentType<{uri:string;autoPlay?:boolean}>;
+  renderVideo?:React.ComponentType<{uri:string;autoPlay?:boolean}>; renderAudio?:React.ComponentType<{uri:string}>;
   notificationTarget?:string;
   modalViewport?:React.ComponentType<{color:string;children:React.ReactNode}>;
-  pickMedia?:()=>Promise<Media|null>; pickCommentMedia?:()=>Promise<Media|null>; renderGif?:GifRenderer; share?:(url:string,details?:{title:string;message:string})=>Promise<void>;
+  pickMedia?:()=>Promise<Media|null>; pickCamera?:()=>Promise<Media|null>; pickCommentMedia?:()=>Promise<Media|null>; voiceRecorder?:{start:()=>Promise<void>;stop:()=>Promise<Media|null>}; saveMedia?:(url:string,name:string)=>Promise<void>; renderGif?:GifRenderer; share?:(url:string,details?:{title:string;message:string})=>Promise<void>;
   requestNotifications?:()=>Promise<boolean>; getNotificationDevice?:()=>Promise<{platform:'android'|'ios';token:string}|null>; notifyDevice?:(title:string,body:string)=>Promise<void>;
   onReady?:()=>void;
 }
@@ -461,7 +461,8 @@ export default function App(props:Props){
   const [postSearchPublic,setPostSearchPublic]=useState(false)
   const [profileSearchPublic,setProfileSearchPublic]=useState(false)
   const [message,setMessage]=useState(''),[comment,setComment]=useState('')
-  const [viewOnceMedia,setViewOnceMedia]=useState<Media|null>(null)
+  const [chatMedia,setChatMedia]=useState<Media|null>(null),[chatViewOnce,setChatViewOnce]=useState(false),[chatTools,setChatTools]=useState(false)
+  const [voiceRecording,setVoiceRecording]=useState(false)
   const [openedOnce,setOpenedOnce]=useState<{kind:'image'|'video';url:string}|null>(null)
   const [streak,setStreak]=useState<ChatStreak|null>(null)
   const [replyTarget,setReplyTarget]=useState<Note|null>(null)
@@ -1142,7 +1143,7 @@ export default function App(props:Props){
     if(busy||(!draft.trim()&&!attachment))return
     setBusy(true)
     try{
-      if(demo)setPosts(previous=>[{id:uid(),author:user,body:draft.trim(),media:attachment?.uri,kind:attachment?.kind,time:'Just now',likes:0,comments:0,reposts:0,liked:false,reposted:false},...previous])
+      if(demo)setPosts(previous=>[{id:uid(),author:user,body:draft.trim(),media:attachment?.uri,kind:attachment?.kind==='video'?'video':'image',time:'Just now',likes:0,comments:0,reposts:0,liked:false,reposted:false},...previous])
       else{
         const form=new FormData()
         form.append('body',draft.trim())
@@ -1399,22 +1400,24 @@ export default function App(props:Props){
     }catch(reason){fail(reason)}
   }
   async function send(){
-    if(!room||busy||(!message.trim()&&!viewOnceMedia))return
+    if(!room||busy||(!message.trim()&&!chatMedia))return
     const id=room.id
     const append=(item:Note)=>setChats(previous=>({...previous,[id]:[...(previous[id]??[]).filter(m=>m.id!==item.id),item]}))
     setBusy(true)
     try{
       let item:Note
       if(demo)item={id:uid(),author:user,body:message.trim()}
-      else if(viewOnceMedia){
+      else if(chatMedia){
         const form=new FormData();form.append('body',message.trim())
-        if(viewOnceMedia.duration)form.append('duration',String(viewOnceMedia.duration))
-        if(viewOnceMedia.data instanceof Blob)form.append(viewOnceMedia.kind==='video'?'video':'image',viewOnceMedia.data,viewOnceMedia.name)
-        else form.append(viewOnceMedia.kind==='video'?'video':'image',viewOnceMedia.data as unknown as Blob)
+        form.append('viewOnce',String(chatViewOnce))
+        if(chatMedia.duration)form.append('duration',String(chatMedia.duration))
+        const field=chatMedia.kind==='audio'?'audio':chatMedia.kind==='video'?'video':'image'
+        if(chatMedia.data instanceof Blob)form.append(field,chatMedia.data,chatMedia.name)
+        else form.append(field,chatMedia.data as unknown as Blob)
         item=await call<Note>('/rooms/'+id+'/messages',{method:'POST',body:form})
       }else item=await call<Note>('/rooms/'+id+'/messages',json({body:message}))
       stickToChatEnd.current=true
-      append(item);setMessage('');setViewOnceMedia(null)
+      append(item);setMessage('');setChatMedia(null);setChatViewOnce(false);setChatTools(false)
       if(!demo&&!room.person.group)setStreak(await call<ChatStreak|null>('/rooms/'+id+'/streak'))
       if(demo){
         const session=demoSession.current
@@ -1422,13 +1425,25 @@ export default function App(props:Props){
       }
     }catch(reason){fail(reason)}finally{setBusy(false)}
   }
-  async function pickViewOnce(){
+  async function pickChatMedia(source:'gallery'|'camera',viewOnce=false){
     try{
-      const media=await props.pickMedia?.()
+      const media=await (source==='camera'?props.pickCamera?.():props.pickMedia?.())
       if(!media)return
-      if(media.kind==='video'&&(!media.duration||media.duration>10.25)){fail(new Error('View-once videos can be up to 10 seconds.'));return}
-      setViewOnceMedia(media)
+      if(viewOnce&&media.kind==='video'&&(!media.duration||media.duration>10.25)){fail(new Error('View-once videos can be up to 10 seconds.'));return}
+      setChatMedia(media);setChatViewOnce(viewOnce);setChatTools(false)
     }catch(reason){fail(reason)}
+  }
+  async function toggleVoiceNote(){
+    if(!props.voiceRecorder||busy)return
+    try{
+      if(!voiceRecording){await props.voiceRecorder.start();setVoiceRecording(true);notify('Recording voice note… tap the microphone again to stop.')}
+      else{const media=await props.voiceRecorder.stop();setVoiceRecording(false);if(media){setChatMedia(media);setChatViewOnce(false);setChatTools(false)}}
+    }catch(reason){setVoiceRecording(false);fail(reason)}
+  }
+  async function saveChatMedia(item:Note){
+    if(!item.chatMedia||!props.saveMedia)return
+    try{await props.saveMedia(item.chatMedia.url,'dameen-'+item.chatMedia.kind+'-'+item.id);if(item.author.id!==user.id&&room)await call('/rooms/'+room.id+'/messages/'+item.id+'/saved',{method:'POST'});notify('Saved to your device.')}
+    catch(reason){fail(reason)}
   }
   async function startStreak(){
     if(!room||busy||room.person.group)return
@@ -1635,7 +1650,7 @@ export default function App(props:Props){
   </>
   const lastOwnMessageId=room?[...(chats[room.id]??[])].reverse().find(note=>!note.call&&note.author.id===user.id)?.id:undefined
   const chat=room&&<>
-    {!room.person.group&&verifiedBenefits&&!streak&&<Card style={{...row,backgroundColor:theme.chip}}><View style={{flex:1,gap:3}}><Copy weight={800}>🔥 Start a streak</Copy><Copy size={12} color={theme.muted}>Message each other every day and unlock milestones.</Copy></View><Button label="Start streak" variant="fun" disabled={busy} onPress={()=>void startStreak()}/></Card>}
+    {!room.person.group&&verifiedBenefits&&!streak&&<Card style={{...row,backgroundColor:'#F4FFD7',borderColor:lime,borderWidth:2}}><View style={{width:46,height:46,borderRadius:23,backgroundColor:lime,alignItems:'center',justifyContent:'center'}}><Copy size={23}>🔥</Copy></View><View style={{flex:1,gap:3}}><Copy color="#25163F" size={17} weight={800}>Start a streak</Copy><Copy size={12} color="#5A4C70">Message each other daily and unlock milestones.</Copy></View><Button label="Start" variant="fun" disabled={busy} onPress={()=>void startStreak()}/></Card>}
     {!room.person.group&&streak&&<Card style={{...row,backgroundColor:theme.chip}}><Copy size={24}>🔥</Copy><View style={{flex:1,gap:3}}><Copy weight={800}>{streak.count} day streak</Copy><Copy size={12} color={theme.muted}>{streak.nextMilestone?streak.nextMilestone-streak.count+' days to the '+streak.nextMilestone+'-day milestone':'100-day milestone unlocked'}</Copy></View></Card>}
     {!room.person.group&&!demo&&callMedia&&deviceNotifications!=='granted'&&props.requestNotifications&&<View style={{alignItems:'center'}}><Button label="Enable call alerts" variant="plain" onPress={()=>void enableDeviceNotifications()}/></View>}
     {!room.person.group&&!demo&&!callMedia&&<Copy color={theme.muted} size={12}>Voice and video calls are available in the installed app build or a supported browser.</Copy>}
@@ -1654,6 +1669,10 @@ export default function App(props:Props){
       const canEdit=own&&verifiedBenefits&&(demo||withinEditWindow(item.createdAt))
       return <View key={item.id} style={{alignSelf:own?'flex-end':'flex-start',backgroundColor:own?theme.purple:theme.card,maxWidth:'84%',borderRadius:18,borderBottomLeftRadius:own?18:5,borderBottomRightRadius:own?5:18,borderWidth:1,borderColor:own?theme.purple:theme.border,padding:12,gap:5}}>
         {!!item.body&&<Copy color={own?'#fff':theme.text}>{item.body}</Copy>}
+        {item.chatMedia&&<View style={{gap:7,minWidth:220}}>
+          {item.chatMedia.kind==='image'?<Image accessibilityLabel="Chat photo" source={{uri:item.chatMedia.url}} resizeMode="cover" style={{width:260,maxWidth:'100%',height:220,borderRadius:13}}/>:item.chatMedia.kind==='video'?(Platform.OS==='web'?React.createElement('video',{src:item.chatMedia.url,controls:true,playsInline:true,style:{width:'100%',maxHeight:280,borderRadius:13,backgroundColor:'#000'}}):props.renderVideo?<props.renderVideo uri={item.chatMedia.url}/>:<Copy color={own?'#fff':theme.text}>Video</Copy>):Platform.OS==='web'?React.createElement('audio',{src:item.chatMedia.url,controls:true,style:{width:'100%'}}):props.renderAudio?<props.renderAudio uri={item.chatMedia.url}/>:<Copy color={own?'#fff':theme.text}>Voice note</Copy>}
+          {props.saveMedia&&<Button label="Save to device" variant="plain" onPress={()=>void saveChatMedia(item)}/>}
+        </View>}
         {item.viewOnce&&<Pressable accessibilityRole="button" disabled={own||item.viewOnce.opened||!item.viewOnce.canOpen||busy} onPress={()=>void openViewOnce(item)} style={{...row,minHeight:48,paddingHorizontal:10,borderRadius:13,backgroundColor:own?'#FFFFFF20':theme.chip}}><Icon name={item.viewOnce.kind==='video'?'vid':'image'} color={own?'#fff':theme.purple}/><View style={{flex:1}}><Copy color={own?'#fff':theme.text} weight={800}>{item.viewOnce.opened?'Opened':own?'View once sent':'Tap to view once'}</Copy><Copy color={own?'#FFFFFFCC':theme.muted} size={11}>{item.viewOnce.kind==='video'?'Video · up to 10 seconds':'Photo'}</Copy></View></Pressable>}
         {!!item.editedAt&&<Copy size={10} color={own?'#FFFFFFCC':theme.muted}>Edited</Copy>}
         {own&&lastOwnMessageId===item.id&&<Copy size={11} color="#FFFFFFCC">{item.readAt?'Seen · '+shortTime(item.readAt):'Sent'}</Copy>}
@@ -1909,13 +1928,20 @@ export default function App(props:Props){
             contentContainerStyle={{padding:desktop?20:13,gap:page==='Chat'?9:16,width:'100%',maxWidth:page==='Chat'?desktop?900:undefined:640,alignSelf:'center'}}>
             <Motion key={page==='Chat'?'chat:'+room?.id:page} reduced={reduced} distance={page==='Chat'?5:8} style={stack}>{content[page]??<Suspense fallback={<LoadingScreen compact/>}><FeatureScreen key={page} page={page as ExtraPage} open={open} demo={demo} user={user} startQuiz={startQuiz} completed={completedLessons.length>0} wish={()=>selectOverlay({kind:'wish'})} wishes={wishes} incomingCall={()=>selectOverlay({kind:'call',video:false,person:people[0],ringing:true,incoming:true})}/></Suspense>}</Motion></ScrollView>
           {page==='Chat'&&<KeyboardAvoidingView behavior={Platform.OS==='ios'?'padding':undefined}>
-            {viewOnceMedia&&<View style={{...row,paddingHorizontal:14,paddingTop:8,backgroundColor:theme.card}}><Icon name={viewOnceMedia.kind==='video'?'vid':'image'} color={theme.purple}/><View style={{flex:1}}><Copy weight={800}>View once {viewOnceMedia.kind}</Copy></View><IconButton name="close" label="Remove view-once media" onPress={()=>setViewOnceMedia(null)}/></View>}
+            {chatTools&&<View style={{...row,flexWrap:'wrap',paddingHorizontal:12,paddingTop:9,backgroundColor:theme.card}}>
+              <Button label="Gallery" leading="image" variant="secondary" onPress={()=>void pickChatMedia('gallery',false)}/>
+              {props.pickCamera&&<Button label="Camera" leading="vid" variant="secondary" onPress={()=>void pickChatMedia('camera',false)}/>}
+              {verifiedBenefits&&<Button label="View once" leading="eye" variant="secondary" onPress={()=>void pickChatMedia('gallery',true)}/>}
+              {verifiedBenefits&&props.pickCamera&&<Button label="Camera once" leading="eye" variant="secondary" onPress={()=>void pickChatMedia('camera',true)}/>}
+              {props.voiceRecorder&&<Button label={voiceRecording?'Stop recording':'Voice note'} leading="mic" variant={voiceRecording?'danger':'secondary'} onPress={()=>void toggleVoiceNote()}/>}
+            </View>}
+            {chatMedia&&<View style={{...row,paddingHorizontal:14,paddingTop:8,backgroundColor:theme.card}}><Icon name={chatMedia.kind==='audio'?'mic':chatMedia.kind==='video'?'vid':'image'} color={theme.purple}/><View style={{flex:1}}><Copy weight={800}>{chatViewOnce?'View once ':''}{chatMedia.kind==='audio'?'voice note':chatMedia.kind}</Copy><Copy size={11} color={theme.muted}>Compressed and ready to send</Copy></View><IconButton name="close" label="Remove chat media" onPress={()=>{setChatMedia(null);setChatViewOnce(false)}}/></View>}
             <View style={{...row,paddingHorizontal:12,paddingVertical:9,borderTopWidth:1,borderColor:theme.border,backgroundColor:theme.card}}>
-              {verifiedBenefits&&!room?.person.group&&props.pickMedia&&<IconButton name="image" label="Send view-once photo or video" onPress={()=>void pickViewOnce()}/>}
+              {props.pickMedia&&<IconButton name={chatTools?'close':'plus'} label={chatTools?'Close media tools':'Add media or voice note'} active={chatTools} onPress={()=>setChatTools(value=>!value)}/>}
               <View style={{flex:1,minWidth:0,borderRadius:23,backgroundColor:theme.chip,borderWidth:1,borderColor:theme.border}}>
                 <TextInput accessibilityLabel="Message" placeholder="Message" placeholderTextColor={theme.muted} value={message} onChangeText={setMessage} multiline maxLength={800} style={[{color:theme.text,fontSize:15,minHeight:44,maxHeight:120,paddingHorizontal:15,paddingVertical:10,textAlignVertical:'center'},font(500)]}/>
               </View>
-              <View style={{opacity:busy||(!message.trim()&&!viewOnceMedia)?.5:1}}><IconButton name="send" label="Send" solid onPress={()=>void send()}/></View>
+              <View style={{opacity:busy||(!message.trim()&&!chatMedia)?.5:1}}><IconButton name="send" label="Send" solid onPress={()=>void send()}/></View>
             </View>
           </KeyboardAvoidingView>}
           {!desktop&&page!=='Chat'&&page!=='Messages'&&<View style={{...row,gap:0,justifyContent:'space-around',minHeight:64,paddingHorizontal:6,borderTopWidth:1,borderColor:theme.border,backgroundColor:theme.card}}>{tabs.slice(0,2).map(([name,glyph])=>navButton(name,glyph))}<View style={{width:61,alignItems:'center',marginTop:-13}}><IconButton name="plus" label="Create post" size={26} solid onPress={compose}/></View>{tabs.slice(2).map(([name,glyph])=>navButton(name,glyph))}</View>}

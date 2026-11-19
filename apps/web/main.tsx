@@ -33,26 +33,51 @@ const openGoogle=async(getUrl:()=>Promise<string>)=>{
   catch(error){popup.close();throw error}
   return {close:()=>popup.close()}
 }
-const pickMedia=(comment=false)=>{
+const compressImage=async(file:File)=>{
+  const image=await createImageBitmap(file)
+  const scale=Math.min(1,1920/Math.max(image.width,image.height))
+  const canvas=document.createElement('canvas');canvas.width=Math.round(image.width*scale);canvas.height=Math.round(image.height*scale)
+  canvas.getContext('2d')!.drawImage(image,0,0,canvas.width,canvas.height);image.close()
+  let quality=.82,blob=await new Promise<Blob|null>(resolve=>canvas.toBlob(resolve,'image/webp',quality))
+  while(blob&&blob.size>4.8*1024*1024&&quality>.42){quality-=.1;blob=await new Promise<Blob|null>(resolve=>canvas.toBlob(resolve,'image/webp',quality))}
+  return blob?new File([blob],file.name.replace(/\.[^.]+$/,'.webp'),{type:'image/webp'}):file
+}
+const videoDuration=(file:File)=>new Promise<number>((resolve,reject)=>{
+  const video=document.createElement('video'),url=URL.createObjectURL(file);video.preload='metadata'
+  video.onloadedmetadata=()=>{const seconds=video.duration;URL.revokeObjectURL(url);Number.isFinite(seconds)?resolve(seconds):reject(new Error('Couldn’t read this video.'))}
+  video.onerror=()=>{URL.revokeObjectURL(url);reject(new Error('Couldn’t read this video.'))};video.src=url
+})
+const compressVideo=async(file:File,duration:number)=>{
+  if(file.size<=24*1024*1024)return file
+  const video=document.createElement('video'),url=URL.createObjectURL(file);video.src=url;video.muted=false;video.playsInline=true
+  await new Promise<void>((resolve,reject)=>{video.oncanplay=()=>resolve();video.onerror=()=>reject(new Error('Couldn’t compress this video.'))})
+  const stream=(video as HTMLVideoElement&{captureStream:()=>MediaStream}).captureStream?.()
+  if(!stream||typeof MediaRecorder==='undefined'){URL.revokeObjectURL(url);throw new Error('This browser could not compress the video. Choose a smaller one.')}
+  const bits=Math.max(450000,Math.min(1800000,Math.floor(20*8*1024*1024/Math.max(1,duration))))
+  const mime=['video/webm;codecs=vp9,opus','video/webm;codecs=vp8,opus','video/webm'].find(type=>MediaRecorder.isTypeSupported(type))
+  const recorder=new MediaRecorder(stream,{mimeType:mime,videoBitsPerSecond:bits,audioBitsPerSecond:96000}),chunks:Blob[]=[]
+  recorder.ondataavailable=event=>{if(event.data.size)chunks.push(event.data)}
+  const done=new Promise<void>((resolve,reject)=>{recorder.onstop=()=>resolve();recorder.onerror=()=>reject(new Error('Video compression failed.'))})
+  recorder.start(500);await video.play();await new Promise<void>(resolve=>{video.onended=()=>resolve()});recorder.stop();await done
+  stream.getTracks().forEach(track=>track.stop());URL.revokeObjectURL(url)
+  return new File(chunks,file.name.replace(/\.[^.]+$/,'.webm'),{type:mime?.split(';')[0]??'video/webm'})
+}
+const pickMedia=(comment=false,capture=false)=>{
   const input=document.createElement('input')
   input.type='file'
   input.accept=comment?'image/png,image/jpeg,image/webp,image/gif':'image/png,image/jpeg,image/webp,video/mp4,video/webm,video/quicktime'
+  if(capture)input.capture='environment'
   return new Promise<{name:string;uri:string;data:File;kind?:'image'|'video';duration?:number}|null>((resolve,reject)=>{
     input.oncancel=()=>resolve(null)
     input.onchange=async()=>{
-      const file=input.files?.[0]
-      if(!file){resolve(null);return}
-      const kind=file.type.startsWith('video/')?'video':'image'
-      if(file.size>(kind==='video'?25:5)*1024*1024){reject(new Error(kind==='video'?'Choose a video under 25 MB.':'Choose an image under 5 MB.'));return}
+      const original=input.files?.[0]
+      if(!original){resolve(null);return}
+      const kind=original.type.startsWith('video/')?'video':'image'
       let duration:number|undefined
-      if(kind==='video')duration=await new Promise<number>((done,fail)=>{
-        const video=document.createElement('video'),url=URL.createObjectURL(file)
-        video.preload='metadata'
-        video.onloadedmetadata=()=>{const seconds=video.duration;URL.revokeObjectURL(url);Number.isFinite(seconds)?done(seconds):fail(new Error('Couldn’t read this video.'))}
-        video.onerror=()=>{URL.revokeObjectURL(url);fail(new Error('Couldn’t read this video.'))}
-        video.src=url
-      }).catch(error=>{reject(error);return undefined})
+      if(kind==='video')duration=await videoDuration(original).catch(error=>{reject(error);return undefined})
       if(kind==='video'&&duration===undefined)return
+      const file=kind==='image'&&!comment?await compressImage(original):kind==='video'?await compressVideo(original,duration!):original
+      if(file.size>(kind==='video'?25:5)*1024*1024){reject(new Error('This file could not be compressed enough. Try a shorter video or a different image.'));return}
       const reader=new FileReader()
       reader.onerror=()=>reject(new Error('Couldn’t open this image.'))
       reader.onload=()=>resolve({name:file.name,uri:String(reader.result),data:file,kind,duration})
@@ -61,6 +86,17 @@ const pickMedia=(comment=false)=>{
     input.click()
   })
 }
+let voiceRecorder:MediaRecorder|null=null,voiceStream:MediaStream|null=null,voiceChunks:Blob[]=[]
+const voice={
+  start:async()=>{voiceStream=await navigator.mediaDevices.getUserMedia({audio:{echoCancellation:true,noiseSuppression:true}});voiceChunks=[];voiceRecorder=new MediaRecorder(voiceStream);voiceRecorder.ondataavailable=event=>{if(event.data.size)voiceChunks.push(event.data)};voiceRecorder.start(250)},
+  stop:()=>new Promise<{name:string;uri:string;data:File;kind:'audio'}|null>((resolve,reject)=>{
+    if(!voiceRecorder){resolve(null);return}
+    voiceRecorder.onerror=()=>reject(new Error('Couldn’t record the voice note.'))
+    voiceRecorder.onstop=()=>{const type=voiceRecorder?.mimeType||'audio/webm',blob=new Blob(voiceChunks,{type}),file=new File([blob],'voice-note.webm',{type});voiceStream?.getTracks().forEach(track=>track.stop());voiceRecorder=null;voiceStream=null;resolve({name:file.name,uri:URL.createObjectURL(file),data:file,kind:'audio'})}
+    voiceRecorder.stop()
+  }),
+}
+const saveMedia=async(url:string,name:string)=>{const blob=await fetch(url).then(response=>response.ok?response.blob():Promise.reject(new Error('Couldn’t save this media.')));const link=document.createElement('a');link.href=URL.createObjectURL(blob);link.download=name;link.click();setTimeout(()=>URL.revokeObjectURL(link.href),1000)}
 const share=async(url:string,details?:{title:string;message:string})=>{
   if(navigator.share){await navigator.share({url,title:details?.title,text:details?.message});return}
   if(navigator.clipboard){await navigator.clipboard.writeText(url);return}
@@ -89,5 +125,5 @@ const dismissBoot=()=>{
   boot.classList.add('ready')
   window.setTimeout(()=>boot.remove(),380)
 }
-createRoot(document.getElementById('dameen-app')!).render(<App demo={demo} phone={phone} base={offline?'':import.meta.env.VITE_API_URL??'https://dameeland-api.bakareferanmi96.workers.dev'} renderIcon={HugeiconsIcon} initialTheme={initialTheme} font={font} loadToken={loadToken} saveToken={saveToken} openGoogle={openGoogle} pickMedia={()=>pickMedia()} pickCommentMedia={()=>pickMedia(true)} share={share} requestNotifications={requestNotifications} notifyDevice={notifyDevice} onReady={dismissBoot}/>)
+createRoot(document.getElementById('dameen-app')!).render(<App demo={demo} phone={phone} base={offline?'':import.meta.env.VITE_API_URL??'https://dameeland-api.bakareferanmi96.workers.dev'} renderIcon={HugeiconsIcon} initialTheme={initialTheme} font={font} loadToken={loadToken} saveToken={saveToken} openGoogle={openGoogle} pickMedia={()=>pickMedia()} pickCamera={()=>pickMedia(false,true)} pickCommentMedia={()=>pickMedia(true)} voiceRecorder={voice} saveMedia={saveMedia} share={share} requestNotifications={requestNotifications} notifyDevice={notifyDevice} onReady={dismissBoot}/>)
 

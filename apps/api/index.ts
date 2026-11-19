@@ -407,7 +407,7 @@ async function storedMedia(bucket:R2Bucket,id:string,cacheControl:string){
 }
 app.get('/api/media/:id',async c=>{
   const id=c.req.param('id')
-  const attachment=await c.env.DB.prepare('SELECT id FROM users WHERE avatar_media=? OR cover_media=? UNION ALL SELECT id FROM posts WHERE media=? UNION ALL SELECT id FROM comments WHERE media=? LIMIT 1').bind(id,id,id,id).first()
+  const attachment=await c.env.DB.prepare('SELECT id FROM users WHERE avatar_media=? OR cover_media=? UNION ALL SELECT id FROM posts WHERE media=? UNION ALL SELECT id FROM comments WHERE media=? UNION ALL SELECT id FROM messages WHERE media=? AND view_once=0 LIMIT 1').bind(id,id,id,id,id).first()
   if(!attachment) return c.json({error:'Image unavailable.'},404)
   return storedMedia(c.env.MEDIA,id,'public, max-age=3600')
 })
@@ -1178,6 +1178,8 @@ app.post('/api/rooms/:id/streak',async c=>{
   if(!hasVerifiedBenefits(account))return c.json({error:'Chat streaks are currently available to verified users.'},403)
   if(!await member(db,room,account.id)||!await db.prepare('SELECT id FROM rooms WHERE id=?').bind(room).first())return c.json({error:'Start streaks in direct chats only.'},400)
   await db.prepare('INSERT INTO chat_streaks(room,started_by,created) VALUES (?,?,?) ON CONFLICT DO NOTHING').bind(room,account.id,now()).run()
+  const other=await db.prepare('SELECT CASE WHEN first_user=? THEN second_user ELSE first_user END target FROM rooms WHERE id=?').bind(account.id,room).first<{target:string}>()
+  if(other)await createNotification(c.env,c.executionCtx,db,other.target,account.id,'message',room,account.name+' started a chat streak with you 🔥','streak:'+room)
   return c.json(await streakView(db,room),201)
 })
 app.post('/api/groups',async c=>{
@@ -1268,7 +1270,7 @@ app.get('/api/rooms/:id/messages',async c=>{
   const messageLimit=paged?31:100
   const callLimit=paged?31:40
   const [messages,calls]=await Promise.all([
-    c.env.DB.prepare('SELECT u.id,u.name,u.role,u.username,u.verified,u.teacher,u.dob,u.avatar_media,u.cover_media,u.bio,m.id note_id,m.body,m.read_at,m.created,m.edited_at,m.media_kind,m.view_once,m.viewed_at FROM messages m JOIN users u ON u.id=m.author WHERE room=? AND m.created<? ORDER BY m.created DESC LIMIT ?').bind(room,before,messageLimit).all<NoteRow&{read_at:number|null;created:number;media_kind:'image'|'video'|null;view_once:number;viewed_at:number|null}>(),
+    c.env.DB.prepare('SELECT u.id,u.name,u.role,u.username,u.verified,u.teacher,u.dob,u.avatar_media,u.cover_media,u.bio,m.id note_id,m.body,m.read_at,m.created,m.edited_at,m.media,m.media_kind,m.media_type,m.view_once,m.viewed_at FROM messages m JOIN users u ON u.id=m.author WHERE room=? AND m.created<? ORDER BY m.created DESC LIMIT ?').bind(room,before,messageLimit).all<NoteRow&{read_at:number|null;created:number;media:string|null;media_kind:'image'|'video'|null;media_type:'image'|'video'|'audio'|null;view_once:number;viewed_at:number|null}>(),
     c.env.DB.prepare(`SELECT x.id,x.caller,x.callee,x.video,x.state,x.created,x.expires,x.connected_at,x.ended_at,
       u.name,u.role,u.username,u.verified,u.teacher,u.dob,u.avatar_media,u.cover_media,u.bio
       FROM calls x JOIN users u ON u.id=x.caller WHERE x.room=? AND x.created<? AND (x.state IN ('ended','declined') OR (x.state IN ('offered','ringing') AND x.expires<?))
@@ -1276,7 +1278,7 @@ app.get('/api/rooms/:id/messages',async c=>{
   ])
   const viewer=c.get('user').id
   const items=[
-    ...messages.results.map(r=>({...note(r,c.req.url),readAt:r.read_at?time(r.read_at):undefined,createdAt:time(r.created),viewOnce:r.view_once&&r.media_kind?{kind:r.media_kind,opened:Boolean(r.viewed_at),canOpen:r.id!==viewer&&!r.viewed_at}:undefined})),
+    ...messages.results.map(r=>{const kind=r.media_type??r.media_kind;return {...note(r,c.req.url),readAt:r.read_at?time(r.read_at):undefined,createdAt:time(r.created),chatMedia:r.media&&!r.view_once&&kind?{kind,url:mediaUrl(r.media,c.req.url)}:undefined,viewOnce:r.view_once&&kind&&kind!=='audio'?{kind,opened:Boolean(r.viewed_at),canOpen:r.id!==viewer&&!r.viewed_at}:undefined}}),
     ...calls.results.map(r=>{
       const connected=!!r.connected_at
       const label=r.video?'Video call':'Voice call'
@@ -1308,23 +1310,26 @@ app.post('/api/rooms/:id/messages',async c=>{
   const form=multipart?await c.req.raw.formData().catch(()=>null):null
   const payload=multipart?null:await readBody(c.req.raw)
   const body=clean(form?.get('body')??payload?.body,800)
-  const upload:unknown=form?.get('image')??form?.get('video')
-  let media:string|null=null,mediaKind:'image'|'video'|null=null,file:File|null=null,contentType:string|null=null
+  const upload:unknown=form?.get('image')??form?.get('video')??form?.get('audio')
+  const viewOnce=form?.get('viewOnce')==='true'
+  let media:string|null=null,mediaKind:'image'|'video'|'audio'|null=null,file:File|null=null,contentType:string|null=null
   if(upload instanceof File){
-    if(!hasVerifiedBenefits(author))return c.json({error:'View-once media is currently available to verified users.'},403)
-    mediaKind=upload.type.startsWith('video/')?'video':'image'
+    if(viewOnce&&!hasVerifiedBenefits(author))return c.json({error:'View-once media is currently available to verified users.'},403)
+    mediaKind=upload.type.startsWith('audio/')?'audio':upload.type.startsWith('video/')?'video':'image'
+    if(viewOnce&&mediaKind==='audio')return c.json({error:'Voice notes are sent as normal chat media.'},400)
     const duration=Number(form?.get('duration')??0)
-    if(mediaKind==='video'&&(!Number.isFinite(duration)||duration<=0||duration>10.25))return c.json({error:'View-once videos can be up to 10 seconds.'},400)
-    contentType=mediaKind==='video'&&upload.size<=25*1024*1024?upload.type:await imageType(upload)
-    if(!contentType||upload.size>(mediaKind==='video'?25:5)*1024*1024)return c.json({error:mediaKind==='video'?'Choose a video under 25 MB.':'Choose an image under 5 MB.'},400)
+    if(viewOnce&&mediaKind==='video'&&(!Number.isFinite(duration)||duration<=0||duration>10.25))return c.json({error:'View-once videos can be up to 10 seconds.'},400)
+    contentType=mediaKind!=='image'&&upload.size<=25*1024*1024?upload.type:await imageType(upload)
+    const limit=mediaKind==='image'?5:25
+    if(!contentType||upload.size>limit*1024*1024)return c.json({error:'This file is still too large after compression.'},400)
     media=crypto.randomUUID();file=upload
   }
   if(!body&&!file) return c.json({error:'Enter a message or choose view-once media.'},400)
   const created=now()
-  const message={id:crypto.randomUUID(),author:person(author,c.req.url),body,createdAt:time(created),viewOnce:mediaKind?{kind:mediaKind,opened:false,canOpen:false}:undefined}
-  if(file&&media&&contentType)await c.env.MEDIA.put('messages/'+media,await file.arrayBuffer(),{httpMetadata:{contentType}})
-  try{await c.env.DB.prepare('INSERT INTO messages (id,room,author,body,created,media,media_kind,view_once) VALUES (?,?,?,?,?,?,?,?)').bind(message.id,room,author.id,body,created,media?'messages/'+media:null,mediaKind,media?1:0).run()}
-  catch(error){if(media)await c.env.MEDIA.delete('messages/'+media);throw error}
+  const message={id:crypto.randomUUID(),author:person(author,c.req.url),body,createdAt:time(created),chatMedia:mediaKind&&!viewOnce?{kind:mediaKind,url:''}:undefined,viewOnce:mediaKind&&mediaKind!=='audio'&&viewOnce?{kind:mediaKind,opened:false,canOpen:false}:undefined}
+  if(file&&media&&contentType)await c.env.MEDIA.put(media,await file.arrayBuffer(),{httpMetadata:{contentType}})
+  try{await c.env.DB.prepare('INSERT INTO messages (id,room,author,body,created,media,media_kind,media_type,view_once) VALUES (?,?,?,?,?,?,?,?,?)').bind(message.id,room,author.id,body,created,media,mediaKind==='audio'?null:mediaKind,mediaKind,media&&viewOnce?1:0).run()}
+  catch(error){if(media)await c.env.MEDIA.delete(media);throw error}
   await recordStreakMessage(c.env.DB,room,author.id)
   const other=await c.env.DB.prepare('SELECT CASE WHEN first_user=? THEN second_user ELSE first_user END target FROM rooms WHERE id=?').bind(author.id,room).first<{target:string}>()
   if(other)await createNotification(c.env,c.executionCtx,c.env.DB,other.target,author.id,'message',room,'sent you a message','room:'+room)
@@ -1335,8 +1340,17 @@ app.post('/api/rooms/:id/messages',async c=>{
       await Promise.all(results.map(item=>createNotification(c.env,c.executionCtx,c.env.DB,item.user_id,author.id,'message',room,'sent a message in '+group.name,'room:'+room)))
     }
   }
-  c.executionCtx.waitUntil(c.env.ROOMS.getByName(room).fetch('https://room.internal/notify',{method:'POST',body:JSON.stringify(message)}))
-  return c.json(message,201)
+  const response={...message,chatMedia:message.chatMedia&&media?{...message.chatMedia,url:mediaUrl(media,c.req.url)}:undefined}
+  c.executionCtx.waitUntil(c.env.ROOMS.getByName(room).fetch('https://room.internal/notify',{method:'POST',body:JSON.stringify(response)}))
+  return c.json(response,201)
+})
+app.post('/api/rooms/:room/messages/:id/saved',async c=>{
+  const {room,id}=c.req.param(),account=c.get('user'),db=c.env.DB
+  if(!await member(db,room,account.id))return c.json({error:'Conversation unavailable.'},404)
+  const media=await db.prepare('SELECT author,media_type,media_kind FROM messages WHERE id=? AND room=? AND media IS NOT NULL AND view_once=0').bind(id,room).first<{author:string;media_type:string|null;media_kind:string|null}>()
+  if(!media||media.author===account.id)return c.json({error:'Media unavailable.'},404)
+  await createNotification(c.env,c.executionCtx,db,media.author,account.id,'message',room,account.name+' saved your '+(media.media_type??media.media_kind??'media'),'saved:'+id+':'+account.id)
+  return c.json({ok:true})
 })
 app.post('/api/rooms/:room/messages/:id/open-once',async c=>{
   const {room,id}=c.req.param(),user=c.get('user').id,db=c.env.DB
