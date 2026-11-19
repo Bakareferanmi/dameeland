@@ -17,6 +17,7 @@ import * as MediaLibrary from 'expo-media-library/legacy'
 import Dameeland from '@dameeland/core/app'
 import {LoadingScreen} from '@dameeland/core/loading'
 import NativeVideo from './NativeVideo'
+import NativeAudio from './NativeAudio'
 
 const names={500:'PlusJakartaSans_500Medium',700:'PlusJakartaSans_700Bold',800:'PlusJakartaSans_800ExtraBold'} as const
 const font=(weight:number)=>({fontFamily:names[weight as keyof typeof names]??names[500]})
@@ -113,6 +114,13 @@ function NativeModalViewport({color,children}:{color:string;children:React.React
   return <SafeAreaProvider style={style}><SafeAreaView style={style}>{children}</SafeAreaView></SafeAreaProvider>
 }
 export default function App(){
+  const [initialUrl,setInitialUrl]=useState<string>()
+  useEffect(()=>{
+    let active=true
+    void Linking.getInitialURL().then(url=>{if(active&&url)setInitialUrl(url)})
+    const subscription=Linking.addEventListener('url',event=>setInitialUrl(event.url))
+    return ()=>{active=false;subscription.remove()}
+  },[])
   const audioRecorder=useAudioRecorder(RecordingPresets.HIGH_QUALITY)
   const recordingStarted=useRef(0)
   const voiceRecorder={
@@ -154,6 +162,6 @@ export default function App(){
   const [loaded,error]=useFonts(offline?{}:{PlusJakartaSans_500Medium,PlusJakartaSans_700Bold,PlusJakartaSans_800ExtraBold})
   const base=process.env.EXPO_PUBLIC_API_URL?.trim()||'https://dameeland-api.bakareferanmi96.workers.dev'
   const demo=offline||process.env.EXPO_PUBLIC_DEMO==='1'
-  return <SafeAreaProvider><SafeAreaView style={{flex:1,backgroundColor:loaded||error?(theme==='dark'?'#120D1F':'#FAF8FF'):'#4F25D6'}}>{loaded||error?<Dameeland phone={offline} demo={demo} base={base} callMedia={callMedia} notificationTarget={notificationTarget} renderIcon={HugeiconsIcon} initialTheme={theme} font={error?()=>({}):font} loadToken={loadToken} saveToken={saveToken} openGoogle={openGoogle} modalViewport={Platform.OS==='web'?undefined:NativeModalViewport} pickMedia={()=>pickMedia()} pickCamera={captureMedia} pickCommentMedia={()=>pickMedia(true)} voiceRecorder={voiceRecorder} saveMedia={saveMedia} renderVideo={NativeVideo} renderGif={CommentGif} share={share} requestNotifications={requestNotifications} getNotificationDevice={getNotificationDevice} notifyDevice={notifyDevice}/>:<LoadingScreen/>}</SafeAreaView></SafeAreaProvider>
+  return <SafeAreaProvider><SafeAreaView style={{flex:1,backgroundColor:loaded||error?(theme==='dark'?'#120D1F':'#FAF8FF'):'#4F25D6'}}>{loaded||error?<Dameeland phone={offline} demo={demo} base={base} initialUrl={initialUrl} callMedia={callMedia} notificationTarget={notificationTarget} renderIcon={HugeiconsIcon} initialTheme={theme} font={error?()=>({}):font} loadToken={loadToken} saveToken={saveToken} openGoogle={openGoogle} modalViewport={Platform.OS==='web'?undefined:NativeModalViewport} pickMedia={()=>pickMedia()} pickCamera={captureMedia} pickCommentMedia={()=>pickMedia(true)} voiceRecorder={voiceRecorder} saveMedia={saveMedia} renderVideo={NativeVideo} renderAudio={NativeAudio} renderGif={CommentGif} share={share} requestNotifications={requestNotifications} getNotificationDevice={getNotificationDevice} notifyDevice={notifyDevice}/>:<LoadingScreen/>}</SafeAreaView></SafeAreaProvider>
 }
 
