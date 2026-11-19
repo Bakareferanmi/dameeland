@@ -2,6 +2,7 @@
   "expo": {
     "name": "dameen",
     "slug": "dameeland",
+    "scheme": "dameen",
     "version": "0.1.0",
     "orientation": "portrait",
     "userInterfaceStyle": "automatic",
@@ -15,7 +16,13 @@
       "bundleIdentifier": "com.dameeland.app"
     },
     "android": {
-      "package": "com.dameeland.app"
+      "package": "com.dameeland.app",
+      "intentFilters": [{
+        "action": "VIEW",
+        "autoVerify": true,
+        "data": [{"scheme":"https","host":"dameen.app"}],
+        "category": ["BROWSABLE","DEFAULT"]
+      }]
     },
     "plugins": [
       "@config-plugins/react-native-webrtc",
