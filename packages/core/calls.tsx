@@ -36,6 +36,16 @@ export const callConstraints=(video:boolean)=>({
   video:video?{...videoCapture,facingMode:'user'}:false,
 })
 
+function callMediaError(reason:unknown,video:boolean){
+  const error=reason as {name?:string;message?:string}
+  if(!globalThis.isSecureContext)return new Error('Calls need a secure connection. Open dameen from its https website and try again.')
+  if(error?.name==='NotAllowedError'||error?.name==='SecurityError')return new Error(`Allow ${video?'camera and microphone':'microphone'} access in your browser, then try the call again.`)
+  if(error?.name==='NotFoundError'||error?.name==='DevicesNotFoundError')return new Error(`No ${video?'camera or microphone':'microphone'} was found on this device.`)
+  if(error?.name==='NotReadableError'||error?.name==='TrackStartError'||/start audio source/i.test(error?.message??''))return new Error('Your microphone is busy or unavailable. Close other calling or recording apps, check the browser microphone setting, then try again.')
+  if(error?.name==='OverconstrainedError')return new Error(`This device could not use the requested ${video?'camera and microphone':'microphone'} settings.`)
+  return new Error(`Couldn’t start the ${video?'camera and microphone':'microphone'}. Check the browser permission and try again.`)
+}
+
 function WebSurface({stream,local,video,full}:{stream:CallStream;local?:boolean;video:boolean;full?:boolean}){
   const element=useRef<HTMLMediaElement|null>(null)
   const [blocked,setBlocked]=useState(false)
@@ -59,7 +69,14 @@ export function browserCallMedia():CallMedia|undefined{
   if(Platform.OS!=='web'||typeof RTCPeerConnection==='undefined'||!globalThis.navigator?.mediaDevices?.getUserMedia)return
   return {
     getStream:async video=>{
-      const stream=await navigator.mediaDevices.getUserMedia(callConstraints(video))
+      let stream:MediaStream
+      try{stream=await navigator.mediaDevices.getUserMedia(callConstraints(video))}
+      catch(reason){
+        // Some Windows/browser audio drivers reject processing constraints but work
+        // with the browser defaults, so retry once with basic constraints.
+        try{stream=await navigator.mediaDevices.getUserMedia({audio:true,video:video?{facingMode:'user'}:false})}
+        catch{throw callMediaError(reason,video)}
+      }
       const track=stream.getVideoTracks()[0]
       if(track)track.contentHint='motion'
       return stream
