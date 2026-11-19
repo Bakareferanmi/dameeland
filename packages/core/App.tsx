@@ -93,7 +93,7 @@ type Props={
   requestNotifications?:()=>Promise<boolean>; getNotificationDevice?:()=>Promise<{platform:'android'|'ios';token:string}|null>; notifyDevice?:(title:string,body:string)=>Promise<void>;
   onReady?:()=>void;
 }
-type Overlay={kind:'connections';list:FollowListKind;person:Person}|{kind:'comments'|'share'|'post'|'editPost';post:Post;targetId?:string}|{kind:'editMessage';message:Note}|{kind:'story';person:Person}|{kind:'photo';person:Person;photo:'avatar'|'cover'}|{kind:'create'|'wish'|'newStory'|'editProfile'|'editUsername'}|{kind:'call';video:boolean;person:Person;ringing?:boolean;incoming?:boolean}
+type Overlay={kind:'connections';list:FollowListKind;person:Person}|{kind:'comments'|'share'|'post'|'editPost';post:Post;targetId?:string}|{kind:'editMessage';message:Note}|{kind:'story';person:Person}|{kind:'photo';person:Person;photo:'avatar'|'cover'}|{kind:'create'|'createGroup'|'wish'|'newStory'|'editProfile'|'editUsername'}|{kind:'call';video:boolean;person:Person;ringing?:boolean;incoming?:boolean}
 type PageEntry={page:Page;profile:Person;room:Room|null;overlays:Overlay[];scrollY:number;lessonId:string}
 const tabs:[Page,Glyph][]=[['Home','home'],['Learn','book'],['Explore','search'],['Play','game']]
 const localRooms=people.filter(p=>p.id in initialChats).map(person=>({id:person.id,person}))
@@ -299,7 +299,7 @@ function PostCard({post,onReact,onOverlay,onProfile,detail=false}:{post:Post;det
   return <Card style={{padding:14,gap:9}}>
     <Pressable accessibilityRole="button" accessibilityLabel={'Open '+displayHandle(post.author)+' profile'} onPress={()=>onProfile(post.author)} style={row}><Avatar person={post.author} size={40}/><View style={{flex:1}}><PersonName person={post.author}/><Copy color={theme.muted} size={12}>{shortTime(post.time)}{post.editedAt?' · Edited':''}</Copy></View></Pressable>
     {!!post.body&&(detail?<Copy size={15}>{post.body}</Copy>:<Pressable accessibilityRole="button" accessibilityLabel="Open post details" onPress={()=>onOverlay({kind:'post',post})} style={{minHeight:32,justifyContent:'center'}}><Copy size={15}>{post.body}</Copy></Pressable>)}
-    {post.media?<UploadedMedia post={post}/>:post.kind&&<PreviewMedia kind={post.kind}/>} 
+    {post.media?<UploadedMedia post={post}/>:post.kind&&<PreviewMedia kind={post.kind}/>}
     <View style={{...row,justifyContent:'space-between',gap:1,borderTopWidth:1,borderColor:theme.border,paddingTop:3}}><IconButton name={post.liked?'heartOn':'heart'} label={post.liked?'Unlike post':'Like post'} active={post.liked} count={post.likes} onPress={()=>onReact(post,'like')}/><IconButton name="cm" label="Comments" count={post.comments} onPress={()=>onOverlay({kind:'comments',post})}/><IconButton name="rp" label={post.reposted?'Undo repost':'Repost'} active={post.reposted} count={post.reposts} onPress={()=>onReact(post,'repost')}/><IconButton name="sh" label="Share post" onPress={()=>onOverlay({kind:'share',post})}/></View>
   </Card>
 }
@@ -431,6 +431,9 @@ export default function App(props:Props){
   const [voicePlaying,setVoicePlaying]=useState(false)
   const [quietMode,setQuietMode]=useState(false)
   const [query,setQuery]=useState(''),[results,setResults]=useState<(Person&{followsViewer?:boolean})[]>([])
+  const [groupName,setGroupName]=useState(''),[groupPeople,setGroupPeople]=useState<Person[]>([])
+  const [groupMembers,setGroupMembers]=useState<Set<string>>(()=>new Set())
+  const [groupLoading,setGroupLoading]=useState(false)
   const [searching,setSearching]=useState(false),[searchError,setSearchError]=useState('')
   const searchTerm=query.trim().replace(/^@+/, '')
   const [follows,setFollows]=useState<Record<string,boolean>>({})
@@ -1330,6 +1333,21 @@ export default function App(props:Props){
       openRoom(nextRoom)
     }catch(reason){fail(reason)}
   }
+  async function openGroupCreator(){
+    setGroupName('');setGroupMembers(new Set());setGroupLoading(true);selectOverlay({kind:'createGroup'})
+    try{setGroupPeople(demo?people.filter(person=>!person.group&&person.id!==user.id):await call<Person[]>('/people?q='))}
+    catch(reason){fail(reason)}finally{setGroupLoading(false)}
+  }
+  async function createGroup(){
+    if(busy||groupName.trim().length<2||!groupMembers.size)return
+    setBusy(true)
+    try{
+      if(demo){notify('Group creation is ready in the live app.');return}
+      const created=await call<Room>('/groups',json({name:groupName.trim(),members:[...groupMembers]}))
+      setRooms(previous=>[created,...previous.filter(item=>item.id!==created.id)])
+      setInboxTab('Groups');modalClose();openRoom(created);notify(groupName.trim()+' created')
+    }catch(reason){fail(reason)}finally{setBusy(false)}
+  }
   async function openNotification(item:NotificationItem){
     if(!item.read){
       try{
@@ -1567,13 +1585,14 @@ export default function App(props:Props){
   const roomList=rooms.filter(r=>inboxTab==='Chats'?!r.person.group:inboxTab==='Groups'?r.person.group:false)
   const inbox=<>
     <Segmented options={['Chats','Groups','Requests']} selected={inboxTab} onSelect={setInboxTab}/>
+    {inboxTab==='Groups'&&<Button label="Create group" leading="grp" variant="secondary" onPress={()=>void openGroupCreator()}/>}
     {demo&&inboxTab==='Chats'&&<Card>{section('Active now')}<View style={row}>{[people[0],people[1],people[2]].map(person=><Pressable key={person.id} accessibilityRole="button" accessibilityLabel={'Message '+person.name} onPress={()=>void messagePerson(person)}><Avatar person={person} ring size={42}/></Pressable>)}</View></Card>}
-    {feedError&&!rooms.length?failure:roomsLoading&&!rooms.length?<Loading/>:roomList.length?<>{roomList.map(r=><Motion key={r.id} reduced={reduced} distance={4}><Pressable accessibilityRole="button" accessibilityLabel={'Open conversation with '+displayHandle(r.person)} onPress={()=>openRoom(r)}><Card style={{...row,minHeight:72}}><Avatar person={r.person} size={50}/><View style={{flex:1,minWidth:0,gap:3}}><View style={spread}><PersonName person={r.person}/>{r.lastActivityAt&&<Copy color={theme.muted} size={11}>{shortTime(r.lastActivityAt)}</Copy>}</View><Copy color={theme.muted} size={12}>{chats[r.id]?.at(-1)?.body??r.lastActivity??'Open conversation'}</Copy></View></Card></Pressable></Motion>)}{roomsNextCursor&&inboxTab==='Chats'&&<Button label={roomsLoadingMore?'Loading conversations…':'Load more conversations'} variant="secondary" disabled={roomsLoadingMore} onPress={()=>void loadMoreRooms()}/>}</>:<Empty title={inboxTab==='Chats'?'No messages yet':inboxTab==='Groups'?'No groups yet':'No message requests'} detail={inboxTab==='Chats'?'Find a classmate and start a chat.':inboxTab==='Groups'?'Group conversations are available in the preview.':'New requests will appear here.'} action={inboxTab==='Chats'?'Find people':undefined} onPress={()=>open('Explore')}/>} 
+    {feedError&&!rooms.length?failure:roomsLoading&&!rooms.length?<Loading/>:roomList.length?<>{roomList.map(r=><Motion key={r.id} reduced={reduced} distance={4}><Pressable accessibilityRole="button" accessibilityLabel={'Open conversation with '+displayHandle(r.person)} onPress={()=>openRoom(r)}><Card style={{...row,minHeight:72}}><Avatar person={r.person} size={50}/><View style={{flex:1,minWidth:0,gap:3}}><View style={spread}><PersonName person={r.person}/>{r.lastActivityAt&&<Copy color={theme.muted} size={11}>{shortTime(r.lastActivityAt)}</Copy>}</View><Copy color={theme.muted} size={12}>{chats[r.id]?.at(-1)?.body??r.lastActivity??'Open conversation'}</Copy></View></Card></Pressable></Motion>)}{roomsNextCursor&&inboxTab==='Chats'&&<Button label={roomsLoadingMore?'Loading conversations…':'Load more conversations'} variant="secondary" disabled={roomsLoadingMore} onPress={()=>void loadMoreRooms()}/>}</>:<Empty title={inboxTab==='Chats'?'No messages yet':inboxTab==='Groups'?'No groups yet':'No message requests'} detail={inboxTab==='Chats'?'Find a classmate and start a chat.':inboxTab==='Groups'?'Create a group for your class, club or friends.':'New requests will appear here.'} action={inboxTab==='Chats'?'Find people':inboxTab==='Groups'?'Create group':undefined} onPress={inboxTab==='Groups'?()=>void openGroupCreator():()=>open('Explore')}/>}
   </>
   const lastOwnMessageId=room?[...(chats[room.id]??[])].reverse().find(note=>!note.call&&note.author.id===user.id)?.id:undefined
   const chat=room&&<>
-    {!demo&&callMedia&&deviceNotifications!=='granted'&&props.requestNotifications&&<View style={{alignItems:'center'}}><Button label="Enable call alerts" variant="plain" onPress={()=>void enableDeviceNotifications()}/></View>}
-    {!demo&&!callMedia&&<Copy color={theme.muted} size={12}>Voice and video calls are available in the installed app build or a supported browser.</Copy>}
+    {!room.person.group&&!demo&&callMedia&&deviceNotifications!=='granted'&&props.requestNotifications&&<View style={{alignItems:'center'}}><Button label="Enable call alerts" variant="plain" onPress={()=>void enableDeviceNotifications()}/></View>}
+    {!room.person.group&&!demo&&!callMedia&&<Copy color={theme.muted} size={12}>Voice and video calls are available in the installed app build or a supported browser.</Copy>}
     {demo&&room.person.group&&<Card><Copy weight={800}>Pinned message</Copy><Copy>Bring one practice question to the next study session.</Copy><Button label="Join group voice call" leading="ph" variant="secondary" onPress={()=>selectOverlay({kind:'call',video:false,person:room.person,ringing:true})}/></Card>}
     {demo&&room.id==='ada'&&<Card><Copy size={12} color={theme.muted}>Call log · Voice call · 2 min</Copy><Button label={voicePlaying?'Stop voice note preview':'Preview voice note · 0:08'} leading="play" variant="secondary" onPress={()=>setVoicePlaying(!voicePlaying)}/>{voicePlaying&&<Copy>Transcript: Can we revise quadratic equations after school?</Copy>}</Card>}
     {!!feedError&&<Empty title="Reconnecting" detail={feedError}/>}
@@ -1717,6 +1736,18 @@ export default function App(props:Props){
       {props.pickMedia&&<Button label="Add image or video" leading="image" variant="secondary" onPress={()=>{void props.pickMedia?.().then(value=>{if(!value)return;if(value.kind==='video'&&(!value.duration||value.duration>videoLimit+.25)){fail(new Error('Videos can be up to '+videoLimit+' seconds.'));return}setAttachment(value)}).catch(fail)}}/>}
       {!demo&&<SearchVisibility label="Show post in web search" detail="Search engines can show this post and its media to anyone." value={postSearchPublic} onChange={setPostSearchPublic} disabled={busy}/>}
       <Button label={busy?'Posting…':'Publish post'} onPress={()=>void createPost()} disabled={busy||(!draft.trim()&&!attachment)}/></>
+  }else if(overlay?.kind==='createGroup'){
+    sheet=<>
+      <Field label="Group name" placeholder="e.g. SS2 Study Squad" value={groupName} onChangeText={setGroupName} maxLength={50}/>
+      <Copy weight={800}>Choose members · {groupMembers.size} selected</Copy>
+      {groupLoading?<Loading/>:<View style={{gap:8,maxHeight:360}}>{groupPeople.map(person=>{
+        const selected=groupMembers.has(person.id)
+        return <Pressable key={person.id} accessibilityRole="checkbox" accessibilityState={{checked:selected}} onPress={()=>setGroupMembers(previous=>{const next=new Set(previous);selected?next.delete(person.id):next.add(person.id);return next})}>
+          <Card style={{...row,padding:11,borderColor:selected?theme.purple:theme.border}}><Avatar person={person} size={40}/><View style={{flex:1}}><PersonName person={person}/><Copy size={12} color={theme.muted}>@{displayHandle(person)}</Copy></View><Icon name={selected?'check':'plus'} color={selected?theme.purple:theme.muted}/></Card>
+        </Pressable>
+      })}</View>}
+      <Button label={busy?'Creating…':'Create group'} leading="grp" disabled={busy||groupName.trim().length<2||!groupMembers.size} onPress={()=>void createGroup()}/>
+    </>
   }else if(overlay?.kind==='newStory'){
     const valid=storyMode==='Text'?!!comment.trim():storyMode==='Photo'?!!storyImage:storyMedia?.kind==='video'
     sheet=<>
@@ -1750,7 +1781,7 @@ export default function App(props:Props){
   const overlayTitle=overlay?.kind==='connections'?(overlay.list==='followers'?'Followers':'Following')
     :overlay?.kind==='call'?(overlay.ringing?'Ringing':overlay.video?'Video call':'Voice call')
     :overlay?.kind==='photo'?overlay.photo==='avatar'?'Profile picture':'Cover photo'
-    :overlay&&overlay.kind!=='story'?{editProfile:'Edit profile',editUsername:'Change username',editPost:'Edit post',editMessage:'Edit message',comments:'Comments',share:'Share post',post:'Post detail',create:'Create post',wish:'Happy birthday, Zee!',newStory:'Create story'}[overlay.kind]:''
+    :overlay&&overlay.kind!=='story'?{editProfile:'Edit profile',editUsername:'Change username',editPost:'Edit post',editMessage:'Edit message',comments:'Comments',share:'Share post',post:'Post detail',create:'Create post',createGroup:'Create group',wish:'Happy birthday, Zee!',newStory:'Create story'}[overlay.kind]:''
   const story=overlay?.kind==='story'?(demoAccounts.find(account=>account.person.id===overlay.person.id)?.person??overlay.person):null
   const liveGroup=story&&!demo?activeStories.find(group=>group.author.id===story.id):undefined
   const activeIndex=liveGroup?Math.min(storyIndex,liveGroup.stories.length-1):0
@@ -1784,9 +1815,9 @@ export default function App(props:Props){
                 </Pressable>
               </View>
               <View style={{...row,gap:0}}>
-                {!demo&&<ChatWhot key={room.id} base={base} token={token} room={room.id} opponent={displayHandle(room.person)}/>}
+                {!room.person.group&&<>{!demo&&<ChatWhot key={room.id} base={base} token={token} room={room.id} opponent={displayHandle(room.person)}/>}
                 <IconButton name="ph" label="Voice call" onPress={()=>demo?selectOverlay({kind:'call',video:false,person:room.person}):callMedia?roomCall.start(false):notify('Calls need an installed app build or a supported browser.','error')}/>
-                <IconButton name="vid" label="Video call" onPress={()=>demo?selectOverlay({kind:'call',video:true,person:room.person}):callMedia?roomCall.start(true):notify('Calls need an installed app build or a supported browser.','error')}/>
+                <IconButton name="vid" label="Video call" onPress={()=>demo?selectOverlay({kind:'call',video:true,person:room.person}):callMedia?roomCall.start(true):notify('Calls need an installed app build or a supported browser.','error')}/></>}
               </View>
             </>:<>
             <View style={{...row,flex:1}}>
@@ -1908,7 +1939,7 @@ export default function App(props:Props){
     </Modal>
     <Modal presentationStyle="fullScreen" visible={Boolean(!demo&&page==='Chat'&&room&&roomCall.call&&callMedia)} animationType={reduced?'none':'fade'} onRequestClose={()=>roomCall.end()}>
       <ModalViewport color="#130D25">
-        {room&&roomCall.call&&callMedia&&<RoomCall key={roomCall.call.id} person={room.person} media={callMedia} call={roomCall.call} accept={roomCall.accept} end={()=>roomCall.end()} switchCamera={()=>void roomCall.switchCamera()} canSwitchCamera={roomCall.canSwitchCamera}/>} 
+        {room&&roomCall.call&&callMedia&&<RoomCall key={roomCall.call.id} person={room.person} media={callMedia} call={roomCall.call} accept={roomCall.accept} end={()=>roomCall.end()} switchCamera={()=>void roomCall.switchCamera()} canSwitchCamera={roomCall.canSwitchCamera}/>}
       </ModalViewport>
     </Modal>
   </View></Design.Provider>

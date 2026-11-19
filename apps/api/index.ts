@@ -1100,27 +1100,38 @@ app.put('/api/people/:id/follow',async c=>{
   }
   return c.json({ok:true})
 })
-const member=(db:D1Database,room:string,user:string)=>db.prepare('SELECT id FROM rooms WHERE id=? AND (first_user=? OR second_user=?)').bind(room,user,user).first()
+const member=(db:D1Database,room:string,user:string)=>db.prepare(`
+  SELECT id FROM rooms WHERE id=? AND (first_user=? OR second_user=?)
+  UNION ALL SELECT group_id id FROM group_members WHERE group_id=? AND user_id=? LIMIT 1
+`).bind(room,user,user,room,user).first()
 app.get('/api/rooms',async c=>{
   const user=c.get('user').id
   const paged=c.req.query('paged')==='1'
   const cursor=Math.max(0,Math.min(10000,Number.parseInt(c.req.query('cursor')??'0',10)||0))
-  const limit=paged?21:60
-  const {results}=await c.env.DB.prepare(`SELECT r.id room,u.id,u.name,u.role,u.username,u.verified,u.teacher,u.dob,u.avatar_media,u.cover_media,u.bio,
+  const [{results},{results:groupResults}]=await Promise.all([c.env.DB.prepare(`SELECT r.id room,u.id,u.name,u.role,u.username,u.verified,u.teacher,u.dob,u.avatar_media,u.cover_media,u.bio,
     m.body last_body,m.created message_at,x.video call_video,x.caller call_caller,x.state call_state,x.connected_at call_connected_at,x.ended_at call_ended_at,x.created call_at
     FROM rooms r JOIN users u ON u.id=CASE WHEN r.first_user=? THEN r.second_user ELSE r.first_user END
     LEFT JOIN messages m ON m.id=(SELECT id FROM messages WHERE room=r.id ORDER BY created DESC LIMIT 1)
     LEFT JOIN calls x ON x.id=(SELECT id FROM calls WHERE room=r.id AND (state IN ('ended','declined') OR (state IN ('offered','ringing') AND expires<?)) ORDER BY created DESC LIMIT 1)
-    WHERE r.first_user=? OR r.second_user=? ORDER BY MAX(COALESCE(m.created,0),COALESCE(x.created,0)) DESC LIMIT ? OFFSET ?`).bind(user,now(),user,user,limit,paged?cursor:0).all<PublicAccount&{room:string;last_body:string|null;message_at:number|null;call_video:number|null;call_caller:string|null;call_state:string|null;call_connected_at:number|null;call_ended_at:number|null;call_at:number|null}>()
-  const rooms=results.slice(0,paged?20:60).map(r=>{
+    WHERE r.first_user=? OR r.second_user=? ORDER BY MAX(COALESCE(m.created,0),COALESCE(x.created,0)) DESC LIMIT 60`).bind(user,now(),user,user).all<PublicAccount&{room:string;last_body:string|null;message_at:number|null;call_video:number|null;call_caller:string|null;call_state:string|null;call_connected_at:number|null;call_ended_at:number|null;call_at:number|null}>(),c.env.DB.prepare(`
+    SELECT g.id room,g.name,g.created,COUNT(gm2.user_id) members,m.body last_body,m.created message_at
+    FROM chat_groups g JOIN group_members mine ON mine.group_id=g.id AND mine.user_id=?
+    JOIN group_members gm2 ON gm2.group_id=g.id
+    LEFT JOIN messages m ON m.id=(SELECT id FROM messages WHERE room=g.id ORDER BY created DESC LIMIT 1)
+    GROUP BY g.id ORDER BY COALESCE(m.created,g.created) DESC LIMIT 60
+  `).bind(user).all<{room:string;name:string;created:number;members:number;last_body:string|null;message_at:number|null}>()])
+  const directRooms=results.map(r=>{
     const latestCall=!!r.call_at&&r.call_at>(r.message_at??0)
     const duration=r.call_connected_at?Math.max(0,Math.floor(((r.call_ended_at??now())-r.call_connected_at)/1000)):0
     const label=r.call_video?'video call':'voice call'
     const callActivity=r.call_connected_at?`${r.call_video?'Video call':'Voice call'} · ${Math.floor(duration/60)}m ${String(duration%60).padStart(2,'0')}s`:r.call_state==='declined'?r.call_caller===user?'Call declined':'Declined '+label:r.call_caller===user?'No answer':'Missed '+label
     return {id:r.room,person:person(r,c.req.url),lastActivity:latestCall?callActivity:r.last_body??undefined,lastActivityAt:r.call_at&&latestCall?time(r.call_at):r.message_at?time(r.message_at):undefined}
   })
+  const groupRooms=groupResults.map(r=>({id:r.room,person:{id:r.room,name:r.name,initials:initials(r.name),role:'tech' as const,color:'#C8F53F',detail:'Group · '+r.members+' members',group:true},lastActivity:r.last_body??'Group created',lastActivityAt:time(r.message_at??r.created)}))
+  const merged=[...directRooms,...groupRooms].sort((a,b)=>Date.parse(b.lastActivityAt??'')-Date.parse(a.lastActivityAt??''))
+  const rooms=merged.slice(paged?cursor:0,(paged?cursor:0)+(paged?20:60))
   c.header('Cache-Control','no-store')
-  return c.json(paged?{items:rooms,nextCursor:results.length>20?String(cursor+20):null}:rooms)
+  return c.json(paged?{items:rooms,nextCursor:merged.length>cursor+20?String(cursor+20):null}:rooms)
 })
 app.post('/api/rooms',async c=>{
   const target=clean((await readBody(c.req.raw))?.target,80)
@@ -1131,6 +1142,23 @@ app.post('/api/rooms',async c=>{
   await db.prepare('INSERT INTO rooms VALUES (?,?,?) ON CONFLICT DO NOTHING').bind(crypto.randomUUID(),first,second).run()
   const result=await db.prepare('SELECT id FROM rooms WHERE first_user=? AND second_user=?').bind(first,second).first<{id:string}>()
   return c.json(result)
+})
+app.post('/api/groups',async c=>{
+  const account=c.get('user'),db=c.env.DB,input=await readBody(c.req.raw)
+  const name=clean(input?.name,50)
+  const requested=Array.isArray(input?.members)?input.members.filter((id:unknown):id is string=>typeof id==='string'&&id!==account.id).slice(0,29):[]
+  const members=[...new Set(requested)]
+  if(name.length<2)return c.json({error:'Enter a group name with at least 2 characters.'},400)
+  if(!members.length)return c.json({error:'Choose at least one group member.'},400)
+  const placeholders=members.map(()=>'?').join(',')
+  const valid=await db.prepare(`SELECT id FROM users WHERE id IN (${placeholders})`).bind(...members).all<{id:string}>()
+  if(valid.results.length!==members.length)return c.json({error:'One of the selected members is unavailable.'},400)
+  const id=crypto.randomUUID(),created=now(),all=[account.id,...members]
+  await db.batch([
+    db.prepare('INSERT INTO chat_groups(id,name,owner,created) VALUES (?,?,?,?)').bind(id,name,account.id,created),
+    ...all.map(user=>db.prepare('INSERT INTO group_members(group_id,user_id,joined) VALUES (?,?,?)').bind(id,user,created)),
+  ])
+  return c.json({id,person:{id,name,initials:initials(name),role:'tech',color:'#C8F53F',detail:'Group · '+all.length+' members',group:true}},201)
 })
 type WhotRow={id:string;invited_by:string;accepted:number;version:number;state:string}
 function whotView(row:WhotRow,user:string){
@@ -1246,6 +1274,13 @@ app.post('/api/rooms/:id/messages',async c=>{
   await c.env.DB.prepare('INSERT INTO messages (id,room,author,body,created) VALUES (?,?,?,?,?)').bind(message.id,room,author.id,body,created).run()
   const other=await c.env.DB.prepare('SELECT CASE WHEN first_user=? THEN second_user ELSE first_user END target FROM rooms WHERE id=?').bind(author.id,room).first<{target:string}>()
   if(other)await createNotification(c.env,c.executionCtx,c.env.DB,other.target,author.id,'message',room,'sent you a message','room:'+room)
+  else{
+    const group=await c.env.DB.prepare('SELECT name FROM chat_groups WHERE id=?').bind(room).first<{name:string}>()
+    if(group){
+      const {results}=await c.env.DB.prepare('SELECT user_id FROM group_members WHERE group_id=? AND user_id!=?').bind(room,author.id).all<{user_id:string}>()
+      await Promise.all(results.map(item=>createNotification(c.env,c.executionCtx,c.env.DB,item.user_id,author.id,'message',room,'sent a message in '+group.name,'room:'+room)))
+    }
+  }
   c.executionCtx.waitUntil(c.env.ROOMS.getByName(room).fetch('https://room.internal/notify',{method:'POST',body:JSON.stringify(message)}))
   return c.json(message,201)
 })
