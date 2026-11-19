@@ -87,8 +87,32 @@ const pickMedia=(comment=false,capture=false)=>{
   })
 }
 let voiceRecorder:MediaRecorder|null=null,voiceStream:MediaStream|null=null,voiceChunks:Blob[]=[]
+const microphoneError=(reason:unknown)=>{
+  const error=reason as {name?:string;message?:string}
+  if(!window.isSecureContext)return new Error('Voice notes need a secure connection. Open dameen from its https website.')
+  if(error?.name==='NotAllowedError'||error?.name==='SecurityError')return new Error('Allow microphone access in your browser, then tap the microphone again.')
+  if(error?.name==='NotFoundError'||error?.name==='DevicesNotFoundError')return new Error('No microphone was found on this device.')
+  if(error?.name==='NotReadableError'||error?.name==='TrackStartError'||/start audio source/i.test(error?.message??''))return new Error('Your microphone is busy or unavailable. Close other calling or recording apps, check the browser microphone setting, then try again.')
+  return new Error('Couldn’t start the microphone. Check its browser permission and try again.')
+}
 const voice={
-  start:async()=>{voiceStream=await navigator.mediaDevices.getUserMedia({audio:{echoCancellation:true,noiseSuppression:true}});voiceChunks=[];voiceRecorder=new MediaRecorder(voiceStream);voiceRecorder.ondataavailable=event=>{if(event.data.size)voiceChunks.push(event.data)};voiceRecorder.start(250)},
+  start:async()=>{
+    if(!navigator.mediaDevices?.getUserMedia||typeof MediaRecorder==='undefined')throw new Error('Voice notes are not supported by this browser.')
+    voiceStream?.getTracks().forEach(track=>track.stop())
+    voiceStream=null;voiceRecorder=null
+    try{voiceStream=await navigator.mediaDevices.getUserMedia({audio:{echoCancellation:true,noiseSuppression:true,autoGainControl:true}})}
+    catch(reason){
+      try{voiceStream=await navigator.mediaDevices.getUserMedia({audio:true})}
+      catch{throw microphoneError(reason)}
+    }
+    try{
+      voiceChunks=[]
+      const mime=['audio/webm;codecs=opus','audio/webm','audio/mp4'].find(type=>MediaRecorder.isTypeSupported(type))
+      voiceRecorder=new MediaRecorder(voiceStream,mime?{mimeType:mime}:undefined)
+      voiceRecorder.ondataavailable=event=>{if(event.data.size)voiceChunks.push(event.data)}
+      voiceRecorder.start(250)
+    }catch(reason){voiceStream.getTracks().forEach(track=>track.stop());voiceStream=null;throw microphoneError(reason)}
+  },
   stop:()=>new Promise<{name:string;uri:string;data:File;kind:'audio'}|null>((resolve,reject)=>{
     if(!voiceRecorder){resolve(null);return}
     voiceRecorder.onerror=()=>reject(new Error('Couldn’t record the voice note.'))
