@@ -81,6 +81,7 @@ function SearchVisibility({label,detail,value,onChange,disabled}:{label:string;d
 }
 
 type GoogleStart={url:string;state:string;exchange:string}
+type StoredGoogleAttempt={state:string;exchange:string;expires:number}
 type GoogleWindow={close:()=>void}
 type Media={name:string;uri:string;data:Blob|{uri:string;name:string;type:string};kind?:'image'|'video'|'audio';duration?:number}
 type Props={
@@ -403,6 +404,11 @@ export default function App(props:Props){
   const googleRequest=useRef<AbortController|null>(null)
   const [googlePending,setGooglePending]=useState(false)
   const [busy,setBusy]=useState(false),[error,setError]=useState('')
+  const googleStorageKey='dameeland-google-attempt'
+  const storeGoogleAttempt=(attempt:StoredGoogleAttempt|null)=>{
+    if(Platform.OS!=='web')return
+    try{attempt?window.localStorage.setItem(googleStorageKey,JSON.stringify(attempt)):window.localStorage.removeItem(googleStorageKey)}catch{}
+  }
   const [posts,setPosts]=useState<Post[]>(demo?initialPosts:[])
   const [loading,setLoading]=useState(false),[feedError,setFeedError]=useState(''),[followingOnly,setFollowingOnly]=useState(false)
   const [overlay,setOverlay]=useState<Overlay|null>(null)
@@ -599,6 +605,38 @@ export default function App(props:Props){
     void restore()
     return ()=>{alive=false;clearTimeout(timeout);controller.abort()}
   },[stage,base,props.loadToken,restoreAttempt])
+  useEffect(()=>{
+    if(Platform.OS!=='web'||demo||token||googleRequest.current)return
+    let saved:StoredGoogleAttempt|null=null
+    try{saved=JSON.parse(window.localStorage.getItem(googleStorageKey)??'null') as StoredGoogleAttempt|null}catch{}
+    if(!saved?.state||!saved.exchange||saved.expires<=Date.now()){storeGoogleAttempt(null);return}
+    let active=true
+    const controller=new AbortController()
+    googleRequest.current=controller;setStage('auth');setBusy(true);setGooglePending(true);setError('Finishing your Google sign-in…')
+    const resume=async()=>{
+      try{
+        while(active&&Date.now()<saved!.expires){
+          try{
+            const result=await api<Session|{pending:true}>(base,'/google/exchange',{...json({state:saved!.state,exchange:saved!.exchange}),signal:controller.signal})
+            if('token' in result){
+              storeGoogleAttempt(null);setToken(result.token);setUser(result.user);clearReferral()
+              try{await props.saveToken?.(result.token)}catch{}
+              if(active){setError('');setPage('Home');setStage('app')}
+              return
+            }
+          }catch(reason){
+            if(reason instanceof ApiError&&(reason.status===400||reason.status===410))throw reason
+            if(controller.signal.aborted)throw reason
+          }
+          await new Promise(resolve=>setTimeout(resolve,1500))
+        }
+        throw new Error('Google sign-in expired. Please try again.')
+      }catch(reason){if(active&&!controller.signal.aborted){storeGoogleAttempt(null);setError(errorMessage(reason));setStage('auth')}}
+      finally{if(active){googleRequest.current=null;setGooglePending(false);setBusy(false)}}
+    }
+    void resume()
+    return ()=>{active=false;controller.abort();if(googleRequest.current===controller)googleRequest.current=null}
+  },[base,demo,token])
   useEffect(()=>{
     if(demo||!token||page!=='Home')return
     let alive=true
@@ -1070,11 +1108,12 @@ export default function App(props:Props){
       if(!attempt)throw new Error('Google sign-in could not start.')
       const {state,exchange}=attempt
       const deadline=Date.now()+600000
+      storeGoogleAttempt({state,exchange,expires:deadline})
       while(!controller.signal.aborted&&Date.now()<deadline){
         try{
           const result=await api<Session|{pending:true}>(base,'/google/exchange',{...json({state,exchange}),signal:controller.signal})
           if('token' in result){
-            setToken(result.token);setUser(result.user);clearReferral()
+            storeGoogleAttempt(null);setToken(result.token);setUser(result.user);clearReferral()
             try{await props.saveToken?.(result.token)}catch{notify('You’re signed in for this session.')}
             setPage('Home');setStage('app')
             return
@@ -1086,7 +1125,7 @@ export default function App(props:Props){
         await new Promise(resolve=>setTimeout(resolve,2000))
       }
       throw new Error('Google sign-in timed out. Please try again.')
-    }catch(reason){if(!controller.signal.aborted)setError(errorMessage(reason))}
+    }catch(reason){if(!controller.signal.aborted){storeGoogleAttempt(null);setError(errorMessage(reason))}}
     finally{googleWindow?.close();googleRequest.current=null;setGooglePending(false);setBusy(false)}
   }
   async function logout(){
