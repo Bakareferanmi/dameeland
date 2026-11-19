@@ -411,6 +411,13 @@ app.get('/api/media/:id',async c=>{
   if(!attachment) return c.json({error:'Image unavailable.'},404)
   return storedMedia(c.env.MEDIA,id,'public, max-age=3600')
 })
+app.get('/api/view-once/:id/:ticket',async c=>{
+  const {id,ticket}=c.req.param()
+  if(!uuidPattern.test(id)||!/^[a-f0-9]{32}$/.test(ticket))return c.json({error:'Media unavailable.'},404)
+  const row=await c.env.DB.prepare('SELECT media,media_token_expires FROM messages WHERE id=? AND media_token_hash=? AND view_once=1').bind(id,await hash(ticket)).first<{media:string|null;media_token_expires:number|null}>()
+  if(!row?.media||!row.media_token_expires||row.media_token_expires<now())return c.json({error:'This view-once media has expired.'},410)
+  return storedMedia(c.env.MEDIA,row.media,'private, no-store')
+})
 const storyKey=(user:string)=>'stories:'+user
 type StoryRecord={id:string;text:string;media?:string;kind?:'image'|'video';background?:string;created:number;expires?:number}
 const storyExpiry=(story:StoryRecord)=>story.expires??story.created+storyLifetime
@@ -1104,6 +1111,24 @@ const member=(db:D1Database,room:string,user:string)=>db.prepare(`
   SELECT id FROM rooms WHERE id=? AND (first_user=? OR second_user=?)
   UNION ALL SELECT group_id id FROM group_members WHERE group_id=? AND user_id=? LIMIT 1
 `).bind(room,user,user,room,user).first()
+const streakView=async(db:D1Database,room:string)=>{
+  const row=await db.prepare('SELECT count,last_completed_day FROM chat_streaks WHERE room=?').bind(room).first<{count:number;last_completed_day:number|null}>()
+  if(!row)return null
+  const day=Math.floor(now()/86400000)
+  return {count:row.last_completed_day!==null&&row.last_completed_day<day-1?0:row.count,nextMilestone:[3,7,14,30,50,100].find(value=>value>row.count)??null}
+}
+async function recordStreakMessage(db:D1Database,room:string,user:string){
+  const direct=await db.prepare('SELECT first_user,second_user FROM rooms WHERE id=?').bind(room).first<{first_user:string;second_user:string}>()
+  if(!direct)return
+  const day=Math.floor(now()/86400000),column=user===direct.first_user?'first_sent_day':'second_sent_day'
+  await db.prepare(`UPDATE chat_streaks SET
+    count=CASE WHEN COALESCE(last_completed_day,-2)<?-1 THEN 0 ELSE count END,
+    first_sent_day=CASE WHEN COALESCE(last_completed_day,-2)<?-1 THEN NULL ELSE first_sent_day END,
+    second_sent_day=CASE WHEN COALESCE(last_completed_day,-2)<?-1 THEN NULL ELSE second_sent_day END,
+    ${column}=? WHERE room=?`).bind(day,day,day,day,room).run()
+  await db.prepare(`UPDATE chat_streaks SET count=count+1,last_completed_day=?
+    WHERE room=? AND first_sent_day=? AND second_sent_day=? AND COALESCE(last_completed_day,-1)!=?`).bind(day,room,day,day,day).run()
+}
 app.get('/api/rooms',async c=>{
   const user=c.get('user').id
   const paged=c.req.query('paged')==='1'
@@ -1142,6 +1167,18 @@ app.post('/api/rooms',async c=>{
   await db.prepare('INSERT INTO rooms VALUES (?,?,?) ON CONFLICT DO NOTHING').bind(crypto.randomUUID(),first,second).run()
   const result=await db.prepare('SELECT id FROM rooms WHERE first_user=? AND second_user=?').bind(first,second).first<{id:string}>()
   return c.json(result)
+})
+app.get('/api/rooms/:id/streak',async c=>{
+  const room=c.req.param('id'),user=c.get('user').id,db=c.env.DB
+  if(!await member(db,room,user)||!await db.prepare('SELECT id FROM rooms WHERE id=?').bind(room).first())return c.json({error:'Direct conversation unavailable.'},404)
+  return c.json(await streakView(db,room))
+})
+app.post('/api/rooms/:id/streak',async c=>{
+  const room=c.req.param('id'),account=c.get('user'),db=c.env.DB
+  if(!hasVerifiedBenefits(account))return c.json({error:'Chat streaks are currently available to verified users.'},403)
+  if(!await member(db,room,account.id)||!await db.prepare('SELECT id FROM rooms WHERE id=?').bind(room).first())return c.json({error:'Start streaks in direct chats only.'},400)
+  await db.prepare('INSERT INTO chat_streaks(room,started_by,created) VALUES (?,?,?) ON CONFLICT DO NOTHING').bind(room,account.id,now()).run()
+  return c.json(await streakView(db,room),201)
 })
 app.post('/api/groups',async c=>{
   const account=c.get('user'),db=c.env.DB,input=await readBody(c.req.raw)
@@ -1231,7 +1268,7 @@ app.get('/api/rooms/:id/messages',async c=>{
   const messageLimit=paged?31:100
   const callLimit=paged?31:40
   const [messages,calls]=await Promise.all([
-    c.env.DB.prepare('SELECT u.id,u.name,u.role,u.username,u.verified,u.teacher,u.dob,u.avatar_media,u.cover_media,u.bio,m.id note_id,m.body,m.read_at,m.created,m.edited_at FROM messages m JOIN users u ON u.id=m.author WHERE room=? AND m.created<? ORDER BY m.created DESC LIMIT ?').bind(room,before,messageLimit).all<NoteRow&{read_at:number|null;created:number}>(),
+    c.env.DB.prepare('SELECT u.id,u.name,u.role,u.username,u.verified,u.teacher,u.dob,u.avatar_media,u.cover_media,u.bio,m.id note_id,m.body,m.read_at,m.created,m.edited_at,m.media_kind,m.view_once,m.viewed_at FROM messages m JOIN users u ON u.id=m.author WHERE room=? AND m.created<? ORDER BY m.created DESC LIMIT ?').bind(room,before,messageLimit).all<NoteRow&{read_at:number|null;created:number;media_kind:'image'|'video'|null;view_once:number;viewed_at:number|null}>(),
     c.env.DB.prepare(`SELECT x.id,x.caller,x.callee,x.video,x.state,x.created,x.expires,x.connected_at,x.ended_at,
       u.name,u.role,u.username,u.verified,u.teacher,u.dob,u.avatar_media,u.cover_media,u.bio
       FROM calls x JOIN users u ON u.id=x.caller WHERE x.room=? AND x.created<? AND (x.state IN ('ended','declined') OR (x.state IN ('offered','ringing') AND x.expires<?))
@@ -1239,7 +1276,7 @@ app.get('/api/rooms/:id/messages',async c=>{
   ])
   const viewer=c.get('user').id
   const items=[
-    ...messages.results.map(r=>({...note(r,c.req.url),readAt:r.read_at?time(r.read_at):undefined,createdAt:time(r.created)})),
+    ...messages.results.map(r=>({...note(r,c.req.url),readAt:r.read_at?time(r.read_at):undefined,createdAt:time(r.created),viewOnce:r.view_once&&r.media_kind?{kind:r.media_kind,opened:Boolean(r.viewed_at),canOpen:r.id!==viewer&&!r.viewed_at}:undefined})),
     ...calls.results.map(r=>{
       const connected=!!r.connected_at
       const label=r.video?'Video call':'Voice call'
@@ -1267,11 +1304,28 @@ app.put('/api/rooms/:id/read',async c=>{
 app.post('/api/rooms/:id/messages',async c=>{
   const room=c.req.param('id'), author=c.get('user')
   if(!await member(c.env.DB,room,author.id)) return c.json({error:'Conversation unavailable.'},404)
-  const body=clean((await readBody(c.req.raw))?.body,800)
-  if(!body) return c.json({error:'Enter a message.'},400)
+  const multipart=c.req.header('Content-Type')?.startsWith('multipart/form-data')
+  const form=multipart?await c.req.raw.formData().catch(()=>null):null
+  const payload=multipart?null:await readBody(c.req.raw)
+  const body=clean(form?.get('body')??payload?.body,800)
+  const upload:unknown=form?.get('image')??form?.get('video')
+  let media:string|null=null,mediaKind:'image'|'video'|null=null,file:File|null=null,contentType:string|null=null
+  if(upload instanceof File){
+    if(!hasVerifiedBenefits(author))return c.json({error:'View-once media is currently available to verified users.'},403)
+    mediaKind=upload.type.startsWith('video/')?'video':'image'
+    const duration=Number(form?.get('duration')??0)
+    if(mediaKind==='video'&&(!Number.isFinite(duration)||duration<=0||duration>10.25))return c.json({error:'View-once videos can be up to 10 seconds.'},400)
+    contentType=mediaKind==='video'&&upload.size<=25*1024*1024?upload.type:await imageType(upload)
+    if(!contentType||upload.size>(mediaKind==='video'?25:5)*1024*1024)return c.json({error:mediaKind==='video'?'Choose a video under 25 MB.':'Choose an image under 5 MB.'},400)
+    media=crypto.randomUUID();file=upload
+  }
+  if(!body&&!file) return c.json({error:'Enter a message or choose view-once media.'},400)
   const created=now()
-  const message={id:crypto.randomUUID(),author:person(author,c.req.url),body,createdAt:time(created)}
-  await c.env.DB.prepare('INSERT INTO messages (id,room,author,body,created) VALUES (?,?,?,?,?)').bind(message.id,room,author.id,body,created).run()
+  const message={id:crypto.randomUUID(),author:person(author,c.req.url),body,createdAt:time(created),viewOnce:mediaKind?{kind:mediaKind,opened:false,canOpen:false}:undefined}
+  if(file&&media&&contentType)await c.env.MEDIA.put('messages/'+media,await file.arrayBuffer(),{httpMetadata:{contentType}})
+  try{await c.env.DB.prepare('INSERT INTO messages (id,room,author,body,created,media,media_kind,view_once) VALUES (?,?,?,?,?,?,?,?)').bind(message.id,room,author.id,body,created,media?'messages/'+media:null,mediaKind,media?1:0).run()}
+  catch(error){if(media)await c.env.MEDIA.delete('messages/'+media);throw error}
+  await recordStreakMessage(c.env.DB,room,author.id)
   const other=await c.env.DB.prepare('SELECT CASE WHEN first_user=? THEN second_user ELSE first_user END target FROM rooms WHERE id=?').bind(author.id,room).first<{target:string}>()
   if(other)await createNotification(c.env,c.executionCtx,c.env.DB,other.target,author.id,'message',room,'sent you a message','room:'+room)
   else{
@@ -1283,6 +1337,14 @@ app.post('/api/rooms/:id/messages',async c=>{
   }
   c.executionCtx.waitUntil(c.env.ROOMS.getByName(room).fetch('https://room.internal/notify',{method:'POST',body:JSON.stringify(message)}))
   return c.json(message,201)
+})
+app.post('/api/rooms/:room/messages/:id/open-once',async c=>{
+  const {room,id}=c.req.param(),user=c.get('user').id,db=c.env.DB
+  if(!await member(db,room,user))return c.json({error:'Conversation unavailable.'},404)
+  const ticket=random(16),expires=now()+60000
+  const opened=await db.prepare('UPDATE messages SET viewed_at=?,media_token_hash=?,media_token_expires=? WHERE id=? AND room=? AND author!=? AND view_once=1 AND viewed_at IS NULL RETURNING media_kind').bind(now(),await hash(ticket),expires,id,room,user).first<{media_kind:'image'|'video'}>()
+  if(!opened)return c.json({error:'This view-once media has already been opened.'},410)
+  return c.json({kind:opened.media_kind,url:new URL('/api/view-once/'+id+'/'+ticket,c.req.url).href,expiresAt:time(expires)})
 })
 app.put('/api/rooms/:room/messages/:id',async c=>{
   const {room,id}=c.req.param(),user=c.get('user'),db=c.env.DB

@@ -50,6 +50,7 @@ type NotificationItem={id:string;kind:string;entityId?:string;body:string;create
 type Presence={online:boolean;lastSeen:string|null}
 type IncomingCall={id:string;room:string;person:Person;video:boolean;offer:string;state:string;expires:string}
 type CallStatus={id:string;room:string;state:string;answer?:string;offer?:string;expires:string}
+type ChatStreak={count:number;nextMilestone:number|null}
 type BirthDraft={day:string;month:string;year:string}
 const emptyBirth:BirthDraft={day:'',month:'',year:''}
 const digits=(value:string,max:number)=>value.replace(/\D/g,'').slice(0,max)
@@ -460,6 +461,9 @@ export default function App(props:Props){
   const [postSearchPublic,setPostSearchPublic]=useState(false)
   const [profileSearchPublic,setProfileSearchPublic]=useState(false)
   const [message,setMessage]=useState(''),[comment,setComment]=useState('')
+  const [viewOnceMedia,setViewOnceMedia]=useState<Media|null>(null)
+  const [openedOnce,setOpenedOnce]=useState<{kind:'image'|'video';url:string}|null>(null)
+  const [streak,setStreak]=useState<ChatStreak|null>(null)
   const [replyTarget,setReplyTarget]=useState<Note|null>(null)
   const [commentMedia,setCommentMedia]=useState<Media|Exclude<CommentAttachment,{kind:'image'}>|null>(null)
   const commentDraft=useRef(0)
@@ -770,6 +774,12 @@ export default function App(props:Props){
     if(Platform.OS==='web')document.addEventListener('visibilitychange',visible)
     return ()=>{active=false;clearInterval(poll);clearInterval(heartbeat);resumed.remove();if(Platform.OS==='web')document.removeEventListener('visibilitychange',visible);socket.close()}
   },[base,demo,token,page,roomId])
+  useEffect(()=>{
+    if(demo||!token||page!=='Chat'||!roomId||room?.person.group){setStreak(null);return}
+    let active=true
+    api<ChatStreak|null>(base,'/rooms/'+roomId+'/streak',{},token).then(value=>{if(active)setStreak(value)}).catch(()=>{if(active)setStreak(null)})
+    return ()=>{active=false}
+  },[base,demo,token,page,roomId,room?.person.group])
   useEffect(()=>{
     if(demo||!token||page!=='Home')return
     let alive=true
@@ -1388,18 +1398,50 @@ export default function App(props:Props){
     }catch(reason){fail(reason)}
   }
   async function send(){
-    if(!room||busy||!message.trim())return
+    if(!room||busy||(!message.trim()&&!viewOnceMedia))return
     const id=room.id
     const append=(item:Note)=>setChats(previous=>({...previous,[id]:[...(previous[id]??[]).filter(m=>m.id!==item.id),item]}))
     setBusy(true)
     try{
-      const item=demo?{id:uid(),author:user,body:message.trim()}:await call<Note>('/rooms/'+id+'/messages',json({body:message}))
+      let item:Note
+      if(demo)item={id:uid(),author:user,body:message.trim()}
+      else if(viewOnceMedia){
+        const form=new FormData();form.append('body',message.trim())
+        if(viewOnceMedia.duration)form.append('duration',String(viewOnceMedia.duration))
+        if(viewOnceMedia.data instanceof Blob)form.append(viewOnceMedia.kind==='video'?'video':'image',viewOnceMedia.data,viewOnceMedia.name)
+        else form.append(viewOnceMedia.kind==='video'?'video':'image',viewOnceMedia.data as unknown as Blob)
+        item=await call<Note>('/rooms/'+id+'/messages',{method:'POST',body:form})
+      }else item=await call<Note>('/rooms/'+id+'/messages',json({body:message}))
       stickToChatEnd.current=true
-      append(item);setMessage('')
+      append(item);setMessage('');setViewOnceMedia(null)
+      if(!demo&&!room.person.group)setStreak(await call<ChatStreak|null>('/rooms/'+id+'/streak'))
       if(demo){
         const session=demoSession.current
         replyTimers.current.push(setTimeout(()=>{if(session===demoSession.current){append({id:uid(),author:room.person,body:'Thanks for the message! See you at school.'});void props.notifyDevice?.(room.person.name,'Thanks for the message! See you at school.')}},950))
       }
+    }catch(reason){fail(reason)}finally{setBusy(false)}
+  }
+  async function pickViewOnce(){
+    try{
+      const media=await props.pickMedia?.()
+      if(!media)return
+      if(media.kind==='video'&&(!media.duration||media.duration>10.25)){fail(new Error('View-once videos can be up to 10 seconds.'));return}
+      setViewOnceMedia(media)
+    }catch(reason){fail(reason)}
+  }
+  async function startStreak(){
+    if(!room||busy||room.person.group)return
+    setBusy(true)
+    try{setStreak(await call<ChatStreak>('/rooms/'+room.id+'/streak',{method:'POST'}));notify('Streak started. Message each other daily to grow it.')}
+    catch(reason){fail(reason)}finally{setBusy(false)}
+  }
+  async function openViewOnce(item:Note){
+    if(!room||!item.viewOnce?.canOpen||busy)return
+    setBusy(true)
+    try{
+      const media=await call<{kind:'image'|'video';url:string}>('/rooms/'+room.id+'/messages/'+item.id+'/open-once',{method:'POST'})
+      setChats(previous=>({...previous,[room.id]:(previous[room.id]??[]).map(saved=>saved.id===item.id?{...saved,viewOnce:saved.viewOnce?{...saved.viewOnce,opened:true,canOpen:false}:undefined}:saved)}))
+      setOpenedOnce(media)
     }catch(reason){fail(reason)}finally{setBusy(false)}
   }
   async function loadMoreRooms(){
@@ -1591,6 +1633,8 @@ export default function App(props:Props){
   </>
   const lastOwnMessageId=room?[...(chats[room.id]??[])].reverse().find(note=>!note.call&&note.author.id===user.id)?.id:undefined
   const chat=room&&<>
+    {!room.person.group&&verifiedBenefits&&!streak&&<Card style={{...row,backgroundColor:theme.chip}}><View style={{flex:1,gap:3}}><Copy weight={800}>🔥 Start a streak</Copy><Copy size={12} color={theme.muted}>Message each other every day and unlock milestones.</Copy></View><Button label="Start streak" variant="fun" disabled={busy} onPress={()=>void startStreak()}/></Card>}
+    {!room.person.group&&streak&&<Card style={{...row,backgroundColor:theme.chip}}><Copy size={24}>🔥</Copy><View style={{flex:1,gap:3}}><Copy weight={800}>{streak.count} day streak</Copy><Copy size={12} color={theme.muted}>{streak.nextMilestone?streak.nextMilestone-streak.count+' days to the '+streak.nextMilestone+'-day milestone':'100-day milestone unlocked'}</Copy></View></Card>}
     {!room.person.group&&!demo&&callMedia&&deviceNotifications!=='granted'&&props.requestNotifications&&<View style={{alignItems:'center'}}><Button label="Enable call alerts" variant="plain" onPress={()=>void enableDeviceNotifications()}/></View>}
     {!room.person.group&&!demo&&!callMedia&&<Copy color={theme.muted} size={12}>Voice and video calls are available in the installed app build or a supported browser.</Copy>}
     {demo&&room.person.group&&<Card><Copy weight={800}>Pinned message</Copy><Copy>Bring one practice question to the next study session.</Copy><Button label="Join group voice call" leading="ph" variant="secondary" onPress={()=>selectOverlay({kind:'call',video:false,person:room.person,ringing:true})}/></Card>}
@@ -1607,7 +1651,8 @@ export default function App(props:Props){
       const own=item.author.id===user.id
       const canEdit=own&&verifiedBenefits&&(demo||withinEditWindow(item.createdAt))
       return <View key={item.id} style={{alignSelf:own?'flex-end':'flex-start',backgroundColor:own?theme.purple:theme.card,maxWidth:'84%',borderRadius:18,borderBottomLeftRadius:own?18:5,borderBottomRightRadius:own?5:18,borderWidth:1,borderColor:own?theme.purple:theme.border,padding:12,gap:5}}>
-        <Copy color={own?'#fff':theme.text}>{item.body}</Copy>
+        {!!item.body&&<Copy color={own?'#fff':theme.text}>{item.body}</Copy>}
+        {item.viewOnce&&<Pressable accessibilityRole="button" disabled={own||item.viewOnce.opened||!item.viewOnce.canOpen||busy} onPress={()=>void openViewOnce(item)} style={{...row,minHeight:48,paddingHorizontal:10,borderRadius:13,backgroundColor:own?'#FFFFFF20':theme.chip}}><Icon name={item.viewOnce.kind==='video'?'vid':'image'} color={own?'#fff':theme.purple}/><View style={{flex:1}}><Copy color={own?'#fff':theme.text} weight={800}>{item.viewOnce.opened?'Opened':own?'View once sent':'Tap to view once'}</Copy><Copy color={own?'#FFFFFFCC':theme.muted} size={11}>{item.viewOnce.kind==='video'?'Video · up to 10 seconds':'Photo'}</Copy></View></Pressable>}
         {!!item.editedAt&&<Copy size={10} color={own?'#FFFFFFCC':theme.muted}>Edited</Copy>}
         {own&&lastOwnMessageId===item.id&&<Copy size={11} color="#FFFFFFCC">{item.readAt?'Seen · '+shortTime(item.readAt):'Sent'}</Copy>}
         {own&&verifiedBenefits&&<View style={{...row,gap:4,flexWrap:'wrap'}}>{canEdit&&<Button label="Edit" variant="plain" onPress={()=>{setComment(item.body);selectOverlay({kind:'editMessage',message:item})}}/>}<Button label="Delete" variant="plain" onPress={()=>void deleteMessage(item)}/></View>}
@@ -1860,11 +1905,13 @@ export default function App(props:Props){
             contentContainerStyle={{padding:desktop?20:13,gap:page==='Chat'?9:16,width:'100%',maxWidth:page==='Chat'?desktop?900:undefined:640,alignSelf:'center'}}>
             <Motion key={page==='Chat'?'chat:'+room?.id:page} reduced={reduced} distance={page==='Chat'?5:8} style={stack}>{content[page]??<Suspense fallback={<LoadingScreen compact/>}><FeatureScreen key={page} page={page as ExtraPage} open={open} demo={demo} user={user} startQuiz={startQuiz} completed={completedLessons.length>0} wish={()=>selectOverlay({kind:'wish'})} wishes={wishes} incomingCall={()=>selectOverlay({kind:'call',video:false,person:people[0],ringing:true,incoming:true})}/></Suspense>}</Motion></ScrollView>
           {page==='Chat'&&<KeyboardAvoidingView behavior={Platform.OS==='ios'?'padding':undefined}>
+            {viewOnceMedia&&<View style={{...row,paddingHorizontal:14,paddingTop:8,backgroundColor:theme.card}}><Icon name={viewOnceMedia.kind==='video'?'vid':'image'} color={theme.purple}/><View style={{flex:1}}><Copy weight={800}>View once {viewOnceMedia.kind}</Copy></View><IconButton name="close" label="Remove view-once media" onPress={()=>setViewOnceMedia(null)}/></View>}
             <View style={{...row,paddingHorizontal:12,paddingVertical:9,borderTopWidth:1,borderColor:theme.border,backgroundColor:theme.card}}>
+              {verifiedBenefits&&!room?.person.group&&props.pickMedia&&<IconButton name="image" label="Send view-once photo or video" onPress={()=>void pickViewOnce()}/>}
               <View style={{flex:1,minWidth:0,borderRadius:23,backgroundColor:theme.chip,borderWidth:1,borderColor:theme.border}}>
                 <TextInput accessibilityLabel="Message" placeholder="Message" placeholderTextColor={theme.muted} value={message} onChangeText={setMessage} multiline maxLength={800} style={[{color:theme.text,fontSize:15,minHeight:44,maxHeight:120,paddingHorizontal:15,paddingVertical:10,textAlignVertical:'center'},font(500)]}/>
               </View>
-              <View style={{opacity:busy||!message.trim()?.5:1}}><IconButton name="send" label="Send" solid onPress={()=>void send()}/></View>
+              <View style={{opacity:busy||(!message.trim()&&!viewOnceMedia)?.5:1}}><IconButton name="send" label="Send" solid onPress={()=>void send()}/></View>
             </View>
           </KeyboardAvoidingView>}
           {!desktop&&page!=='Chat'&&page!=='Messages'&&<View style={{...row,gap:0,justifyContent:'space-around',minHeight:64,paddingHorizontal:6,borderTopWidth:1,borderColor:theme.border,backgroundColor:theme.card}}>{tabs.slice(0,2).map(([name,glyph])=>navButton(name,glyph))}<View style={{width:61,alignItems:'center',marginTop:-13}}><IconButton name="plus" label="Create post" size={26} solid onPress={compose}/></View>{tabs.slice(2).map(([name,glyph])=>navButton(name,glyph))}</View>}
@@ -1935,6 +1982,15 @@ export default function App(props:Props){
         </ScrollView>}
         {toast&&overlay&&<Toast key={toast.id} item={toast} reduced={reduced} onDismiss={dismissToast} bottom={18}/>}
       </View>}
+      </ModalViewport>
+    </Modal>
+    <Modal presentationStyle="fullScreen" visible={Boolean(openedOnce)} animationType="fade" onRequestClose={()=>setOpenedOnce(null)}>
+      <ModalViewport color="#120D1F">
+        <View style={{flex:1,padding:16,gap:16,justifyContent:'center'}}>
+          <View style={{position:'absolute',right:12,top:12,zIndex:2}}><IconButton name="close" label="Close view-once media" tint="#fff" onPress={()=>setOpenedOnce(null)}/></View>
+          {openedOnce?.kind==='image'?<Image accessibilityLabel="View-once photo" source={{uri:openedOnce.url}} resizeMode="contain" style={{width:'100%',height:'85%'}}/>:openedOnce&&props.renderVideo?<props.renderVideo uri={openedOnce.url} autoPlay/>:<Copy color="#fff" center>Video preview is unavailable on this device.</Copy>}
+          <Copy color="#fff" center size={12}>This media cannot be opened again after you close it.</Copy>
+        </View>
       </ModalViewport>
     </Modal>
     <Modal presentationStyle="fullScreen" visible={Boolean(!demo&&page==='Chat'&&room&&roomCall.call&&callMedia)} animationType={reduced?'none':'fade'} onRequestClose={()=>roomCall.end()}>
