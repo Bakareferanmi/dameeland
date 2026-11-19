@@ -309,24 +309,25 @@ app.post('/api/auth/:action',async c=>{
   return c.json(await session(c.env,c.executionCtx,account,c.req.url),action==='signup'?201:200)
 })
 
-type GoogleAttempt={username:string|null;dob:string|null;referral_code:string|null;verifier:string;status:string;user_id:string|null;error:string|null}
+type GoogleAttempt={mode:'signup'|'login';username:string|null;dob:string|null;referral_code:string|null;verifier:string;status:string;user_id:string|null;error:string|null}
 app.post('/api/google/start',async c=>{
   const {DB,GOOGLE_CLIENT_ID,GOOGLE_CLIENT_SECRET,GOOGLE_REDIRECT_URI}=c.env
   if(!GOOGLE_CLIENT_ID||!GOOGLE_CLIENT_SECRET||!GOOGLE_REDIRECT_URI)return c.json({error:'Google sign-in is not configured.'},503)
   if(!await authAllowed(DB,c.req.header('CF-Connecting-IP')??'local','google'))return c.json({error:'Too many attempts. Try again in a few minutes.'},429)
   const body=await readBody(c.req.raw)
-  const username=body?.mode==='signup'?usernameOf(body.username):null
+  const mode=body?.mode==='signup'?'signup':'login'
+  const username=mode==='signup'?usernameOf(body?.username):null
   if(username!==null&&!validUsername(username))return c.json({error:usernameHint},400)
   if(username&&await usernameTaken(DB,username))return c.json({error:'That username is taken.'},409)
-  const dob=body?.mode==='signup'?body.dob:null
+  const dob=mode==='signup'?body?.dob:null
   if(dob!==null&&!validBirthDate(dob))return c.json({error:'Enter your date of birth.'},400)
-  const referralCode=body?.mode==='signup'?clean(body.referralCode,32):''
+  const referralCode=mode==='signup'?clean(body?.referralCode,32):''
   const state=random(24),exchange=random(32),verifier=random(48)
   const challenge=base64Url(await crypto.subtle.digest('SHA-256',encoder.encode(verifier)))
   await DB.batch([
     DB.prepare('DELETE FROM google_attempts WHERE expires<=?').bind(now()),
     DB.prepare('DELETE FROM auth_limits WHERE expires<?').bind(now()),
-    DB.prepare('INSERT INTO google_attempts(state,exchange_hash,verifier,role,expires,username,dob,referral_code) VALUES (?,?,?,?,?,?,?,?)').bind(state,await hash(exchange),verifier,'student',now()+180000,username,dob,referralCode||null),
+    DB.prepare('INSERT INTO google_attempts(state,exchange_hash,verifier,role,expires,username,dob,referral_code,mode) VALUES (?,?,?,?,?,?,?,?,?)').bind(state,await hash(exchange),verifier,'student',now()+600000,username,dob,referralCode||null,mode),
   ])
   const url=new URL('https://accounts.google.com/o/oauth2/v2/auth')
   url.search=new URLSearchParams({client_id:GOOGLE_CLIENT_ID,redirect_uri:GOOGLE_REDIRECT_URI,response_type:'code',scope:'openid email profile',state,code_challenge:challenge,code_challenge_method:'S256',prompt:'select_account'}).toString()
@@ -342,7 +343,7 @@ app.get('/api/google/callback',async c=>{
     ?'<title>dameen</title><p>Google sign-in completed. Return to dameen to continue.</p>'
     :'<title>dameen</title><p>Google sign-in did not complete. Return to dameen for details.</p>',ok?200:400)
   if(!/^[a-f0-9]{48}$/.test(state)||!GOOGLE_CLIENT_ID||!GOOGLE_CLIENT_SECRET||!GOOGLE_REDIRECT_URI)return complete(false)
-  const attempt=await DB.prepare("UPDATE google_attempts SET status='processing' WHERE state=? AND status='pending' AND expires>? RETURNING verifier,username,dob,referral_code").bind(state,now()).first<GoogleAttempt>()
+  const attempt=await DB.prepare("UPDATE google_attempts SET status='processing' WHERE state=? AND status='pending' AND expires>? RETURNING verifier,username,dob,referral_code,mode").bind(state,now()).first<GoogleAttempt>()
   if(!attempt)return complete(false)
   const fail=async(error:string)=>{
     await DB.prepare("UPDATE google_attempts SET status='error',error=? WHERE state=?").bind(error,state).run()
@@ -370,7 +371,7 @@ app.get('/api/google/callback',async c=>{
         account=linked??await DB.prepare('SELECT id FROM users WHERE google_sub=?').bind(sub).first<{id:string}>()
         if(!account)return fail('This account could not be linked to Google. Try again.')
       }else{
-        if(!attempt.username)return fail('No Google account found on dameen. Choose Sign up first.')
+        if(attempt.mode!=='signup'||!attempt.username)return fail('No Google account found on dameen. Choose Sign up first.')
         const first=capitalizeName(clean(info.given_name,60)),last=capitalizeName(clean(info.family_name,60))
         if(!first||!last)return fail('Add a first and last name to your Google profile or sign up with email.')
         const inviter=attempt.referral_code?await DB.prepare('SELECT id FROM users WHERE invite_code=?').bind(attempt.referral_code).first<{id:string}>():null
