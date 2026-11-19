@@ -28,7 +28,6 @@ const saveToken=async(value:string|null)=>{
 const openGoogle=async(getUrl:()=>Promise<string>)=>{
   const popup=window.open('about:blank','_blank','popup,width=500,height=650')
   if(!popup)throw new Error('Allow pop-ups to continue with Google.')
-  popup.opener=null
   try{popup.location.href=await getUrl()}
   catch(error){popup.close();throw error}
   return {close:()=>popup.close()}
