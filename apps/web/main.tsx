@@ -90,10 +90,10 @@ let voiceRecorder:MediaRecorder|null=null,voiceStream:MediaStream|null=null,voic
 const microphoneError=(reason:unknown)=>{
   const error=reason as {name?:string;message?:string}
   if(!window.isSecureContext)return new Error('Voice notes need a secure connection. Open dameen from its https website.')
-  if(error?.name==='NotAllowedError'||error?.name==='SecurityError')return new Error('Allow microphone access in your browser, then tap the microphone again.')
+  if(error?.name==='NotAllowedError'||error?.name==='SecurityError')return new Error('Microphone blocked. Allow it for dameen and in your phone’s browser settings.')
   if(error?.name==='NotFoundError'||error?.name==='DevicesNotFoundError')return new Error('No microphone was found on this device.')
-  if(error?.name==='NotReadableError'||error?.name==='TrackStartError'||/start audio source/i.test(error?.message??''))return new Error('Your microphone is busy or unavailable. Close other calling or recording apps, check the browser microphone setting, then try again.')
-  return new Error('Couldn’t start the microphone. Check its browser permission and try again.')
+  if(error?.name==='NotReadableError'||error?.name==='TrackStartError'||/start audio source/i.test(error?.message??''))return new Error('Microphone unavailable. Close other calling apps or allow microphone access for your browser.')
+  return new Error('Couldn’t start the microphone. Check your browser’s microphone permission.')
 }
 const voice={
   start:async()=>{
