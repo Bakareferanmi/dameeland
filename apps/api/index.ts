@@ -344,7 +344,17 @@ app.get('/api/google/callback',async c=>{
     :'<title>dameen</title><p>Google sign-in did not complete. Return to dameen for details.</p>',ok?200:400)
   if(!/^[a-f0-9]{48}$/.test(state)||!GOOGLE_CLIENT_ID||!GOOGLE_CLIENT_SECRET||!GOOGLE_REDIRECT_URI)return complete(false)
   const attempt=await DB.prepare("UPDATE google_attempts SET status='processing' WHERE state=? AND status='pending' AND expires>? RETURNING verifier,username,dob,referral_code,mode").bind(state,now()).first<GoogleAttempt>()
-  if(!attempt)return complete(false)
+  if(!attempt){
+    const previous=await DB.prepare("SELECT status,user_id FROM google_attempts WHERE state=? AND expires>?").bind(state,now()).first<{status:string;user_id:string|null}>()
+    if(previous?.status==='complete'&&previous.user_id){
+      const signedAccount=await DB.prepare('SELECT id,email,name,role,username,verified,teacher,dob,avatar_media,cover_media,bio,username_changed_at,search_public FROM users WHERE id=?').bind(previous.user_id).first<PublicAccount>()
+      if(signedAccount){
+        const signed=await session(c.env,c.executionCtx,signedAccount,c.req.url)
+        return complete(true,signed.token)
+      }
+    }
+    return complete(false)
+  }
   const fail=async(error:string)=>{
     await DB.prepare("UPDATE google_attempts SET status='error',error=? WHERE state=?").bind(error,state).run()
     return complete(false)
