@@ -486,10 +486,13 @@ app.get('/api/notifications',async c=>{
     WHERE n.user_id=? AND (n.created<? OR (n.created=? AND n.id<?))
     ORDER BY n.created DESC,n.id DESC LIMIT 13
   `).bind(user,cutoff,cutoff,lastId).all<NotificationRow>()
-  const unread=await c.env.DB.prepare('SELECT COUNT(*) count FROM notifications WHERE user_id=? AND read=0').bind(user).first<{count:number}>()
+  const [unread,messageUnread]=await Promise.all([
+    c.env.DB.prepare('SELECT COUNT(*) count FROM notifications WHERE user_id=? AND read=0').bind(user).first<{count:number}>(),
+    c.env.DB.prepare("SELECT COUNT(*) count FROM notifications WHERE user_id=? AND kind='message' AND read=0").bind(user).first<{count:number}>(),
+  ])
   const items=results.slice(0,12),last=items.at(-1)
   c.header('Cache-Control','no-store')
-  return c.json({unread:unread?.count??0,nextCursor:results.length>12&&last?`${last.created}:${last.id}`:null,items:items.map(row=>notificationView(row,c.req.url))})
+  return c.json({unread:unread?.count??0,messageUnread:messageUnread?.count??0,nextCursor:results.length>12&&last?`${last.created}:${last.id}`:null,items:items.map(row=>notificationView(row,c.req.url))})
 })
 app.get('/api/notifications/:id',async c=>{
   const item=await c.env.DB.prepare(`${notificationSelect} WHERE n.id=? AND n.user_id=?`).bind(c.req.param('id'),c.get('user').id).first<NotificationRow>()
@@ -1381,10 +1384,12 @@ app.put('/api/rooms/:id/read',async c=>{
   if(!await member(c.env.DB,room,user))return c.json({error:'Conversation unavailable.'},404)
   const at=now()
   const {results}=await c.env.DB.prepare('UPDATE messages SET read_at=? WHERE room=? AND author!=? AND read_at IS NULL RETURNING id').bind(at,room,user).all<{id:string}>()
+  await c.env.DB.prepare("UPDATE notifications SET read=1 WHERE user_id=? AND kind='message' AND entity_id=? AND read=0").bind(user,room).run()
+  const remaining=await c.env.DB.prepare("SELECT COUNT(*) count FROM notifications WHERE user_id=? AND kind='message' AND read=0").bind(user).first<{count:number}>()
   const ids=results.map(item=>item.id)
   const readAt=time(at)
   if(ids.length)c.executionCtx.waitUntil(c.env.ROOMS.getByName(room).fetch('https://room.internal/notify',{method:'POST',body:JSON.stringify({type:'read',ids,readAt})}))
-  return c.json({ids,readAt})
+  return c.json({ids,readAt,messageUnread:remaining?.count??0})
 })
 app.post('/api/rooms/:id/messages',async c=>{
   const room=c.req.param('id'), author=c.get('user')
