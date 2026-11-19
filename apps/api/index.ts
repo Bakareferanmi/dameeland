@@ -309,13 +309,14 @@ app.post('/api/auth/:action',async c=>{
   return c.json(await session(c.env,c.executionCtx,account,c.req.url),action==='signup'?201:200)
 })
 
-type GoogleAttempt={mode:'signup'|'login';username:string|null;dob:string|null;referral_code:string|null;verifier:string;status:string;user_id:string|null;error:string|null}
+type GoogleAttempt={mode:'signup'|'login';client:'web'|'mobile';username:string|null;dob:string|null;referral_code:string|null;verifier:string;status:string;user_id:string|null;error:string|null}
 app.post('/api/google/start',async c=>{
   const {DB,GOOGLE_CLIENT_ID,GOOGLE_CLIENT_SECRET,GOOGLE_REDIRECT_URI}=c.env
   if(!GOOGLE_CLIENT_ID||!GOOGLE_CLIENT_SECRET||!GOOGLE_REDIRECT_URI)return c.json({error:'Google sign-in is not configured.'},503)
   if(!await authAllowed(DB,c.req.header('CF-Connecting-IP')??'local','google'))return c.json({error:'Too many attempts. Try again in a few minutes.'},429)
   const body=await readBody(c.req.raw)
   const mode=body?.mode==='signup'?'signup':'login'
+  const client=body?.client==='mobile'?'mobile':'web'
   const username=mode==='signup'?usernameOf(body?.username):null
   if(username!==null&&!validUsername(username))return c.json({error:usernameHint},400)
   if(username&&await usernameTaken(DB,username))return c.json({error:'That username is taken.'},409)
@@ -327,7 +328,7 @@ app.post('/api/google/start',async c=>{
   await DB.batch([
     DB.prepare('DELETE FROM google_attempts WHERE expires<=?').bind(now()),
     DB.prepare('DELETE FROM auth_limits WHERE expires<?').bind(now()),
-    DB.prepare('INSERT INTO google_attempts(state,exchange_hash,verifier,role,expires,username,dob,referral_code,mode) VALUES (?,?,?,?,?,?,?,?,?)').bind(state,await hash(exchange),verifier,'student',now()+600000,username,dob,referralCode||null,mode),
+    DB.prepare('INSERT INTO google_attempts(state,exchange_hash,verifier,role,expires,username,dob,referral_code,mode,client) VALUES (?,?,?,?,?,?,?,?,?,?)').bind(state,await hash(exchange),verifier,'student',now()+600000,username,dob,referralCode||null,mode,client),
   ])
   const url=new URL('https://accounts.google.com/o/oauth2/v2/auth')
   url.search=new URLSearchParams({client_id:GOOGLE_CLIENT_ID,redirect_uri:GOOGLE_REDIRECT_URI,response_type:'code',scope:'openid email profile',state,code_challenge:challenge,code_challenge_method:'S256',prompt:'select_account'}).toString()
@@ -339,18 +340,20 @@ app.get('/api/google/callback',async c=>{
   c.header('Cache-Control','no-store')
   c.header('Referrer-Policy','no-referrer')
   const state=c.req.query('state')??''
-  const complete=(ok:boolean,token?:string)=>c.html(ok
-    ?`<title>dameen</title><meta name="viewport" content="width=device-width"><p>Google sign-in completed. Returning to dameen…</p><script>try{localStorage.setItem('dameeland-session',${JSON.stringify(token??'')});localStorage.removeItem('dameeland-google-attempt');localStorage.removeItem('dameeland-referral')}catch{}location.replace('https://dameen.app/?google=complete')</script>`
+  const complete=(ok:boolean,token?:string,client:'web'|'mobile'='web')=>c.html(ok
+    ?client==='mobile'
+      ?`<title>dameen</title><meta name="viewport" content="width=device-width"><p>Google sign-in completed. Returning to the dameen app…</p><script>location.replace('dameen://google')</script>`
+      :`<title>dameen</title><meta name="viewport" content="width=device-width"><p>Google sign-in completed. Returning to dameen…</p><script>try{localStorage.setItem('dameeland-session',${JSON.stringify(token??'')});localStorage.removeItem('dameeland-google-attempt');localStorage.removeItem('dameeland-referral')}catch{}location.replace('https://dameen.app/?google=complete')</script>`
     :'<title>dameen</title><p>Google sign-in did not complete. Return to dameen for details.</p>',ok?200:400)
   if(!/^[a-f0-9]{48}$/.test(state)||!GOOGLE_CLIENT_ID||!GOOGLE_CLIENT_SECRET||!GOOGLE_REDIRECT_URI)return complete(false)
-  const attempt=await DB.prepare("UPDATE google_attempts SET status='processing' WHERE state=? AND status='pending' AND expires>? RETURNING verifier,username,dob,referral_code,mode").bind(state,now()).first<GoogleAttempt>()
+  const attempt=await DB.prepare("UPDATE google_attempts SET status='processing' WHERE state=? AND status='pending' AND expires>? RETURNING verifier,username,dob,referral_code,mode,client").bind(state,now()).first<GoogleAttempt>()
   if(!attempt){
-    const previous=await DB.prepare("SELECT status,user_id FROM google_attempts WHERE state=? AND expires>?").bind(state,now()).first<{status:string;user_id:string|null}>()
+    const previous=await DB.prepare("SELECT status,user_id,client FROM google_attempts WHERE state=? AND expires>?").bind(state,now()).first<{status:string;user_id:string|null;client:'web'|'mobile'}>()
     if(previous?.status==='complete'&&previous.user_id){
       const signedAccount=await DB.prepare('SELECT id,email,name,role,username,verified,teacher,dob,avatar_media,cover_media,bio,username_changed_at,search_public FROM users WHERE id=?').bind(previous.user_id).first<PublicAccount>()
       if(signedAccount){
         const signed=await session(c.env,c.executionCtx,signedAccount,c.req.url)
-        return complete(true,signed.token)
+        return complete(true,signed.token,previous.client)
       }
     }
     return complete(false)
@@ -398,7 +401,7 @@ app.get('/api/google/callback',async c=>{
     const signedAccount=await DB.prepare('SELECT id,email,name,role,username,verified,teacher,dob,avatar_media,cover_media,bio,username_changed_at,search_public FROM users WHERE id=?').bind(account.id).first<PublicAccount>()
     if(!signedAccount)return fail('Account unavailable after Google sign-in.')
     const signed=await session(c.env,c.executionCtx,signedAccount,c.req.url)
-    return complete(true,signed.token)
+    return complete(true,signed.token,attempt.client)
   }catch{return fail('Google sign-in could not be completed. Please try again.')}
 })
 app.post('/api/google/exchange',async c=>{
@@ -1104,7 +1107,8 @@ app.get('/api/people',async c=>{
   return c.json(results.map(r=>({...person(r,c.req.url),following:Boolean(r.following),followsViewer:Boolean(r.follows_viewer)})))
 })
 app.get('/api/people/:id',async c=>{
-  const account=await c.env.DB.prepare('SELECT id,name,role,username,verified,teacher,dob,avatar_media,cover_media,bio FROM users WHERE id=?').bind(c.req.param('id')).first<PublicAccount>()
+  const id=c.req.param('id')
+  const account=await c.env.DB.prepare('SELECT id,name,role,username,verified,teacher,dob,avatar_media,cover_media,bio FROM users WHERE id=? OR username=? COLLATE NOCASE').bind(id,id).first<PublicAccount>()
   if(!account)return c.json({error:'Profile unavailable.'},404)
   return c.json(person(account,c.req.url))
 })
