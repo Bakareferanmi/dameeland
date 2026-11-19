@@ -51,6 +51,7 @@ type Presence={online:boolean;lastSeen:string|null}
 type IncomingCall={id:string;room:string;person:Person;video:boolean;offer:string;state:string;expires:string}
 type CallStatus={id:string;room:string;state:string;answer?:string;offer?:string;expires:string}
 type ChatStreak={count:number;status:'pending'|'active';expiresAt:string;nextMilestone?:number|null}
+type GroupInfo={id:string;name:string;photo?:string;isAdmin:boolean;inviteCode?:string;members:Array<{person:Person;role:'admin'|'member';owner:boolean}>}
 type BirthDraft={day:string;month:string;year:string}
 const emptyBirth:BirthDraft={day:'',month:'',year:''}
 const digits=(value:string,max:number)=>value.replace(/\D/g,'').slice(0,max)
@@ -94,7 +95,7 @@ type Props={
   requestNotifications?:()=>Promise<boolean>; getNotificationDevice?:()=>Promise<{platform:'android'|'ios';token:string}|null>; notifyDevice?:(title:string,body:string)=>Promise<void>;
   onReady?:()=>void;
 }
-type Overlay={kind:'connections';list:FollowListKind;person:Person}|{kind:'comments'|'share'|'post'|'editPost';post:Post;targetId?:string}|{kind:'editMessage';message:Note}|{kind:'story';person:Person}|{kind:'photo';person:Person;photo:'avatar'|'cover'}|{kind:'create'|'createGroup'|'wish'|'newStory'|'editProfile'|'editUsername'}|{kind:'call';video:boolean;person:Person;ringing?:boolean;incoming?:boolean}
+type Overlay={kind:'connections';list:FollowListKind;person:Person}|{kind:'comments'|'share'|'post'|'editPost';post:Post;targetId?:string}|{kind:'editMessage';message:Note}|{kind:'story';person:Person}|{kind:'photo';person:Person;photo:'avatar'|'cover'}|{kind:'create'|'createGroup'|'groupSettings'|'wish'|'newStory'|'editProfile'|'editUsername'}|{kind:'call';video:boolean;person:Person;ringing?:boolean;incoming?:boolean}
 type PageEntry={page:Page;profile:Person;room:Room|null;overlays:Overlay[];scrollY:number;lessonId:string}
 const tabs:[Page,Glyph][]=[['Home','home'],['Learn','book'],['Explore','search'],['Play','game']]
 const localRooms=people.filter(p=>p.id in initialChats).map(person=>({id:person.id,person}))
@@ -439,6 +440,7 @@ export default function App(props:Props){
   const [groupName,setGroupName]=useState(''),[groupQuery,setGroupQuery]=useState(''),[groupPeople,setGroupPeople]=useState<Person[]>([])
   const [groupMembers,setGroupMembers]=useState<Set<string>>(()=>new Set())
   const [groupLoading,setGroupLoading]=useState(false)
+  const [groupInfo,setGroupInfo]=useState<GroupInfo|null>(null)
   const [searching,setSearching]=useState(false),[searchError,setSearchError]=useState('')
   const searchTerm=query.trim().replace(/^@+/, '')
   const [follows,setFollows]=useState<Record<string,boolean>>({})
@@ -956,7 +958,8 @@ export default function App(props:Props){
     const params=new URLSearchParams(window.location.search)
     const postId=params.get('post')
     const profileId=params.get('profile')
-    if(!postId&&!profileId)return
+    const groupCode=params.get('group')
+    if(!postId&&!profileId&&!groupCode)return
     sharedLinkHandled.current=true
     if(postId){
       const request=demo?Promise.resolve(initialPosts.find(post=>post.id===postId)):call<Post>('/posts/'+encodeURIComponent(postId))
@@ -966,6 +969,8 @@ export default function App(props:Props){
       const request=demo?Promise.resolve(people.find(person=>person.id===profileId)):call<Person>('/people/'+encodeURIComponent(profileId))
       void request.then(person=>{if(person)showProfile(person);else notify('This profile is unavailable.','error')})
         .catch(()=>notify('This profile is unavailable.','error'))
+    }else if(groupCode&&!demo){
+      void call<Room>('/groups/join/'+encodeURIComponent(groupCode),{method:'POST'}).then(joined=>{setRooms(previous=>[joined,...previous.filter(saved=>saved.id!==joined.id)]);openRoom(joined);notify('You joined '+joined.person.name)}).catch(fail)
     }
   },[stage,token,demo])
   const selectOverlay=(value:Overlay)=>{
@@ -1364,6 +1369,46 @@ export default function App(props:Props){
       setInboxTab('Groups');modalClose();openRoom(created);notify(groupName.trim()+' created')
     }catch(reason){fail(reason)}finally{setBusy(false)}
   }
+  async function loadGroupInfo(id:string){
+    const info=await call<GroupInfo>('/groups/'+id)
+    setGroupInfo(info)
+    return info
+  }
+  async function openGroupSettings(){
+    if(!room?.person.group||groupLoading)return
+    setGroupInfo(null);setGroupMembers(new Set());setGroupQuery('');setGroupLoading(true);selectOverlay({kind:'groupSettings'})
+    try{
+      const [info,candidates]=await Promise.all([loadGroupInfo(room.id),call<Person[]>('/people?q=')])
+      setGroupPeople(candidates.filter(person=>!info.members.some(member=>member.person.id===person.id)))
+    }catch(reason){fail(reason)}finally{setGroupLoading(false)}
+  }
+  async function addGroupMembers(){
+    if(!room||!groupMembers.size||busy)return
+    setBusy(true)
+    try{await call('/groups/'+room.id+'/members',json({members:[...groupMembers]}));setGroupMembers(new Set());const info=await loadGroupInfo(room.id);setGroupPeople(previous=>previous.filter(person=>!info.members.some(member=>member.person.id===person.id)));setRooms(previous=>previous.map(saved=>saved.id===room.id?{...saved,person:{...saved.person,detail:'Group · '+info.members.length+' members'}}:saved));notify('Members added')}
+    catch(reason){fail(reason)}finally{setBusy(false)}
+  }
+  async function setGroupAdmin(person:Person,active:boolean){
+    if(!room||busy)return
+    setBusy(true)
+    try{await call('/groups/'+room.id+'/members/'+person.id+'/admin',json({active},'PUT'));await loadGroupInfo(room.id);notify(active?displayHandle(person)+' is now an admin':'Admin access removed')}
+    catch(reason){fail(reason)}finally{setBusy(false)}
+  }
+  async function changeGroupPhoto(){
+    if(!room||!props.pickMedia||busy)return
+    try{
+      const media=await props.pickMedia();if(!media||media.kind==='video'||media.kind==='audio')return
+      setBusy(true);const form=new FormData();if(media.data instanceof Blob)form.append('image',media.data,media.name);else form.append('image',media.data as unknown as Blob)
+      const result=await call<{url:string}>('/groups/'+room.id+'/photo',{method:'PUT',body:form})
+      setGroupInfo(previous=>previous?{...previous,photo:result.url}:previous);setRoom(previous=>previous?{...previous,person:{...previous.person,avatar:result.url}}:previous);setRooms(previous=>previous.map(saved=>saved.id===room.id?{...saved,person:{...saved.person,avatar:result.url}}:saved));notify('Group photo updated')
+    }catch(reason){fail(reason)}finally{setBusy(false)}
+  }
+  async function shareGroup(){
+    if(!room||busy)return
+    setBusy(true)
+    try{const invite=await call<{url:string}>('/groups/'+room.id+'/invite',{method:'POST'});await props.share?.(invite.url,{title:room.person.name+' on dameen',message:'Join '+room.person.name+' on dameen'});notify('Group invite ready to share')}
+    catch(reason){fail(reason)}finally{setBusy(false)}
+  }
   async function openNotification(item:NotificationItem){
     if(!item.read){
       try{
@@ -1654,8 +1699,6 @@ export default function App(props:Props){
   </>
   const lastOwnMessageId=room?[...(chats[room.id]??[])].reverse().find(note=>!note.call&&note.author.id===user.id)?.id:undefined
   const chat=room&&<>
-    {!room.person.group&&verifiedBenefits&&!streak&&<Card style={{...row,backgroundColor:'#F4FFD7',borderColor:lime,borderWidth:2}}><View style={{width:46,height:46,borderRadius:23,backgroundColor:lime,alignItems:'center',justifyContent:'center'}}><Copy size={23}>🔥</Copy></View><View style={{flex:1,gap:3}}><Copy color="#25163F" size={17} weight={800}>Start a streak</Copy><Copy size={12} color="#5A4C70">Message each other daily and unlock milestones.</Copy></View><Button label="Start" variant="fun" disabled={busy} onPress={()=>void startStreak()}/></Card>}
-    {!room.person.group&&streak&&<Card style={{...row,backgroundColor:theme.chip,borderColor:lime}}><Copy size={24}>🔥</Copy><View style={{flex:1,gap:3}}><Copy weight={800}>{streak.status==='pending'?'Streak invitation sent':streak.count+' day streak'}</Copy><Copy size={12} color={theme.muted}>{streak.status==='pending'?'Waiting for '+displayHandle(room.person)+' to reply · ':streak.nextMilestone?streak.nextMilestone-streak.count+' days to the '+streak.nextMilestone+'-day milestone · ':''}{streakRemaining(streak.expiresAt)}</Copy></View></Card>}
     {!room.person.group&&!demo&&callMedia&&deviceNotifications!=='granted'&&props.requestNotifications&&<View style={{alignItems:'center'}}><Button label="Enable call alerts" variant="plain" onPress={()=>void enableDeviceNotifications()}/></View>}
     {!room.person.group&&!demo&&!callMedia&&<Copy color={theme.muted} size={12}>Voice and video calls are available in the installed app build or a supported browser.</Copy>}
     {demo&&room.person.group&&<Card><Copy weight={800}>Pinned message</Copy><Copy>Bring one practice question to the next study session.</Copy><Button label="Join group voice call" leading="ph" variant="secondary" onPress={()=>selectOverlay({kind:'call',video:false,person:room.person,ringing:true})}/></Card>}
@@ -1683,6 +1726,8 @@ export default function App(props:Props){
         {own&&verifiedBenefits&&<View style={{...row,gap:4,flexWrap:'wrap'}}>{canEdit&&<Button label="Edit" variant="plain" onPress={()=>{setComment(item.body);selectOverlay({kind:'editMessage',message:item})}}/>}<Button label="Delete" variant="plain" onPress={()=>void deleteMessage(item)}/></View>}
       </View>
     })())}
+    {!room.person.group&&verifiedBenefits&&!streak&&<Card style={{...row,backgroundColor:'#F4FFD7',borderColor:lime,borderWidth:2}}><View style={{width:46,height:46,borderRadius:23,backgroundColor:lime,alignItems:'center',justifyContent:'center'}}><Copy size={23}>🔥</Copy></View><View style={{flex:1,gap:3}}><Copy color="#25163F" size={17} weight={800}>Start a streak</Copy><Copy size={12} color="#5A4C70">Message each other daily and unlock milestones.</Copy></View><Button label="Start" variant="fun" disabled={busy} onPress={()=>void startStreak()}/></Card>}
+    {!room.person.group&&streak&&<Card style={{...row,backgroundColor:theme.chip,borderColor:lime}}><Copy size={24}>🔥</Copy><View style={{flex:1,gap:3}}><Copy weight={800}>{streak.status==='pending'?'Streak invitation sent':streak.count+' day streak'}</Copy><Copy size={12} color={theme.muted}>{streak.status==='pending'?'Waiting for '+displayHandle(room.person)+' to reply · ':streak.nextMilestone?streak.nextMilestone-streak.count+' days to the '+streak.nextMilestone+'-day milestone · ':''}{streakRemaining(streak.expiresAt)}</Copy></View></Card>}
     {!messageLoading&&!(chats[room.id]?.length)&&!feedError&&<Empty title="Say hello" detail="Messages are visible to both people in this conversation."/>}
   </>
   const ownProfile=profile.id===user.id
@@ -1820,6 +1865,14 @@ export default function App(props:Props){
       })}</View>:<Empty title="No members found" detail="Try another name or username."/>}
       <Button label={busy?'Creating…':'Create group'} leading="grp" disabled={busy||groupName.trim().length<2||!groupMembers.size} onPress={()=>void createGroup()}/>
     </>
+  }else if(overlay?.kind==='groupSettings'){
+    sheet=groupLoading||!groupInfo?<Loading/>:<>
+      <View style={{alignItems:'center',gap:10}}><Avatar person={{...(room?.person??me),avatar:groupInfo.photo}} size={84}/><Copy size={23} weight={800}>{groupInfo.name}</Copy><Copy color={theme.muted}>{groupInfo.members.length} members</Copy></View>
+      <View style={{...row,flexWrap:'wrap',justifyContent:'center'}}><Button label="Share invite link" leading="sh" onPress={()=>void shareGroup()} disabled={busy}/>{groupInfo.isAdmin&&props.pickMedia&&<Button label="Change group photo" leading="image" variant="secondary" onPress={()=>void changeGroupPhoto()} disabled={busy}/>}</View>
+      <Copy size={18} weight={800}>Members</Copy>
+      {groupInfo.members.map(member=><Card key={member.person.id} style={{...row,padding:11}}><Avatar person={member.person} size={40}/><View style={{flex:1}}><PersonName person={member.person}/><Copy size={11} color={theme.muted}>{member.owner?'Owner · Admin':member.role==='admin'?'Admin':'Member'}</Copy></View>{groupInfo.isAdmin&&!member.owner&&<Button label={member.role==='admin'?'Remove admin':'Make admin'} variant="plain" disabled={busy} onPress={()=>void setGroupAdmin(member.person,member.role!=='admin')}/>}</Card>)}
+      {groupInfo.isAdmin&&<Card style={{gap:10}}><Copy size={18} weight={800}>Add members</Copy><Field label="Find people" placeholder="Search name or username" glyph="search" value={groupQuery} onChangeText={setGroupQuery} autoCapitalize="none" autoCorrect={false}/><Copy size={12} color={theme.muted}>{groupMembers.size} selected</Copy>{groupChoices.length?<View style={{gap:7}}>{groupChoices.map(person=>{const selected=groupMembers.has(person.id);return <Pressable key={person.id} accessibilityRole="checkbox" accessibilityState={{checked:selected}} onPress={()=>setGroupMembers(previous=>{const next=new Set(previous);selected?next.delete(person.id):next.add(person.id);return next})}><View style={{...row,minHeight:48,paddingHorizontal:8,borderRadius:12,backgroundColor:selected?theme.chip:'transparent'}}><Avatar person={person} size={36}/><View style={{flex:1}}><PersonName person={person}/></View><Icon name={selected?'check':'plus'} color={selected?theme.purple:theme.muted}/></View></Pressable>})}</View>:<Copy color={theme.muted}>No more people found.</Copy>}<Button label={busy?'Adding…':'Add selected members'} disabled={busy||!groupMembers.size} onPress={()=>void addGroupMembers()}/></Card>}
+    </>
   }else if(overlay?.kind==='newStory'){
     const valid=storyMode==='Text'?!!comment.trim():storyMode==='Photo'?!!storyImage:storyMedia?.kind==='video'
     sheet=<>
@@ -1853,7 +1906,7 @@ export default function App(props:Props){
   const overlayTitle=overlay?.kind==='connections'?(overlay.list==='followers'?'Followers':'Following')
     :overlay?.kind==='call'?(overlay.ringing?'Ringing':overlay.video?'Video call':'Voice call')
     :overlay?.kind==='photo'?overlay.photo==='avatar'?'Profile picture':'Cover photo'
-    :overlay&&overlay.kind!=='story'?{editProfile:'Edit profile',editUsername:'Change username',editPost:'Edit post',editMessage:'Edit message',comments:'Comments',share:'Share post',post:'Post detail',create:'Create post',createGroup:'Create group',wish:'Happy birthday, Zee!',newStory:'Create story'}[overlay.kind]:''
+    :overlay&&overlay.kind!=='story'?{editProfile:'Edit profile',editUsername:'Change username',editPost:'Edit post',editMessage:'Edit message',comments:'Comments',share:'Share post',post:'Post detail',create:'Create post',createGroup:'Create group',groupSettings:'Group settings',wish:'Happy birthday, Zee!',newStory:'Create story'}[overlay.kind]:''
   const story=overlay?.kind==='story'?(demoAccounts.find(account=>account.person.id===overlay.person.id)?.person??overlay.person):null
   const liveGroup=story&&!demo?activeStories.find(group=>group.author.id===story.id):undefined
   const activeIndex=liveGroup?Math.min(storyIndex,liveGroup.stories.length-1):0
@@ -1881,12 +1934,13 @@ export default function App(props:Props){
             {page==='Messages'?<><View style={{...row,flex:1}}><IconButton name="back" label="Go back" onPress={()=>navigationDepth>0?goBack():open('Home')}/><Copy weight={800} size={desktop?28:21}>Messages</Copy></View></>:page==='Chat'&&room?<>
               <View style={{...row,flex:1,minWidth:0,gap:5}}>
                 <IconButton name="back" label="Go back" onPress={goBack}/>
-                <Pressable accessibilityRole="button" accessibilityLabel={'Open '+displayHandle(room.person)+' profile'} onPress={()=>showProfile(room.person)} style={{...row,flex:1,minWidth:0}}>
+                <Pressable accessibilityRole="button" accessibilityLabel={room.person.group?'Open group details':'Open '+displayHandle(room.person)+' profile'} onPress={()=>room.person.group?void openGroupSettings():showProfile(room.person)} style={{...row,flex:1,minWidth:0}}>
                   <Avatar person={room.person} size={39}/>
                   <View style={{flex:1,minWidth:0}}><PersonName person={room.person}/><Copy color={theme.muted} size={11}>{demo?'Active now':presenceById[room.person.id]?.online?'Online':presenceById[room.person.id]?.lastSeen?'Last seen '+shortTime(presenceById[room.person.id]!.lastSeen!):'Away'}</Copy></View>
                 </Pressable>
               </View>
               <View style={{...row,gap:0}}>
+                {room.person.group&&<IconButton name="settings" label="Group settings" onPress={()=>void openGroupSettings()}/>}
                 {!room.person.group&&<>{!demo&&<ChatWhot key={room.id} base={base} token={token} room={room.id} opponent={displayHandle(room.person)}/>}
                 <IconButton name="ph" label="Voice call" onPress={()=>demo?selectOverlay({kind:'call',video:false,person:room.person}):callMedia?roomCall.start(false):notify('Calls need an installed app build or a supported browser.','error')}/>
                 <IconButton name="vid" label="Video call" onPress={()=>demo?selectOverlay({kind:'call',video:true,person:room.person}):callMedia?roomCall.start(true):notify('Calls need an installed app build or a supported browser.','error')}/></>}

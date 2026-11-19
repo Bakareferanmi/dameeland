@@ -160,7 +160,8 @@ app.use('/api/*',async(c,next)=>cors({origin:allowedOrigins(c.env),allowMethods:
 app.use('/api/*',async(c,next)=>{
   if(c.req.method!=='POST'&&c.req.method!=='PUT')return next()
   const mediaUpload=c.req.path==='/api/posts'||c.req.path==='/api/stories'||/^\/api\/rooms\/[^/]+\/messages$/.test(c.req.path)
-  const maxSize=mediaUpload?30000000:c.req.path.startsWith('/api/me/photos/')||/^\/api\/posts\/[^/]+\/comments$/.test(c.req.path)?5300000:8192
+  const imageUpload=c.req.path.startsWith('/api/me/photos/')||/^\/api\/posts\/[^/]+\/comments$/.test(c.req.path)||/^\/api\/groups\/[^/]+\/photo$/.test(c.req.path)
+  const maxSize=mediaUpload?30000000:imageUpload?5300000:8192
   return bodyLimit({maxSize,onError:()=>{throw new HTTPException(413,{message:'The request is too large.'})}})(c,next)
 })
 app.get('/api/health',c=>c.json({ok:true}))
@@ -408,7 +409,7 @@ async function storedMedia(bucket:R2Bucket,id:string,cacheControl:string){
 }
 app.get('/api/media/:id',async c=>{
   const id=c.req.param('id')
-  const attachment=await c.env.DB.prepare('SELECT id FROM users WHERE avatar_media=? OR cover_media=? UNION ALL SELECT id FROM posts WHERE media=? UNION ALL SELECT id FROM comments WHERE media=? UNION ALL SELECT id FROM messages WHERE media=? AND view_once=0 LIMIT 1').bind(id,id,id,id,id).first()
+  const attachment=await c.env.DB.prepare('SELECT id FROM users WHERE avatar_media=? OR cover_media=? UNION ALL SELECT id FROM posts WHERE media=? UNION ALL SELECT id FROM comments WHERE media=? UNION ALL SELECT id FROM messages WHERE media=? AND view_once=0 UNION ALL SELECT id FROM chat_groups WHERE photo_media=? LIMIT 1').bind(id,id,id,id,id,id).first()
   if(!attachment) return c.json({error:'Image unavailable.'},404)
   return storedMedia(c.env.MEDIA,id,'public, max-age=3600')
 })
@@ -1112,6 +1113,7 @@ const member=(db:D1Database,room:string,user:string)=>db.prepare(`
   SELECT id FROM rooms WHERE id=? AND (first_user=? OR second_user=?)
   UNION ALL SELECT group_id id FROM group_members WHERE group_id=? AND user_id=? LIMIT 1
 `).bind(room,user,user,room,user).first()
+const groupAdmin=(db:D1Database,group:string,user:string)=>db.prepare("SELECT group_id FROM group_members WHERE group_id=? AND user_id=? AND role='admin'").bind(group,user).first()
 const streakView=async(db:D1Database,room:string)=>{
   const row=await db.prepare('SELECT count,last_completed_at,first_sent_at,second_sent_at,expires_at FROM chat_streaks WHERE room=?').bind(room).first<{count:number;last_completed_at:number|null;first_sent_at:number|null;second_sent_at:number|null;expires_at:number|null}>()
   if(!row)return null
@@ -1141,12 +1143,12 @@ app.get('/api/rooms',async c=>{
     LEFT JOIN calls x ON x.id=(SELECT id FROM calls WHERE room=r.id AND (state IN ('ended','declined') OR (state IN ('offered','ringing') AND expires<?)) ORDER BY created DESC LIMIT 1)
     LEFT JOIN chat_streaks s ON s.room=r.id AND s.expires_at>?
     WHERE r.first_user=? OR r.second_user=? ORDER BY MAX(COALESCE(m.created,0),COALESCE(x.created,0)) DESC LIMIT 60`).bind(user,now(),now(),user,user).all<PublicAccount&{room:string;last_body:string|null;message_at:number|null;call_video:number|null;call_caller:string|null;call_state:string|null;call_connected_at:number|null;call_ended_at:number|null;call_at:number|null;streak_count:number|null;streak_expires:number|null}>(),c.env.DB.prepare(`
-    SELECT g.id room,g.name,g.created,COUNT(gm2.user_id) members,m.body last_body,m.created message_at
+    SELECT g.id room,g.name,g.created,g.photo_media,COUNT(gm2.user_id) members,m.body last_body,m.created message_at
     FROM chat_groups g JOIN group_members mine ON mine.group_id=g.id AND mine.user_id=?
     JOIN group_members gm2 ON gm2.group_id=g.id
     LEFT JOIN messages m ON m.id=(SELECT id FROM messages WHERE room=g.id ORDER BY created DESC LIMIT 1)
     GROUP BY g.id ORDER BY COALESCE(m.created,g.created) DESC LIMIT 60
-  `).bind(user).all<{room:string;name:string;created:number;members:number;last_body:string|null;message_at:number|null}>()])
+  `).bind(user).all<{room:string;name:string;created:number;photo_media:string|null;members:number;last_body:string|null;message_at:number|null}>()])
   const directRooms=results.map(r=>{
     const latestCall=!!r.call_at&&r.call_at>(r.message_at??0)
     const duration=r.call_connected_at?Math.max(0,Math.floor(((r.call_ended_at??now())-r.call_connected_at)/1000)):0
@@ -1154,7 +1156,7 @@ app.get('/api/rooms',async c=>{
     const callActivity=r.call_connected_at?`${r.call_video?'Video call':'Voice call'} · ${Math.floor(duration/60)}m ${String(duration%60).padStart(2,'0')}s`:r.call_state==='declined'?r.call_caller===user?'Call declined':'Declined '+label:r.call_caller===user?'No answer':'Missed '+label
     return {id:r.room,person:person(r,c.req.url),lastActivity:latestCall?callActivity:r.last_body??undefined,lastActivityAt:r.call_at&&latestCall?time(r.call_at):r.message_at?time(r.message_at):undefined,streak:r.streak_expires?{count:r.streak_count??0,status:r.streak_count?'active':'pending',expiresAt:time(r.streak_expires)}:undefined}
   })
-  const groupRooms=groupResults.map(r=>({id:r.room,person:{id:r.room,name:r.name,initials:initials(r.name),role:'tech' as const,color:'#C8F53F',detail:'Group · '+r.members+' members',group:true},lastActivity:r.last_body??'Group created',lastActivityAt:time(r.message_at??r.created)}))
+  const groupRooms=groupResults.map(r=>({id:r.room,person:{id:r.room,name:r.name,initials:initials(r.name),role:'tech' as const,color:'#C8F53F',detail:'Group · '+r.members+' members',group:true,avatar:r.photo_media?mediaUrl(r.photo_media,c.req.url):undefined},lastActivity:r.last_body??'Group created',lastActivityAt:time(r.message_at??r.created)}))
   const merged=[...directRooms,...groupRooms].sort((a,b)=>Date.parse(b.lastActivityAt??'')-Date.parse(a.lastActivityAt??''))
   const rooms=merged.slice(paged?cursor:0,(paged?cursor:0)+(paged?20:60))
   c.header('Cache-Control','no-store')
@@ -1199,9 +1201,67 @@ app.post('/api/groups',async c=>{
   const id=crypto.randomUUID(),created=now(),all=[account.id,...members]
   await db.batch([
     db.prepare('INSERT INTO chat_groups(id,name,owner,created) VALUES (?,?,?,?)').bind(id,name,account.id,created),
-    ...all.map(user=>db.prepare('INSERT INTO group_members(group_id,user_id,joined) VALUES (?,?,?)').bind(id,user,created)),
+    ...all.map(user=>db.prepare('INSERT INTO group_members(group_id,user_id,joined,role) VALUES (?,?,?,?)').bind(id,user,created,user===account.id?'admin':'member')),
   ])
   return c.json({id,person:{id,name,initials:initials(name),role:'tech',color:'#C8F53F',detail:'Group · '+all.length+' members',group:true}},201)
+})
+app.get('/api/groups/:id',async c=>{
+  const id=c.req.param('id'),viewer=c.get('user').id,db=c.env.DB
+  if(!await member(db,id,viewer))return c.json({error:'Group unavailable.'},404)
+  const group=await db.prepare('SELECT id,name,owner,photo_media,invite_code FROM chat_groups WHERE id=?').bind(id).first<{id:string;name:string;owner:string;photo_media:string|null;invite_code:string|null}>()
+  if(!group)return c.json({error:'Group unavailable.'},404)
+  const {results}=await db.prepare(`SELECT u.id,u.name,u.role,u.username,u.verified,u.teacher,u.dob,u.avatar_media,u.cover_media,u.bio,gm.role member_role
+    FROM group_members gm JOIN users u ON u.id=gm.user_id WHERE gm.group_id=? ORDER BY gm.role DESC,u.name`).bind(id).all<PublicAccount&{member_role:'admin'|'member'}>()
+  return c.json({id:group.id,name:group.name,photo:group.photo_media?mediaUrl(group.photo_media,c.req.url):undefined,isAdmin:results.some(item=>item.id===viewer&&item.member_role==='admin'),inviteCode:group.invite_code??undefined,members:results.map(item=>({person:person(item,c.req.url),role:item.member_role,owner:item.id===group.owner}))})
+})
+app.post('/api/groups/:id/members',async c=>{
+  const id=c.req.param('id'),viewer=c.get('user').id,db=c.env.DB
+  if(!await groupAdmin(db,id,viewer))return c.json({error:'Only group admins can add members.'},403)
+  const input=await readBody(c.req.raw),members=Array.isArray(input?.members)?[...new Set(input.members.filter((value:unknown):value is string=>typeof value==='string'))].slice(0,30):[]
+  if(!members.length)return c.json({error:'Choose at least one member.'},400)
+  const placeholders=members.map(()=>'?').join(','),valid=await db.prepare(`SELECT id FROM users WHERE id IN (${placeholders})`).bind(...members).all<{id:string}>()
+  if(valid.results.length!==members.length)return c.json({error:'One selected account is unavailable.'},400)
+  await db.batch(members.map(user=>db.prepare("INSERT INTO group_members(group_id,user_id,joined,role) VALUES (?,?,?,'member') ON CONFLICT DO NOTHING").bind(id,user,now())))
+  return c.json({ok:true})
+})
+app.put('/api/groups/:id/members/:user/admin',async c=>{
+  const {id,user}=c.req.param(),viewer=c.get('user').id,db=c.env.DB
+  if(!await groupAdmin(db,id,viewer))return c.json({error:'Only group admins can manage admins.'},403)
+  const group=await db.prepare('SELECT owner FROM chat_groups WHERE id=?').bind(id).first<{owner:string}>(),active=(await readBody(c.req.raw))?.active
+  if(typeof active!=='boolean')return c.json({error:'Choose an admin state.'},400)
+  if(user===group?.owner&&!active)return c.json({error:'The group owner must remain an admin.'},409)
+  const result=await db.prepare('UPDATE group_members SET role=? WHERE group_id=? AND user_id=?').bind(active?'admin':'member',id,user).run()
+  if(!result.meta.changes)return c.json({error:'Member unavailable.'},404)
+  return c.json({ok:true})
+})
+app.post('/api/groups/:id/invite',async c=>{
+  const id=c.req.param('id'),viewer=c.get('user').id,db=c.env.DB
+  if(!await member(db,id,viewer))return c.json({error:'Group unavailable.'},404)
+  const code=random(12)
+  await db.prepare('UPDATE chat_groups SET invite_code=COALESCE(invite_code,?) WHERE id=?').bind(code,id).run()
+  const row=await db.prepare('SELECT invite_code FROM chat_groups WHERE id=?').bind(id).first<{invite_code:string}>()
+  return c.json({code:row?.invite_code,url:'https://dameen.app/?group='+row?.invite_code})
+})
+app.post('/api/groups/join/:code',async c=>{
+  const code=c.req.param('code'),user=c.get('user').id,db=c.env.DB
+  const group=await db.prepare('SELECT id,name,photo_media FROM chat_groups WHERE invite_code=?').bind(code).first<{id:string;name:string;photo_media:string|null}>()
+  if(!group)return c.json({error:'This group invite is invalid or expired.'},404)
+  await db.prepare("INSERT INTO group_members(group_id,user_id,joined,role) VALUES (?,?,?,'member') ON CONFLICT DO NOTHING").bind(group.id,user,now()).run()
+  const count=await db.prepare('SELECT COUNT(*) count FROM group_members WHERE group_id=?').bind(group.id).first<{count:number}>()
+  return c.json({id:group.id,person:{id:group.id,name:group.name,initials:initials(group.name),role:'tech',color:'#C8F53F',detail:'Group · '+(count?.count??1)+' members',group:true,avatar:group.photo_media?mediaUrl(group.photo_media,c.req.url):undefined}})
+})
+app.put('/api/groups/:id/photo',async c=>{
+  const id=c.req.param('id'),viewer=c.get('user').id,db=c.env.DB
+  if(!await groupAdmin(db,id,viewer))return c.json({error:'Only group admins can change the group photo.'},403)
+  const form=await c.req.raw.formData().catch(()=>null),upload:unknown=form?.get('image')
+  if(!(upload instanceof File))return c.json({error:'Choose a group photo.'},400)
+  const contentType=await imageType(upload)
+  if(!contentType||upload.size>5*1024*1024)return c.json({error:'Choose an image under 5 MB.'},400)
+  const media=crypto.randomUUID(),previous=await db.prepare('SELECT photo_media FROM chat_groups WHERE id=?').bind(id).first<{photo_media:string|null}>()
+  await c.env.MEDIA.put(media,await upload.arrayBuffer(),{httpMetadata:{contentType}})
+  await db.prepare('UPDATE chat_groups SET photo_media=? WHERE id=?').bind(media,id).run()
+  if(previous?.photo_media)c.executionCtx.waitUntil(c.env.MEDIA.delete(previous.photo_media))
+  return c.json({url:mediaUrl(media,c.req.url)})
 })
 type WhotRow={id:string;invited_by:string;accepted:number;version:number;state:string}
 function whotView(row:WhotRow,user:string){
