@@ -2040,7 +2040,7 @@ export default function App(props:Props){
           </>}
         </ScrollView>}
       </View>}
-    {toast&&!overlay&&<Toast key={toast.id} item={toast} reduced={reduced} onDismiss={dismissToast} bottom={desktop?24:76}/>}
+    {toast&&!overlay&&<Toast key={toast.id} item={toast} reduced={reduced} onDismiss={dismissToast} bottom={desktop?24:page==='Chat'?146:76}/>}
     <Modal presentationStyle="fullScreen" visible={overlay!==null} animationType={reduced?'none':'fade'} onRequestClose={modalClose}>
       <ModalViewport color={story?(personalStory?.background??(personalStory?.image?'#120D1F':'#4F25D6')):theme.bg}>
       {overlay?.kind==='call'&&!overlay.ringing?<CallPreview video={overlay.video} person={overlay.person} onClose={modalClose}/>:story?<View accessibilityViewIsModal style={{flex:1,backgroundColor:personalStory?.background??(personalStory?.image?'#120D1F':'#4F25D6'),padding:18}}>
