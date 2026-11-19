@@ -39,11 +39,11 @@ export const callConstraints=(video:boolean)=>({
 function callMediaError(reason:unknown,video:boolean){
   const error=reason as {name?:string;message?:string}
   if(!globalThis.isSecureContext)return new Error('Calls need a secure connection. Open dameen from its https website and try again.')
-  if(error?.name==='NotAllowedError'||error?.name==='SecurityError')return new Error(`Allow ${video?'camera and microphone':'microphone'} access in your browser, then try the call again.`)
+  if(error?.name==='NotAllowedError'||error?.name==='SecurityError')return new Error(video?'Camera or microphone blocked. Allow both for dameen in your browser settings.':'Microphone blocked. Allow it for dameen in your browser settings.')
   if(error?.name==='NotFoundError'||error?.name==='DevicesNotFoundError')return new Error(`No ${video?'camera or microphone':'microphone'} was found on this device.`)
-  if(error?.name==='NotReadableError'||error?.name==='TrackStartError'||/start audio source/i.test(error?.message??''))return new Error('Your microphone is busy or unavailable. Close other calling or recording apps, check the browser microphone setting, then try again.')
+  if(error?.name==='NotReadableError'||error?.name==='TrackStartError'||/start audio source/i.test(error?.message??''))return new Error(video?'Camera or microphone unavailable. Close other calling apps and check browser permissions.':'Microphone unavailable. Close other calling apps or allow microphone access for your browser.')
   if(error?.name==='OverconstrainedError')return new Error(`This device could not use the requested ${video?'camera and microphone':'microphone'} settings.`)
-  return new Error(`Couldn’t start the ${video?'camera and microphone':'microphone'}. Check the browser permission and try again.`)
+  return new Error(video?'Couldn’t start the camera or microphone. Check browser permissions.':'Couldn’t start the microphone. Check browser permissions.')
 }
 
 function WebSurface({stream,local,video,full}:{stream:CallStream;local?:boolean;video:boolean;full?:boolean}){
