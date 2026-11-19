@@ -46,6 +46,7 @@ function callMediaError(reason:unknown,video:boolean){
   return new Error(video?'Couldn’t start the camera or microphone. Check browser permissions.':'Couldn’t start the microphone. Check browser permissions.')
 }
 
+const webCallPlayers=new Set<HTMLMediaElement>()
 function WebSurface({stream,local,video,full}:{stream:CallStream;local?:boolean;video:boolean;full?:boolean}){
   const element=useRef<HTMLMediaElement|null>(null)
   const [blocked,setBlocked]=useState(false)
@@ -53,9 +54,10 @@ function WebSurface({stream,local,video,full}:{stream:CallStream;local?:boolean;
     const player=element.current
     if(!player)return
     player.srcObject=stream as MediaStream
+    if(!local)webCallPlayers.add(player)
     void player.play().catch(()=>setBlocked(true))
-    return ()=>{player.srcObject=null}
-  },[stream])
+    return ()=>{webCallPlayers.delete(player);player.srcObject=null}
+  },[stream,local])
   return <View style={full?{flex:1,width:'100%',height:'100%'}:undefined}>
     {React.createElement(video?'video':'audio',{
       ref:(value:HTMLMediaElement|null)=>{element.current=value},autoPlay:true,playsInline:true,muted:local,
@@ -116,6 +118,21 @@ export function browserCallMedia():CallMedia|undefined{
       catch(error){nextTrack.stop();throw error}
       stream.getVideoTracks().forEach(track=>track.stop())
       return new MediaStream([...stream.getAudioTracks() as MediaStreamTrack[],nextTrack])
+    },
+    setAudioRoute:async route=>{
+      const devices=await navigator.mediaDevices.enumerateDevices()
+      const outputs=devices.filter(device=>device.kind==='audiooutput')
+      const bluetooth=outputs.find(device=>/bluetooth|headset|headphone|earbud|airpod/i.test(device.label))
+      const output=route==='bluetooth'?bluetooth:outputs.find(device=>device.deviceId==='default')??outputs.find(device=>/speaker|built-in/i.test(device.label))
+      if(route==='bluetooth'&&!output)throw new Error('Connect a Bluetooth headset first.')
+      const sinkId=output?.deviceId??'default'
+      const players=[...webCallPlayers] as Array<HTMLMediaElement&{setSinkId?:(id:string)=>Promise<void>}>
+      if(!players.length)return
+      if(!players.some(player=>typeof player.setSinkId==='function')){
+        if(route==='bluetooth')throw new Error('Bluetooth output selection is unavailable in this browser.')
+        return
+      }
+      await Promise.all(players.map(player=>player.setSinkId?.(sinkId)))
     },
     Surface:WebSurface,
   }
