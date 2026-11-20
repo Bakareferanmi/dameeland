@@ -17,12 +17,28 @@
     },
     "android": {
       "package": "com.dameeland.app",
-      "intentFilters": [{
-        "action": "VIEW",
-        "autoVerify": true,
-        "data": [{"scheme":"https","host":"dameen.app"}],
-        "category": ["BROWSABLE","DEFAULT"]
-      }]
+      "intentFilters": [
+        {
+          "action": "VIEW",
+          "autoVerify": true,
+          "data": [
+            {
+              "scheme": "https",
+              "host": "dameen.app",
+              "pathPrefix": "/u/"
+            },
+            {
+              "scheme": "https",
+              "host": "dameen.app",
+              "pathPrefix": "/p/"
+            }
+          ],
+          "category": [
+            "BROWSABLE",
+            "DEFAULT"
+          ]
+        }
+      ]
     },
     "plugins": [
       "@config-plugins/react-native-webrtc",
