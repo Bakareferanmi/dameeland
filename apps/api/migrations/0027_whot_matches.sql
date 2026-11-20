@@ -1,0 +1,8 @@
+CREATE TABLE whot_matches (
+  room TEXT PRIMARY KEY REFERENCES rooms(id) ON DELETE CASCADE,
+  id TEXT NOT NULL UNIQUE,
+  invited_by TEXT NOT NULL REFERENCES users(id),
+  accepted INTEGER NOT NULL DEFAULT 0,
+  version INTEGER NOT NULL DEFAULT 0,
+  state TEXT NOT NULL
+);

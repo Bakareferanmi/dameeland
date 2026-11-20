@@ -29,11 +29,193 @@ const oneMessage=socket=>new Promise((resolve,reject)=>{
   const timer=setTimeout(()=>reject(new Error('Timed out waiting for Durable Object broadcast')),5000)
   socket.addEventListener('message',event=>{clearTimeout(timer);resolve(JSON.parse(event.data))},{once:true})
 })
-const openSocket=(path,token)=>new Promise((resolve,reject)=>{
-  const socket=new WebSocket(base.replace(/^http/,'ws')+'/api'+path,['dameeland','ticket.'+token])
+const openSocket=(path,token,origin)=>new Promise((resolve,reject)=>{
+  const socket=new WebSocket(base.replace(/^http/,'ws')+'/api'+path,{
+    protocols:['dameeland','ticket.'+token],
+    headers:origin?{Origin:origin}:{},
+  })
   const timer=setTimeout(()=>{socket.close();reject(new Error('WebSocket handshake timed out'))},5000)
   socket.addEventListener('open',()=>{clearTimeout(timer);resolve(socket)},{once:true})
   socket.addEventListener('error',()=>{clearTimeout(timer);reject(new Error('WebSocket handshake failed'))},{once:true})
+})
+test('profile edits, lesson progress, and shared post lookup use saved account data',async()=>{
+  const account=await create('Dameen Test')
+  const visitor=await create('Dameen Visitor')
+  const token=account.token
+  const bio='📚'.repeat(50)
+  const profile={name:'Dameen Updated',bio}
+  await request('/me/profile',{token,method:'PUT',body:{...profile,bio:bio+'!'},status:400})
+  const saved=await request('/me/profile',{token,method:'PUT',body:profile})
+  assert.equal(saved.name,profile.name)
+  assert.equal(saved.username,account.username)
+  assert.equal((await request('/people/'+account.user.id,{token:visitor.token})).bio,bio)
+  const lesson='/me/lessons/quadratics'
+  await request(lesson,{token,method:'PUT',body:{answer:1},status:400})
+  assert.deepEqual(await request('/me/lessons',{token}),[])
+  for(let attempt=0;attempt<2;attempt++)await request(lesson,{token,method:'PUT',body:{answer:0}})
+  assert.deepEqual(await request('/me/lessons',{token}),['quadratics'])
+  assert.deepEqual(await request('/me/lessons',{token:visitor.token}),[])
+  const form=new FormData()
+  form.append('body','A post opened from a shared link')
+  const post=await request('/posts',{token,method:'POST',form,status:201})
+  const path='/posts/'+post.id
+  await request(path,{status:401})
+  assert.equal((await request(path,{token:visitor.token})).id,post.id)
+})
+test('username cooldown, public preview, presence, and personal analytics',async()=>{
+  const account=await create('Profile Owner')
+  const other=await create('Another User')
+  const current=account.username
+  const updated='new_'+randomUUID().replaceAll('-','').slice(0,12)
+  const token=account.token
+  assert.equal((await request('/public/profiles/'+current)).username,current)
+  const changed=await request('/me/username',{token,method:'PUT',body:{username:updated}})
+  assert.equal(changed.username,updated)
+  assert.ok(Date.parse(changed.usernameNextChangeAt)>Date.now()+2*86400000)
+  await request('/public/profiles/'+current,{status:404})
+  assert.equal((await request('/public/profiles/'+updated)).id,account.user.id)
+  await request('/me/username',{token:other.token,method:'PUT',body:{username:updated},status:409})
+  await request('/me/username',{token,method:'PUT',body:{username:'next_'+updated},status:429})
+  await request('/me/presence',{token,method:'PUT',body:{online:true}})
+  assert.equal((await request('/people/'+account.user.id+'/presence',{token:other.token})).online,true)
+  const analytics=await request('/me/analytics',{token})
+  assert.deepEqual(analytics,{posts:0,followers:0,following:0,likes:0,reposts:0,comments:0})
+  await request('/me/presence',{token,method:'PUT',body:{online:false}})
+  assert.equal((await request('/people/'+account.user.id+'/presence',{token:other.token})).online,false)
+})
+test('public search only lists profiles and posts their owners opted in',async()=>{
+  const owner=await create('Search Owner')
+  const visitor=await create('Search Visitor')
+  const token=owner.token
+  const profile='/public/profiles/'+owner.username
+  const sitemap=async(section,status=200)=>{
+    const response=await fetch(base+'/api/public/sitemap'+(section?'?section='+section:''))
+    assert.equal(response.status,status)
+    if(response.ok)assert.match(response.headers.get('Content-Type'),/application\/xml/)
+    return response.text()
+  }
+  const setProfile=searchPublic=>request('/me/profile',{token,method:'PUT',body:{name:'Search Owner',bio:'My short bio',searchPublic}})
+  const setPost=(id,searchPublic,accessToken=token,status=200)=>request('/posts/'+id+'/search-visibility',{token:accessToken,method:'PUT',body:{searchPublic},status})
+  assert.equal((await request(profile)).searchPublic,false)
+  assert.match(await sitemap(),/<sitemapindex/)
+  assert.match(await sitemap('site'),/<loc>https:\/\/dameen\.app\/about\/<\/loc>/)
+  await sitemap('profiles-0',404)
+  const privatePost=await request('/posts',{token,method:'POST',body:{body:'Members only'},status:201})
+  assert.equal((await request('/public/posts/'+privatePost.id)).searchPublic,false)
+  await setPost(privatePost.id,true,visitor.token,404)
+  assert.equal((await request('/public/posts/'+privatePost.id)).searchPublic,false)
+
+  assert.equal((await setProfile(true)).searchPublic,true)
+  assert.equal((await setProfile(undefined)).searchPublic,true)
+  assert.equal((await request('/me',{token})).searchPublic,true)
+  assert.match(await sitemap(),/section=profiles-1/)
+  const profileUrls=await sitemap('profiles-1')
+  assert.ok(profileUrls.includes('/u/'+owner.username))
+  assert.ok(!profileUrls.includes('/u/'+visitor.username))
+
+  const form=new FormData()
+  form.append('body','Visible <text> and media')
+  form.append('searchPublic','true')
+  form.append('image',new Blob([Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jA5sAAAAASUVORK5CYII=','base64')],{type:'image/png'}),'photo.png')
+  const post=await request('/posts',{token,method:'POST',form,status:201})
+  assert.equal((await request('/posts/'+post.id,{token:visitor.token})).searchPublic,true)
+  const published=await request('/public/posts/'+post.id)
+  assert.equal(published.body,'Visible <text> and media')
+  assert.equal(published.username,owner.username)
+  assert.equal(published.email,undefined)
+  assert.equal(published.comments,undefined)
+  assert.equal((await fetch(published.media)).status,200)
+  assert.match(await sitemap(),/section=posts-1/)
+  const postUrls=await sitemap('posts-1')
+  assert.ok(postUrls.includes('/p/'+post.id))
+  assert.ok(!postUrls.includes('/p/'+privatePost.id))
+
+  assert.equal((await setPost(post.id,false)).searchPublic,false)
+  assert.equal((await request('/public/posts/'+post.id)).searchPublic,false)
+  assert.equal((await fetch(published.media)).status,404)
+  assert.equal((await request('/posts/'+post.id,{token:visitor.token})).body,published.body)
+  assert.equal((await setProfile(false)).searchPublic,false)
+  assert.equal((await request(profile)).searchPublic,false)
+  await setPost(privatePost.id,true)
+  assert.equal((await request('/public/posts/'+privatePost.id)).body,'Members only')
+  assert.ok(!(await sitemap('posts-1')).includes('/p/'+post.id))
+})
+test('API preflight allows both production sites and rejects unknown origins',async()=>{
+  for(const origin of ['https://dameen.app','https://dameeland.pages.dev','https://untrusted.example']){
+    const response=await fetch(base+'/api/health',{
+      method:'OPTIONS',
+      headers:{Origin:origin,'Access-Control-Request-Method':'GET','Access-Control-Request-Headers':'Authorization'},
+    })
+    assert.equal(response.status,204)
+    assert.equal(response.headers.get('Access-Control-Allow-Origin'),origin==='https://untrusted.example'?null:origin)
+  }
+})
+test('chat WebSockets allow both production sites and native clients',async()=>{
+  const ada=await create('Ada Qa')
+  const tobi=await create('Tobi Qa')
+  const room=await request('/rooms',{token:ada.token,method:'POST',body:{target:tobi.user.id}})
+  const path='/rooms/'+room.id+'/socket'
+  await assert.rejects(openSocket(path,tobi.token,'https://untrusted.example'),/handshake failed/)
+  for(const origin of ['https://dameen.app','https://dameeland.pages.dev',undefined]){
+    const socket=await openSocket(path,tobi.token,origin)
+    socket.close()
+  }
+})
+test('message read receipts and call invitations work outside an open chat',async()=>{
+  const caller=await create('Call Sender')
+  const callee=await create('Call Receiver')
+  const stranger=await create('Call Stranger')
+  const room=await request('/rooms',{token:caller.token,method:'POST',body:{target:callee.user.id}})
+  const sent=await request('/rooms/'+room.id+'/messages',{token:caller.token,method:'POST',body:{body:'Hello'},status:201})
+  assert.equal(sent.readAt,undefined)
+  assert.equal((await request('/rooms/'+room.id+'/messages',{token:caller.token}))[0].readAt,undefined)
+  await request('/rooms/'+room.id+'/read',{token:stranger.token,method:'PUT',status:404})
+  const receipt=await request('/rooms/'+room.id+'/read',{token:callee.token,method:'PUT'})
+  assert.deepEqual(receipt.ids,[sent.id])
+  assert.ok(Date.parse((await request('/rooms/'+room.id+'/messages',{token:caller.token}))[0].readAt))
+  assert.deepEqual((await request('/rooms/'+room.id+'/read',{token:callee.token,method:'PUT'})).ids,[])
+
+  const id=randomUUID().replaceAll('-','')
+  const signal={kind:'offer',id,video:true,sdp:'v=0\r\n'}
+  await request('/rooms/'+room.id+'/calls',{token:stranger.token,method:'POST',body:{signal},status:404})
+  await request('/rooms/'+room.id+'/calls',{token:caller.token,method:'POST',body:{signal},status:201})
+  const incoming=(await request('/calls/incoming',{token:callee.token})).find(item=>item.id===id)
+  assert.equal(incoming.person.id,caller.user.id)
+  assert.equal(incoming.video,true)
+  assert.equal(incoming.offer,signal.sdp)
+  assert.equal((await request('/calls/'+id,{token:caller.token})).state,'offered')
+  await request('/calls/'+id,{token:stranger.token,status:404})
+  const notificationPage=await request('/notifications',{token:callee.token})
+  const callNotice=notificationPage.items.find(item=>item.entityId==='call:'+id)
+  assert.equal(callNotice.kind,'call')
+  assert.equal((await request('/notifications/'+callNotice.id,{token:callee.token})).entityId,'call:'+id)
+  await request('/notifications/'+callNotice.id,{token:stranger.token,status:404})
+  assert.ok(notificationPage.items.length<=12)
+  assert.ok(notificationPage.nextCursor===null||typeof notificationPage.nextCursor==='string')
+  await request('/notifications?cursor=invalid',{token:callee.token,status:400})
+  await request('/calls/'+id+'/ringing',{token:caller.token,method:'PUT',status:404})
+  await request('/calls/'+id+'/ringing',{token:callee.token,method:'PUT'})
+  assert.equal((await request('/calls/'+id,{token:caller.token})).state,'ringing')
+  const answer={kind:'answer',id,sdp:'v=0\r\n'}
+  await request('/calls/'+id+'/answer',{token:callee.token,method:'PUT',body:{signal:answer}})
+  assert.equal((await request('/calls/'+id,{token:caller.token})).answer,answer.sdp)
+  await request('/calls/'+id+'/connected',{token:caller.token,method:'PUT'})
+  assert.ok(Date.parse((await request('/calls/'+id,{token:callee.token})).connectedAt))
+  await request('/calls/'+id+'/end',{token:callee.token,method:'PUT'})
+  assert.equal((await request('/calls/'+id,{token:caller.token})).state,'ended')
+  const completed=(await request('/rooms/'+room.id+'/messages',{token:caller.token})).find(item=>item.call?.id===id)
+  assert.equal(completed.call.outcome,'completed')
+  assert.equal(completed.call.video,true)
+  assert.ok(completed.call.durationSeconds>=0)
+  const missedId=randomUUID().replaceAll('-','')
+  await request('/rooms/'+room.id+'/calls',{token:caller.token,method:'POST',body:{signal:{...signal,id:missedId,video:false}},status:201})
+  await request('/calls/'+missedId+'/end',{token:caller.token,method:'PUT'})
+  const missed=(await request('/rooms/'+room.id+'/messages',{token:callee.token})).find(item=>item.call?.id===missedId)
+  assert.equal(missed.call.outcome,'missed')
+  assert.equal(missed.body,'Missed voice call')
+  assert.equal((await request('/rooms',{token:callee.token})).find(item=>item.id===room.id).lastActivity,'Missed voice call')
+  assert.equal((await request('/rooms',{token:caller.token})).find(item=>item.id===room.id).lastActivity,'No answer')
+  assert.deepEqual(await request('/calls/incoming',{token:callee.token}),[])
 })
 test('local Worker persists accounts, social activity, media, and private realtime chat',async()=>{
   await request('/health')
@@ -147,7 +329,7 @@ test('local Worker persists accounts, social activity, media, and private realti
   const followPath='/people/'+ada.user.id+'/follow'
   const adaStats=followPath+'-stats'
   const tobiStats='/people/'+tobi.user.id+'/follow-stats'
-  assert.deepEqual(await request(adaStats,{token:tobi.token}),{followers:0,following:0,followedByViewer:false})
+  assert.deepEqual(await request(adaStats,{token:tobi.token}),{followers:0,following:0,followedByViewer:false,followsViewer:false})
   await request(adaStats,{status:401})
   await request('/stories',{status:401})
   await request('/stories',{token:ada.token,method:'POST',body:{text:'   '},status:400})
@@ -164,8 +346,17 @@ test('local Worker persists accounts, social activity, media, and private realti
   assert.equal(ownStories[0].stories.length,2)
   await request('/people/missing/follow-stats',{token:tobi.token,status:404})
   await request(followPath,{token:tobi.token,method:'PUT',body:{active:true}})
+  assert.equal((await request('/people?q='+ada.username,{token:tobi.token})).find(person=>person.id===ada.user.id).followsViewer,false)
+  await request('/people/'+tobi.user.id+'/follow',{token:ada.token,method:'PUT',body:{active:true}})
+  assert.equal((await request(tobiStats,{token:ada.token})).followsViewer,true)
+  assert.equal((await request('/people?q='+tobi.username,{token:ada.token})).find(person=>person.id===tobi.user.id).followsViewer,true)
+  await request('/people/'+tobi.user.id+'/follow',{token:ada.token,method:'PUT',body:{active:false}})
   const seen=await request('/stories',{token:tobi.token})
   assert.deepEqual(seen.find(group=>group.author.id===ada.user.id)?.stories.map(item=>item.id),[story.id,photoStory.id])
+  const storyPath='/stories/'+ada.user.id+'/'+story.id+'/like'
+  assert.deepEqual(await request(storyPath,{token:tobi.token,method:'PUT',body:{active:true}}),{likes:1,liked:true})
+  assert.equal((await request('/stories',{token:tobi.token})).find(group=>group.author.id===ada.user.id).stories[0].liked,true)
+  assert.deepEqual(await request(storyPath,{token:tobi.token,method:'PUT',body:{active:false}}),{likes:0,liked:false})
   await request('/stories/'+story.id,{token:tobi.token,method:'DELETE',status:404})
   await request('/stories/'+photoStory.id,{token:ada.token,method:'DELETE'})
   assert.equal((await fetch(photoStory.image)).status,404)
@@ -184,10 +375,10 @@ test('local Worker persists accounts, social activity, media, and private realti
   assert.deepEqual(Buffer.from(await image.arrayBuffer()),file)
   assert.ok((await request('/people?q=Ada%20QA',{token:tobi.token})).some(p=>p.id===ada.user.id&&p.following))
   await request(followPath,{token:tobi.token,method:'PUT',body:{active:true}})
-  assert.deepEqual(await request(adaStats,{token:tobi.token}),{followers:1,following:0,followedByViewer:true})
-  assert.deepEqual(await request(tobiStats,{token:tobi.token}),{followers:0,following:1,followedByViewer:false})
+  assert.deepEqual(await request(adaStats,{token:tobi.token}),{followers:1,following:0,followedByViewer:true,followsViewer:false})
+  assert.deepEqual(await request(tobiStats,{token:tobi.token}),{followers:0,following:1,followedByViewer:false,followsViewer:false})
   await request(followPath,{token:tobi.token,method:'PUT',body:{active:false}})
-  assert.deepEqual(await request(adaStats,{token:tobi.token}),{followers:0,following:0,followedByViewer:false})
+  assert.deepEqual(await request(adaStats,{token:tobi.token}),{followers:0,following:0,followedByViewer:false,followsViewer:false})
   assert.equal((await request(tobiStats,{token:tobi.token})).following,0)
   const postPath='/posts/'+post.id
   for(let attempt=0;attempt<2;attempt++) await request(postPath+'/like',{token:tobi.token,method:'PUT',body:{active:true}})
@@ -196,6 +387,17 @@ test('local Worker persists accounts, social activity, media, and private realti
   const updated=(await request('/feed',{token:tobi.token})).find(p=>p.id===post.id)
   assert.deepEqual([updated.likes,updated.comments,updated.reposts,updated.liked],[1,1,1,true])
   assert.equal((await request(postPath+'/comments',{token:ada.token}))[0].id,comment.id)
+  const reply=await request(postPath+'/comments',{token:ada.token,method:'POST',body:{body:'Glad it helped',parentId:comment.id},status:201})
+  assert.equal(reply.parentId,comment.id)
+  assert.equal(reply.replyTo,tobi.username)
+  const replyNotice=(await request('/notifications',{token:tobi.token})).items.find(item=>item.entityId==='comment:'+post.id+':'+comment.id)
+  assert.equal(replyNotice.kind,'comment')
+  await request('/notifications/'+replyNotice.id+'/read',{token:tobi.token,method:'PUT'})
+  assert.equal((await request('/notifications',{token:tobi.token})).items.find(item=>item.id===replyNotice.id).read,true)
+  assert.deepEqual(await request('/comments/'+reply.id+'/like',{token:tobi.token,method:'PUT',body:{active:true}}),{likes:1,liked:true})
+  assert.equal((await request(postPath+'/comments',{token:tobi.token})).find(item=>item.id===reply.id).liked,true)
+  assert.deepEqual(await request('/comments/'+reply.id+'/like',{token:tobi.token,method:'PUT',body:{active:false}}),{likes:0,liked:false})
+  await request(postPath+'/comments',{token:ada.token,method:'POST',body:{body:'Invalid parent',parentId:'missing'},status:404})
 
   const commentsPath=postPath+'/comments'
   const gif=await request(commentsPath,{token:tobi.token,method:'POST',body:{gif:'cheer'},status:201})
@@ -215,7 +417,7 @@ test('local Worker persists accounts, social activity, media, and private realti
   const commentImage=await fetch(photo.attachment.url)
   assert.equal(commentImage.headers.get('content-type'),'image/png')
   assert.deepEqual(Buffer.from(await commentImage.arrayBuffer()),file)
-  assert.equal((await request('/feed',{token:tobi.token})).find(item=>item.id===post.id).comments,4)
+  assert.equal((await request('/feed',{token:tobi.token})).find(item=>item.id===post.id).comments,5)
 
   if(process.env.TEST_ADMIN_TOKEN){
     const token=process.env.TEST_ADMIN_TOKEN

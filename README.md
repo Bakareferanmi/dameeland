@@ -1,4 +1,4 @@
-# dameeland
+# dameen
 
 A student social and learning app. The TypeScript npm workspace contains a React + Vite site, a React Native + Expo app, a Hono Worker and a shared design and product layer.
 
@@ -43,11 +43,32 @@ npm -w @dameeland/mobile run start -- --go --lan
 
 Scan the Metro QR code using Expo Go for SDK 58 on a phone connected to the same network. If LAN access is unavailable, sign into Expo from `apps/mobile` with `npx expo login`, then run `npm -w @dameeland/mobile run start -- --go --tunnel` from the workspace root.
 
-Expo starts in demo mode by default. To connect a simulator or physical device to the local API, set `EXPO_PUBLIC_API_URL` in `apps/mobile/.env.local`. Use `http://localhost:8787` for iOS Simulator or `http://10.0.2.2:8787` for the standard Android emulator. For a physical device, use the development machine's LAN address and start Wrangler with `npm -w @dameeland/api run dev -- --ip 0.0.0.0` on a trusted local network.
+The mobile app uses the same live Worker as dameen.app by default. Set `EXPO_PUBLIC_DEMO=1` to start in demo mode. To connect a simulator or physical device to the local API, set `EXPO_PUBLIC_API_URL` in `apps/mobile/.env.local`. Use `http://localhost:8787` for iOS Simulator or `http://10.0.2.2:8787` for the standard Android emulator. For a physical device, use the development machine's LAN address and start Wrangler with `npm -w @dameeland/api run dev -- --ip 0.0.0.0` on a trusted local network.
+
+## Production deployment
+
+Apply pending D1 migrations and deploy the apps from the repository root while signed into the existing Cloudflare account. Migration 0016 adds the media type used by post creation and the feed.
+
+```bash
+npx wrangler d1 migrations apply dameeland --remote --config apps/api/wrangler.jsonc
+npx wrangler deploy --config apps/api/wrangler.jsonc
+npm run deploy:web
+```
+
+In Cloudflare, open **Workers & Pages → dameeland → Custom domains** and add `dameen.app`. Wait for the domain to show **Active**. This attaches the site to the existing Pages project. The Worker accepts both the custom domain and the existing Pages URL for API requests and chat. Google sign-in continues to use the registered Worker callback. Browser sessions are tied to the site's origin, so users coming from the Pages URL sign in again on `dameen.app`.
+
+Rebuild and install the native app to see the new display name. The Android package and iOS bundle identifier are preserved so updates keep the existing app identity.
 
 ## Account recovery
 
-Apply D1 migration `0009_password_resets.sql`. Set `RESEND_API_KEY` as a Worker secret and `RECOVERY_FROM` to an email address on your verified Resend domain. For local development, set both in `apps/api/.dev.vars`. Users can log in with an email address or username. From the login screen, they can request a username reminder or a single-use password reset code by email. Reset codes expire after 15 minutes. A successful password reset ends previous sessions.
+Apply the D1 migrations, including `0009_password_resets.sql` and `0017_welcome_email.sql`. Verify a sender domain in Resend and create a key with Sending access for that domain. From the repository root, run these commands and enter the values at the Wrangler prompts.
+
+```bash
+npx wrangler secret put RESEND_API_KEY --config apps/api/wrangler.jsonc
+npx wrangler secret put RECOVERY_FROM --config apps/api/wrangler.jsonc
+```
+
+Set `RECOVERY_FROM` to a sender on the verified domain, such as `dameen <accounts@dameen.app>` if `dameen.app` is verified in Resend. For local development, set both values in `apps/api/.dev.vars`. From the login screen, users can request a username reminder or a single-use password reset code by email. Reset codes have five characters and expire after 15 minutes. A successful password reset ends previous sessions. Resend also sends one welcome email per account. New accounts receive it after signup. Existing accounts receive it when they next open the app with an active session or sign in.
 
 ## Admin access
 
@@ -82,8 +103,6 @@ Apply migration `0008_reaction_analytics.sql` to enable 7- and 30-day analytics.
 - The local API persists accounts and sessions, posts, comments, idempotent likes and reposts, follows and direct message history in D1. R2 stores image attachments. One Durable Object per conversation broadcasts new messages to authorized participants.
 - Learn opens a chapter-based maths lesson, the progress dashboard, and a working study timer. Play opens Quiz Duel, the games hub, and the sample leaderboard and rewards. Home opens the events and birthday screens. The preview’s Settings page links to the screen states, design system, and logo board.
 - The teacher dashboard, focus room, social events, birthdays, rewards, stories, group conversations and call screens use local preview data. The app renders the call, voice-note and video story interfaces as simulations. The lesson uses written sample chapters. Preview actions are held in memory, and some reset when you leave the screen. Live audio/video, shared classroom records and cross-device progress still require backend or media integration.
-
-The Wrangler configuration uses a placeholder database ID and a local origin. Set up production bindings and access controls before opening it to students.
 
 ## Startup and lazy loading
 

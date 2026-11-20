@@ -1,4 +1,6 @@
 [role="button"]:focus-visible,[role="radio"]:focus-visible,input:focus-visible,textarea:focus-visible{outline:2px solid #9B7BFF!important;outline-offset:2px}
+/* The search field's icon and input share one focus border. */
+input[data-testid="explore-search-input"]:focus-visible{outline:none!important}
 [data-testid="main-scroll"]{overscroll-behavior-y:contain;scrollbar-width:thin}
 @media (prefers-reduced-motion:no-preference){
   [role="button"],[role="radio"]{transition:background-color 150ms ease-out,opacity 120ms ease-out}

@@ -1,5 +1,5 @@
 import React,{createContext,useContext,useEffect,useRef,useState} from 'react'
-import {Animated,Image,Platform,Pressable,Text,TextInput,View,type TextInputProps,type ViewStyle} from 'react-native'
+import {Animated,Image,Linking,Platform,Pressable,Text,TextInput,View,type TextInputProps,type ViewStyle} from 'react-native'
 import {danger,lime,teacherGold,themes,type Person} from './index'
 import {art} from './art'
 import {glyphs,type Glyph,type IconRendererProps} from './icons'
@@ -8,6 +8,7 @@ export type {Glyph,IconRendererProps} from './icons'
 export const Design=createContext({
   theme:themes.light,
   reduced:false,
+  renderVideo:undefined as React.ComponentType<{uri:string;autoPlay?:boolean}>|undefined,
   font:(weight:number)=>({fontWeight:String(weight) as '500'|'700'|'800'}) as object,
   renderIcon:((_:IconRendererProps)=>null) as React.ComponentType<IconRendererProps>,
 })
@@ -20,6 +21,20 @@ export function Copy({children,size=14,weight=500,color,center=false}:{children:
   const {theme,font}=useDesign()
   const lineHeight=Math.ceil(size*(size>=30?1.1:size>=20?1.22:1.42))
   return <Text style={[{color:color??theme.text,fontSize:size,lineHeight,letterSpacing:size>=24?-size*.035:size>=18?-.35:0,textAlign:center?'center':'left'},font(weight)]}>{children}</Text>
+}
+
+const postedLink=/((?:https?:\/\/|www\.)[^\s<]+)/gi
+export function LinkedText({children,size=14,weight=500,color,linkColor}:{children:string;size?:number;weight?:number;color?:string;linkColor?:string}){
+  const {theme,font}=useDesign()
+  const lineHeight=Math.ceil(size*(size>=30?1.1:size>=20?1.22:1.42))
+  const pieces=children.split(postedLink)
+  return <Text style={[{color:color??theme.text,fontSize:size,lineHeight},font(weight)]}>{pieces.map((piece,index)=>{
+    if(!/^(?:https?:\/\/|www\.)/i.test(piece))return piece
+    const match=piece.match(/^(.*?)([.,!?;:)}\]]*)$/)
+    const label=match?.[1]??piece,suffix=match?.[2]??''
+    const url=/^www\./i.test(label)?'https://'+label:label
+    return <React.Fragment key={index}><Text accessibilityRole="link" accessibilityLabel={'Open '+label} onPress={event=>{event.stopPropagation?.();void Linking.openURL(url)}} style={[{color:linkColor??theme.purple,textDecorationLine:'underline'},font(800)]}>{label}</Text>{suffix}</React.Fragment>
+  })}</Text>
 }
 
 export function ScreenLinks<Page extends string>({items,open}:{items:readonly (readonly [Page,Glyph])[];open:(page:Page)=>void}){
@@ -95,8 +110,15 @@ export function Field({label,glyph,action,onAction,actionLabel,style,onFocus,onB
 export function Avatar({person,size=44,ring=false,seen=false}:{person:Person;size?:number;ring?:boolean;seen?:boolean}){
   const {theme}=useDesign()
   const radius=person.role==='tech'?size*.28:size/2
+  const username=displayHandle(person)
+  const [firstPart,secondPart]=username.split('_').filter(Boolean)
+  const usernameInitials=secondPart?firstPart[0]+secondPart[0]:(firstPart??username).slice(0,2)
+  const initials=person.group?person.initials:usernameInitials.toUpperCase()
   return <View style={ring?{borderWidth:1.5,borderColor:seen?theme.border:theme.purple,borderRadius:radius+4,padding:3}:undefined}>
-    <View style={{width:size,height:size,borderRadius:radius,backgroundColor:person.color,overflow:'hidden',alignItems:'center',justifyContent:'center'}}><Copy color="#1B1233" size={size*.29} weight={800}>{person.initials}</Copy>{person.avatar&&<Image accessibilityLabel={person.name+' profile photo'} source={{uri:person.avatar}} resizeMode="cover" style={{position:'absolute',width:size,height:size}}/>}</View>
+    <View style={{width:size,height:size,borderRadius:radius,backgroundColor:person.color,overflow:'hidden',alignItems:'center',justifyContent:'center'}}>
+      <Copy color="#1B1233" size={size*.29} weight={800}>{initials}</Copy>
+      {person.avatar&&<Image accessibilityLabel={username+' profile photo'} source={{uri:person.avatar}} resizeMode="cover" style={{position:'absolute',width:size,height:size,borderRadius:radius}}/>}
+    </View>
   </View>
 }
 
@@ -105,9 +127,11 @@ export function VerifiedBadge({person}:{person:Person}){
   if(!person.teacher&&!person.verified)return null
   return <View accessibilityLabel={person.teacher?'Verified teacher':'Verified'} style={{backgroundColor:person.teacher?teacherGold:theme.purple,width:16,height:16,borderRadius:8,alignItems:'center',justifyContent:'center'}}><Icon name="check" size={11} color="#fff" strong/></View>
 }
+export const displayHandle=(person:Person)=>person.group?person.name:person.username?.replace(/^@+/,'')||'member_'+person.id.slice(0,8)
+
 export function PersonName({person}:{person:Person}){
   return <View style={{...row,gap:5}}>
-    <Copy weight={800}>{person.name}</Copy>
+    <Copy weight={800}>{displayHandle(person)}</Copy>
     <VerifiedBadge person={person}/>
   </View>
 }
@@ -116,7 +140,7 @@ export function Logo({variant='brand',size=40}:{variant?:'brand'|'inverse';size?
   const {theme}=useDesign()
   const uri=variant==='inverse'||theme===themes.dark?art.limeLogo:art.purpleLogo
   return <Image
-    accessibilityLabel="dameeland"
+    accessibilityLabel="dameen"
     source={{uri}}
     resizeMode="contain"
     style={{width:size,height:size,flexShrink:0}}

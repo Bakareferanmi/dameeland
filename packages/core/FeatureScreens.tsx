@@ -1,5 +1,7 @@
 import React,{useEffect,useState} from 'react'
 import {View} from 'react-native'
+import WhotGame from './WhotGame'
+import LudoGame from './LudoGame'
 import {lime,people,type Person} from './index'
 import {Avatar,Button,Card,Copy,Field,IconTile,Logo,PersonName,ScreenLinks,Segmented,row,spread,stack,useDesign,type Glyph} from './ui'
 
@@ -46,25 +48,6 @@ function StudyTimer({demo}:{demo:boolean}){
   </>
 }
 
-const chapters=[
-  {title:'Spot a quadratic',body:'A quadratic equation has a highest power of 2. Write it as ax² + bx + c = 0, where a is not zero.'},
-  {title:'Factorise the expression',body:'For x² + 5x + 6 = 0, look for two numbers that multiply to 6 and add to 5. Those numbers are 2 and 3.'},
-  {title:'Find and check the roots',body:'Set each factor equal to zero. (x + 2)(x + 3) = 0 gives x = −2 or x = −3. Substitute each value into the original equation to check.'},
-]
-
-function Lesson({markComplete,completed}:{markComplete:()=>void;completed:boolean}){
-  const [chapter,setChapter]=useState(0)
-  return <>
-    <FeatureIntro title="Quadratic equations" detail="Mathematics · 3 chapters" glyph="book"/>
-    <Card><Copy size={20} weight={800}>{chapters[chapter].title}</Copy><Copy>{chapters[chapter].body}</Copy></Card>
-    <Card>
-      <Copy size={19} weight={800}>Chapters</Copy>
-      {chapters.map((item,i)=><Button key={item.title} label={item.title} variant={i===chapter?'primary':'secondary'} onPress={()=>setChapter(i)}/>)}
-    </Card>
-    <Button label={completed?'Lesson complete':'Mark lesson complete'} disabled={completed} leading="check" onPress={markComplete}/>
-  </>
-}
-
 function TeacherDashboard(){
   const [title,setTitle]=useState('')
   const [assignments,setAssignments]=useState(['Quadratic equations practice'])
@@ -88,13 +71,20 @@ function Events(){
 }
 
 function Games({startQuiz}:{startQuiz:()=>void}){
+  const [whot,setWhot]=useState(false)
+  const [ludo,setLudo]=useState(false)
   const [mode,setMode]=useState<'Word Sprint'|'Number Dash'|null>(null)
   const [answer,setAnswer]=useState('')
   const [result,setResult]=useState('')
   const start=(game:'Word Sprint'|'Number Dash')=>{setMode(game);setAnswer('');setResult('')}
+  if(whot)return <><Button label="Back to games" variant="plain" onPress={()=>setWhot(false)}/><WhotGame/></>
+  if(ludo)return <><Button label="Back to games" variant="plain" onPress={()=>setLudo(false)}/><LudoGame/></>
   return <>
     <FeatureIntro title="Games hub" detail="Pick a quick game to play." glyph="game"/>
     <Button label="Play Quiz Duel" onPress={startQuiz}/>
+    <Button label="Play Whot vs computer" leading="game" onPress={()=>setWhot(true)}/>
+    <Copy>To play Whot with a friend, open your messages with them and tap Play Whot together.</Copy>
+    <Button label="Play Ludo" leading="game" onPress={()=>setLudo(true)}/>
     <View style={{...row,flexWrap:'wrap'}}><Button label="Word Sprint" variant="secondary" onPress={()=>start('Word Sprint')}/><Button label="Number Dash" variant="secondary" onPress={()=>start('Number Dash')}/></View>
     {mode&&<Card><Copy size={20} weight={800}>{mode}</Copy><Copy>{mode==='Word Sprint'?'Unscramble OKBO.':'What is 12 × 4?'}</Copy><Field label="Your answer" value={answer} onChangeText={setAnswer}/><Button label="Check answer" disabled={!answer.trim()} onPress={()=>setResult(answer.trim().toLowerCase()===(mode==='Word Sprint'?'book':'48')?'Correct!':'Try again.')}/>{!!result&&<Copy weight={800}>{result}</Copy>}</Card>}
   </>
@@ -103,7 +93,7 @@ function Games({startQuiz}:{startQuiz:()=>void}){
 function DesignBoard({logoOnly=false}:{logoOnly?:boolean}){
   const {theme}=useDesign()
   return <>
-    <Card><Copy size={20} weight={800}>dameeland mark</Copy><View style={row}><Logo size={72}/><View style={{backgroundColor:'#4F25D6',borderRadius:12,padding:8}}><Logo size={72} variant="inverse"/></View></View></Card>
+    <Card><Copy size={20} weight={800}>dameen mark</Copy><View style={row}><Logo size={72}/><View style={{backgroundColor:'#4F25D6',borderRadius:12,padding:8}}><Logo size={72} variant="inverse"/></View></View></Card>
     {!logoOnly&&<Card>
       <Copy size={22} weight={800}>Plus Jakarta Sans</Copy><Copy>Body text, avatar shapes, and brand colours</Copy>
       <View style={row}><Avatar person={people[0]}/><Avatar person={people[1]}/></View>
@@ -112,13 +102,12 @@ function DesignBoard({logoOnly=false}:{logoOnly?:boolean}){
   </>
 }
 
-type ScreenProps={page:ExtraPage;open:Open;demo:boolean;user:Person;startQuiz:()=>void;markComplete:()=>void;completed:boolean;wish:()=>void;wishes:string[];incomingCall:()=>void}
-export default function FeatureScreen({page,open,demo,user,startQuiz,markComplete,completed,wish,wishes,incomingCall}:ScreenProps){
+type ScreenProps={page:ExtraPage;open:Open;demo:boolean;user:Person;startQuiz:()=>void;completed:boolean;wish:()=>void;wishes:string[];incomingCall:()=>void}
+export default function FeatureScreen({page,open,demo,user,startQuiz,completed,wish,wishes,incomingCall}:ScreenProps){
   const {theme}=useDesign()
   const [showBirthday,setShowBirthday]=useState(true)
   const [claimed,setClaimed]=useState(false)
   switch(page){
-    case 'Lesson':return <Lesson markComplete={markComplete} completed={completed}/>
     case 'Teacher dashboard':return <TeacherDashboard/>
     case 'Study timer':return <StudyTimer demo={demo}/>
     case 'Events':return <Events/>
@@ -128,12 +117,6 @@ export default function FeatureScreen({page,open,demo,user,startQuiz,markComplet
     case 'Leaderboard':return <>
       <FeatureIntro title="Quiz leaderboard" detail="This week’s Quiz Duel standings." glyph="trophy"/>
       <Card>{[people[1],people[0],people[2],user].map((person,i)=><View key={i} style={spread}><View style={row}><Copy weight={800}>{i+1}</Copy><Avatar person={person} size={34}/><PersonName person={person}/></View><Copy color={theme.ink} weight={800}>{[620,540,410,240][i]} XP</Copy></View>)}</Card>
-    </>
-    case 'Progress':return <>
-      <FeatureIntro title="Your progress" detail="See what you’ve finished and pick up where you left off." glyph="book"/>
-      <Card><Copy size={20} weight={800}>Weekly lesson goal</Copy><Copy>{completed?1:0} of 3 lessons complete</Copy><View style={{height:8,backgroundColor:theme.chip,borderRadius:4}}><View style={{width:completed?'33%':'0%',height:8,borderRadius:4,backgroundColor:theme.purple}}/></View><Button label="Open maths lesson" variant="secondary" onPress={()=>open('Lesson')}/></Card>
-      <Card><Copy size={20} weight={800}>Study week</Copy><View style={{...row,flexWrap:'wrap'}}>{['Mon','Tue','Wed','Thu','Fri','Sat','Sun'].map((day,i)=><View key={day} style={{padding:8,borderRadius:8,backgroundColor:(demo&&i<3)||(completed&&i===4)?theme.chip:theme.bg}}><Copy color={theme.ink} size={12}>{day}</Copy></View>)}</View></Card>
-      <Card><Copy size={20} weight={800}>Subject mastery</Copy>{([['Mathematics',completed?82:72],['English',48],['Digital Technologies',60]] as const).map(([name,score])=><View key={name} style={{gap:5}}><View style={spread}><Copy>{name}</Copy><Copy>{demo||name==='Mathematics'&&completed?score:0}%</Copy></View><View style={{height:6,borderRadius:3,backgroundColor:theme.chip}}><View style={{height:6,borderRadius:3,backgroundColor:theme.purple,width:`${demo||name==='Mathematics'&&completed?score:0}%`}}/></View></View>)}</Card>
     </>
     case 'Rewards':return <>
       <FeatureIntro title="Rewards and badges" detail={claimed?'10 coins claimed today.':'Your daily reward is ready.'} glyph="trophy"/>
