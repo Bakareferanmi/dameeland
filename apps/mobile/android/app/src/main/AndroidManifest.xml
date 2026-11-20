@@ -39,7 +39,8 @@
         <action android:name="android.intent.action.VIEW"/>
         <category android:name="android.intent.category.DEFAULT"/>
         <category android:name="android.intent.category.BROWSABLE"/>
-        <data android:scheme="https" android:host="dameen.app"/>
+        <data android:scheme="https" android:host="dameen.app" android:pathPrefix="/u/"/>
+        <data android:scheme="https" android:host="dameen.app" android:pathPrefix="/p/"/>
       </intent-filter>
     </activity>
   </application>
