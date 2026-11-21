@@ -900,9 +900,9 @@ app.post('/api/logout',async c=>{
   await c.env.DB.prepare('DELETE FROM sessions WHERE token_hash=?').bind(c.get('tokenHash')).run()
   return c.json({ok:true})
 })
-type PostRow=PublicAccount&{post_id:string;body:string;created:number;edited_at:number|null;media:string|null;media_kind:'image'|'video'|null;likes:number;liked:number;comments:number;reposts:number;reposted:number;rank_score:number;search_public:number}
+type PostRow=PublicAccount&{post_id:string;body:string;created:number;edited_at:number|null;media:string|null;media_kind:'image'|'video'|null;likes:number;liked:number;comments:number;reposts:number;reposted:number;rank_score:number;search_public:number;article_id:string|null}
 const postProjection=`
-    SELECT u.id,u.name,u.role,u.username,u.verified,u.teacher,u.dob,u.avatar_media,u.cover_media,u.bio,p.id post_id,p.body,p.created,p.edited_at,p.media,p.media_kind,p.search_public,
+    SELECT u.id,u.name,u.role,u.username,u.verified,u.teacher,u.dob,u.avatar_media,u.cover_media,u.bio,p.id post_id,p.body,p.created,p.edited_at,p.media,p.media_kind,p.search_public,p.article_id,
     (SELECT COUNT(*) FROM reactions r WHERE r.post_id=p.id AND kind='like') likes,
     EXISTS(SELECT 1 FROM reactions r WHERE r.post_id=p.id AND r.user_id=? AND kind='like') liked,
     (SELECT COUNT(*) FROM comments x WHERE x.post_id=p.id) comments,
@@ -917,7 +917,7 @@ const postProjection=`
       / (1 + ((strftime('%s','now') * 1000 - p.created) / 3600000.0) / 12.0) rank_score
     FROM posts p JOIN users u ON u.id=p.author
 `
-const postView=(r:PostRow,url:string)=>({id:r.post_id,author:person(r,url),body:r.body,time:time(r.created),createdAt:r.created,editedAt:r.edited_at?time(r.edited_at):undefined,likes:r.likes,liked:Boolean(r.liked),comments:r.comments,reposts:r.reposts,reposted:Boolean(r.reposted),searchPublic:Boolean(r.search_public),kind:r.media_kind??undefined,media:r.media?new URL('/api/media/'+r.media,url).href:undefined})
+const postView=(r:PostRow,url:string)=>({id:r.post_id,author:person(r,url),body:r.body,time:time(r.created),createdAt:r.created,editedAt:r.edited_at?time(r.edited_at):undefined,likes:r.likes,liked:Boolean(r.liked),comments:r.comments,reposts:r.reposts,reposted:Boolean(r.reposted),searchPublic:Boolean(r.search_public),articleId:r.article_id??undefined,kind:r.media_kind??undefined,media:r.media?new URL('/api/media/'+r.media,url).href:undefined})
 app.get('/api/feed',async c=>{
   const id=c.get('user').id
   const following=c.req.query('following')==='1'
@@ -1580,6 +1580,26 @@ const articleCanWrite=async(env:Env,account:PublicAccount)=>isAdmin(env,account)
 const articleView=(row:ArticleRow,url:string)=>({id:row.article_id,title:row.title,summary:row.summary,author:person(row,url),status:row.status,minutes:Math.max(1,Math.ceil(row.size/1200)),publishedAt:row.published_at?time(row.published_at):undefined,updatedAt:time(row.updated),body:row.body})
 const articleInput=(input:Record<string,unknown>|null)=>({title:clean(input?.title,140),summary:clean(input?.summary,240),body:clean(input?.body,30000),publish:input?.publish===true})
 const articleProblem=(input:{title:string;body:string;publish:boolean})=>input.title.length<3?'Give the article a title of at least 3 characters.':!input.body?'Write something before saving.':input.publish&&input.body.length<100?'Write a few paragraphs before publishing.':''
+const pressSeenAt=async(db:D1Database,user:string)=>(await db.prepare('SELECT seen_at FROM press_seen WHERE user_id=?').bind(user).first<{seen_at:number}>())?.seen_at??now()-14*86400000
+const articlePostBody=(title:string,summary:string)=>('📰 New in the Press Club\n'+title+(summary?'\n\n'+summary:'')).slice(0,1200)
+const syncArticlePost=async(db:D1Database,id:string,author:string,title:string,summary:string,publish:boolean)=>{
+  if(!publish){await db.prepare('DELETE FROM posts WHERE article_id=?').bind(id).run();return}
+  const body=articlePostBody(title,summary)
+  await db.batch([
+    db.prepare('UPDATE posts SET body=? WHERE article_id=?').bind(body,id),
+    db.prepare('INSERT INTO posts(id,author,body,created,article_id) SELECT ?,?,?,?,? WHERE NOT EXISTS(SELECT 1 FROM posts WHERE article_id=?)').bind(crypto.randomUUID(),author,body,now(),id,id),
+  ])
+}
+app.get('/api/articles/unread',async c=>{
+  const user=c.get('user').id,since=await pressSeenAt(c.env.DB,user)
+  const row=await c.env.DB.prepare("SELECT COUNT(*) count FROM articles WHERE status='published' AND author!=? AND published_at>?").bind(user,since).first<{count:number}>()
+  c.header('Cache-Control','no-store')
+  return c.json({count:row?.count??0})
+})
+app.put('/api/articles/seen',async c=>{
+  await c.env.DB.prepare('INSERT INTO press_seen(user_id,seen_at) VALUES (?,?) ON CONFLICT(user_id) DO UPDATE SET seen_at=excluded.seen_at').bind(c.get('user').id,now()).run()
+  return c.json({ok:true})
+})
 app.get('/api/articles/access',async c=>c.json({canWrite:await articleCanWrite(c.env,c.get('user'))}))
 app.get('/api/articles/mine',async c=>{
   const account=c.get('user')
@@ -1593,7 +1613,7 @@ app.get('/api/articles',async c=>{
   const {results}=await c.env.DB.prepare(`SELECT ${articleList} FROM articles a JOIN users u ON u.id=a.author WHERE a.status='published' AND a.published_at<? ORDER BY a.published_at DESC LIMIT 21`).bind(before).all<ArticleRow>()
   const page=results.slice(0,20)
   c.header('Cache-Control','no-store')
-  return c.json({items:page.map(row=>articleView(row,c.req.url)),nextCursor:results.length>20?String(page[19].published_at):null})
+  return c.json({items:page.map(row=>articleView(row,c.req.url)),nextCursor:results.length>20?String(page[19].published_at):null,seenAt:await pressSeenAt(c.env.DB,c.get('user').id)})
 })
 app.get('/api/articles/:id',async c=>{
   const account=c.get('user')
@@ -1609,6 +1629,7 @@ app.post('/api/articles',async c=>{
   if(problem)return c.json({error:problem},400)
   const id=crypto.randomUUID(),at=now()
   await c.env.DB.prepare('INSERT INTO articles(id,author,title,summary,body,status,created,updated,published_at) VALUES (?,?,?,?,?,?,?,?,?)').bind(id,account.id,input.title,input.summary,input.body,input.publish?'published':'draft',at,at,input.publish?at:null).run()
+  await syncArticlePost(c.env.DB,id,account.id,input.title,input.summary,input.publish)
   return c.json({id,status:input.publish?'published':'draft'},201)
 })
 app.put('/api/articles/:id',async c=>{
@@ -1620,13 +1641,14 @@ app.put('/api/articles/:id',async c=>{
   if(problem)return c.json({error:problem},400)
   const at=now()
   await c.env.DB.prepare('UPDATE articles SET title=?,summary=?,body=?,status=?,updated=?,published_at=? WHERE id=?').bind(input.title,input.summary,input.body,input.publish?'published':'draft',at,input.publish?(existing.published_at??at):existing.published_at,id).run()
+  await syncArticlePost(c.env.DB,id,account.id,input.title,input.summary,input.publish)
   return c.json({id,status:input.publish?'published':'draft'})
 })
 app.delete('/api/articles/:id',async c=>{
   const account=c.get('user'),id=c.req.param('id')
   const existing=await c.env.DB.prepare('SELECT author FROM articles WHERE id=?').bind(id).first<{author:string}>()
   if(!existing||(existing.author!==account.id&&!isAdmin(c.env,account)))return c.json({error:'This article is unavailable.'},404)
-  await c.env.DB.prepare('DELETE FROM articles WHERE id=?').bind(id).run()
+  await c.env.DB.batch([c.env.DB.prepare('DELETE FROM posts WHERE article_id=?').bind(id),c.env.DB.prepare('DELETE FROM articles WHERE id=?').bind(id)])
   return c.json({ok:true})
 })
 app.get('/api/admin/press',async c=>{
