@@ -501,7 +501,9 @@ const unreadMessageCount=(db:D1Database,user:string)=>db.prepare(`
       EXISTS(SELECT 1 FROM rooms d WHERE d.id=m.room AND (d.first_user=v.id OR d.second_user=v.id))
       OR EXISTS(SELECT 1 FROM group_members g WHERE g.group_id=m.room AND g.user_id=v.id)
     )
-    AND ((r.last_read_at IS NOT NULL AND m.created>r.last_read_at) OR (r.last_read_at IS NULL AND m.read_at IS NULL))
+    AND (CASE WHEN r.last_read_at IS NOT NULL THEN m.created>r.last_read_at
+      WHEN EXISTS(SELECT 1 FROM group_members gj WHERE gj.group_id=m.room AND gj.user_id=v.id) THEN m.created>(SELECT gj2.joined FROM group_members gj2 WHERE gj2.group_id=m.room AND gj2.user_id=v.id)
+      ELSE m.read_at IS NULL END)
 `).bind(user).first<{count:number}>()
 app.get('/api/notifications',async c=>{
   const user=c.get('user').id
@@ -1198,7 +1200,7 @@ app.get('/api/rooms',async c=>{
     WHERE r.first_user=? OR r.second_user=? ORDER BY MAX(COALESCE(m.created,0),COALESCE(x.created,0)) DESC LIMIT 60`).bind(user,user,user,now(),now(),user,user).all<PublicAccount&{room:string;last_body:string|null;message_at:number|null;call_video:number|null;call_caller:string|null;call_state:string|null;call_connected_at:number|null;call_ended_at:number|null;call_at:number|null;streak_count:number|null;streak_expires:number|null;unread_count:number}>(),c.env.DB.prepare(`
     SELECT g.id room,g.name,g.created,g.photo_media,COUNT(gm2.user_id) members,m.body last_body,m.created message_at,
       (SELECT COUNT(*) FROM messages um LEFT JOIN chat_read_state ur ON ur.room=um.room AND ur.user_id=?
-        WHERE um.room=g.id AND um.author!=? AND ((ur.last_read_at IS NOT NULL AND um.created>ur.last_read_at) OR (ur.last_read_at IS NULL AND um.read_at IS NULL))) unread_count
+        WHERE um.room=g.id AND um.author!=? AND um.created>COALESCE(ur.last_read_at,mine.joined)) unread_count
     FROM chat_groups g JOIN group_members mine ON mine.group_id=g.id AND mine.user_id=?
     JOIN group_members gm2 ON gm2.group_id=g.id
     LEFT JOIN messages m ON m.id=(SELECT id FROM messages WHERE room=g.id ORDER BY created DESC LIMIT 1)

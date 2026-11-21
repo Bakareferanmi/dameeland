@@ -93,7 +93,7 @@ type Props={
   renderVideo?:React.ComponentType<{uri:string;autoPlay?:boolean}>; renderAudio?:React.ComponentType<{uri:string}>;
   notificationTarget?:string;
   modalViewport?:React.ComponentType<{color:string;children:React.ReactNode}>;
-  pickMedia?:()=>Promise<Media|null>; pickCamera?:()=>Promise<Media|null>; pickCommentMedia?:()=>Promise<Media|null>; voiceRecorder?:{start:()=>Promise<void>;stop:()=>Promise<Media|null>}; saveMedia?:(url:string,name:string)=>Promise<void>; renderGif?:GifRenderer; share?:(url:string,details?:{title:string;message:string})=>Promise<void>;
+  pickMedia?:()=>Promise<Media|null>; pickCamera?:(options?:{maxDuration?:number})=>Promise<Media|null>; pickCommentMedia?:()=>Promise<Media|null>; voiceRecorder?:{start:()=>Promise<void>;stop:()=>Promise<Media|null>}; saveMedia?:(url:string,name:string)=>Promise<void>; renderGif?:GifRenderer; share?:(url:string,details?:{title:string;message:string})=>Promise<void>;
   requestNotifications?:()=>Promise<boolean>; getNotificationDevice?:()=>Promise<{platform:'android'|'ios'|'pwa';token:string;endpoint?:string}|null>; notifyDevice?:(title:string,body:string)=>Promise<void>;
   onReady?:()=>void;
 }
@@ -796,6 +796,7 @@ export default function App(props:Props){
     if(demo||!token||page!=='Chat'||!roomId)return
     let active=true
     let lastSync=0
+    let markedUntil=0
     let syncing=false
     const endpoint=base||((typeof window!=='undefined'&&window.location?.origin)||'')
     const url=endpoint.replace(/^http/,'ws').replace(/\/$/,'')+'/api/rooms/'+roomId+'/socket'
@@ -803,7 +804,7 @@ export default function App(props:Props){
       if(syncing)return
       syncing=true
       return api<MessagePage>(base,'/rooms/'+roomId+'/messages?paged=1',{},token)
-      .then(data=>{if(active){lastSync=Date.now();setMessageNextCursor(previous=>roomId in previous?previous:{...previous,[roomId]:data.nextCursor});setChats(previous=>({...previous,[roomId]:mergeNotes(previous[roomId]??[],data.items)}));setFeedError('');if(foreground()&&data.items.some(item=>!item.call&&item.author.id!==user.id&&!item.readAt))void markRoomRead(roomId)}})
+      .then(data=>{if(active){lastSync=Date.now();setMessageNextCursor(previous=>roomId in previous?previous:{...previous,[roomId]:data.nextCursor});setChats(previous=>({...previous,[roomId]:mergeNotes(previous[roomId]??[],data.items)}));setFeedError('');if(foreground()){const latest=data.items.reduce((max,item)=>!item.call&&item.author.id!==user.id?Math.max(max,Date.parse(item.createdAt??'')||0):max,0);if(latest>markedUntil){markedUntil=latest;void markRoomRead(roomId)}}}})
       .catch(reason=>{if(active)setFeedError(errorMessage(reason))})
       .finally(()=>{syncing=false})
     }
@@ -832,7 +833,8 @@ export default function App(props:Props){
         setChats(previous=>({...previous,[roomId]:(previous[roomId]??[]).filter(item=>item.id!==data.id)}))
         return
       }
-      const item=data as Note
+      const incoming=data as Note
+      const item:Note=incoming.viewOnce&&incoming.author.id!==user.id&&!incoming.viewOnce.opened?{...incoming,viewOnce:{...incoming.viewOnce,canOpen:true}}:incoming
       setChats(previous=>({...previous,[roomId]:[...(previous[roomId]??[]).filter(m=>m.id!==item.id),item]}))
       if(item.author.id!==user.id){
         if(foreground())void markRoomRead(roomId)
@@ -1554,7 +1556,7 @@ export default function App(props:Props){
   }
   async function pickChatMedia(source:'gallery'|'camera',viewOnce=false){
     try{
-      const media=await (source==='camera'?props.pickCamera?.():props.pickMedia?.())
+      const media=await (source==='camera'?props.pickCamera?.(viewOnce?{maxDuration:10}:undefined):props.pickMedia?.())
       if(!media)return
       if(viewOnce&&media.kind==='video'&&(!media.duration||media.duration>10.25)){fail(new Error('View-once videos can be up to 10 seconds.'));return}
       setChatMedia(media);setChatViewOnce(viewOnce);setChatTools(false)
@@ -1796,6 +1798,7 @@ export default function App(props:Props){
       const own=item.author.id===user.id
       const canEdit=own&&verifiedBenefits&&(demo||withinEditWindow(item.createdAt))
       return <View key={item.id} style={{alignSelf:own?'flex-end':'flex-start',backgroundColor:own?theme.purple:theme.card,maxWidth:'84%',borderRadius:18,borderBottomLeftRadius:own?18:5,borderBottomRightRadius:own?5:18,borderWidth:1,borderColor:own?theme.purple:theme.border,padding:12,gap:5}}>
+        {!own&&room.person.group&&<View style={{...row,gap:6}}><Avatar person={item.author} size={20}/><Copy size={11} weight={800} color={theme.purple}>{item.author.name||displayHandle(item.author)}</Copy></View>}
         {!!item.body&&<LinkedText color={own?'#fff':theme.text} linkColor={own?lime:theme.purple}>{item.body}</LinkedText>}
         {item.chatMedia&&<View style={{gap:7,minWidth:220}}>
           {item.chatMedia.kind==='image'?<Image accessibilityLabel="Chat photo" source={{uri:item.chatMedia.url}} resizeMode="cover" style={{width:260,maxWidth:'100%',height:220,borderRadius:13}}/>:item.chatMedia.kind==='video'?(Platform.OS==='web'?React.createElement('video',{src:item.chatMedia.url,controls:true,playsInline:true,style:{width:'100%',maxHeight:280,borderRadius:13,backgroundColor:'#000'}}):props.renderVideo?<props.renderVideo uri={item.chatMedia.url}/>:<Copy color={own?'#fff':theme.text}>Video</Copy>):Platform.OS==='web'?React.createElement('audio',{src:item.chatMedia.url,controls:true,style:{width:'100%'}}):props.renderAudio?<props.renderAudio uri={item.chatMedia.url}/>:<Copy color={own?'#fff':theme.text}>Voice note</Copy>}

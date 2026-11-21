@@ -87,11 +87,11 @@ async function pickMedia(comment=false){
   if(result.canceled)return null
   return selectedMedia(result.assets[0])
 }
-async function captureMedia(){
+async function captureMedia(options?:{maxDuration?:number}){
   const ImagePicker=await import('expo-image-picker')
   const permission=await ImagePicker.requestCameraPermissionsAsync()
   if(!permission.granted)throw new Error('Allow camera access to take a photo or video.')
-  const result=await ImagePicker.launchCameraAsync({mediaTypes:['images','videos'],quality:.75,allowsEditing:false,videoMaxDuration:60})
+  const result=await ImagePicker.launchCameraAsync({mediaTypes:['images','videos'],quality:.75,allowsEditing:false,videoMaxDuration:options?.maxDuration??60})
   if(result.canceled)return null
   return selectedMedia(result.assets[0])
 }
