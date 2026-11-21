@@ -265,15 +265,15 @@ function Auth({base,demo,busy,error,submit,onGoogle,onCancelGoogle,googlePending
 function StoryRow({onStory,onCreate,onAdd,seen,own,others}:{onStory:(p:Person)=>void;onCreate:()=>void;onAdd?:()=>void;seen:Set<string>;own:Person|null;others:Person[]}){
   const {theme}=useDesign()
   return <ScrollView horizontal directionalLockEnabled showsHorizontalScrollIndicator={false} contentContainerStyle={{...row,alignItems:'flex-start',gap:10,paddingVertical:1}}>
-    <View style={{width:58,alignItems:'center',gap:7}}>
+    <View style={{width:66,alignItems:'center',gap:7}}>
       <Pressable accessibilityRole="button" accessibilityLabel="Your story" onPress={onCreate} style={({pressed})=>({width:52,height:52,alignItems:'center',justifyContent:'center',transform:[{scale:pressed?.92:1}]})}>
         {own?<Avatar person={own} size={44} ring seen={seen.has(own.id)}/>:<View style={{width:52,height:52,borderRadius:26,borderWidth:1,borderStyle:'dashed',borderColor:theme.purple,backgroundColor:theme.chip,alignItems:'center',justifyContent:'center'}}><Icon name="plus" color={theme.ink}/></View>}
       </Pressable>
-      {own&&onAdd&&<Pressable accessibilityRole="button" accessibilityLabel="Add another story" onPress={onAdd} style={{position:'absolute',right:0,top:29,width:23,height:23,borderRadius:12,backgroundColor:theme.purple,borderWidth:2,borderColor:theme.card,alignItems:'center',justifyContent:'center'}}><Icon name="plus" color="#fff" size={14}/></Pressable>}
-      <Copy size={10} weight={800}>Your story</Copy>
+      {own&&onAdd&&<Pressable accessibilityRole="button" accessibilityLabel="Add another story" onPress={onAdd} style={{position:'absolute',right:7,top:29,width:23,height:23,borderRadius:12,backgroundColor:theme.purple,borderWidth:2,borderColor:theme.card,alignItems:'center',justifyContent:'center'}}><Icon name="plus" color="#fff" size={14}/></Pressable>}
+      <Copy size={10} weight={800} center>Your story</Copy>
     </View>
-    {others.map(person=><Pressable key={person.id} accessibilityRole="button" accessibilityLabel={person.name+' story'} onPress={()=>onStory(person)} style={({pressed})=>({width:52,alignItems:'center',gap:7,transform:[{scale:pressed?.92:1}]})}>
-      <View style={{height:52,justifyContent:'center'}}><Avatar person={person} size={44} ring seen={seen.has(person.id)}/></View><Copy size={10} weight={700}>{person.name.split(' ')[0]}</Copy>
+    {others.map(person=><Pressable key={person.id} accessibilityRole="button" accessibilityLabel={person.name+' story'} onPress={()=>onStory(person)} style={({pressed})=>({width:60,alignItems:'center',gap:7,transform:[{scale:pressed?.92:1}]})}>
+      <View style={{height:52,justifyContent:'center'}}><Avatar person={person} size={44} ring seen={seen.has(person.id)}/></View><Copy size={10} weight={700} center>{person.name.split(' ')[0]}</Copy>
     </Pressable>)}
   </ScrollView>
 }
@@ -1827,7 +1827,7 @@ export default function App(props:Props){
         {item.viewOnce&&<Pressable accessibilityRole="button" disabled={own||item.viewOnce.opened||!item.viewOnce.canOpen||busy} onPress={()=>void openViewOnce(item)} style={{...row,minHeight:48,paddingHorizontal:10,borderRadius:13,backgroundColor:own?'#FFFFFF20':theme.chip}}><Icon name={item.viewOnce.kind==='video'?'vid':'image'} color={own?'#fff':theme.purple}/><View style={{flex:1}}><Copy color={own?'#fff':theme.text} weight={800}>{item.viewOnce.opened?'Opened':own?'View once sent':'Tap to view once'}</Copy><Copy color={own?'#FFFFFFCC':theme.muted} size={11}>{item.viewOnce.kind==='video'?'Video · up to 10 seconds':'Photo'}</Copy></View></Pressable>}
         {!!item.editedAt&&<Copy size={10} color={own?'#FFFFFFCC':theme.muted}>Edited</Copy>}
         {own&&lastOwnMessageId===item.id&&<Copy size={11} color="#FFFFFFCC">{item.readAt?'Seen · '+shortTime(item.readAt):'Sent'}</Copy>}
-        {own&&verifiedBenefits&&<View style={{...row,gap:4,flexWrap:'wrap'}}>{canEdit&&<Button label="Edit" variant="plain" onPress={()=>{setComment(item.body);selectOverlay({kind:'editMessage',message:item})}}/>}<Button label="Delete" variant="plain" onPress={()=>void deleteMessage(item)}/></View>}
+        {own&&verifiedBenefits&&<View style={{...row,gap:16,flexWrap:'wrap',borderTopWidth:1,borderTopColor:'#FFFFFF2E',paddingTop:2}}>{canEdit&&<Pressable accessibilityRole="button" accessibilityLabel="Edit message" onPress={()=>{setComment(item.body);selectOverlay({kind:'editMessage',message:item})}} style={{minHeight:36,justifyContent:'center'}}><Copy size={12} weight={800} color="#FFFFFFD9">Edit</Copy></Pressable>}<Pressable accessibilityRole="button" accessibilityLabel="Delete message" onPress={()=>void deleteMessage(item)} style={{minHeight:36,justifyContent:'center'}}><Copy size={12} weight={800} color="#FFFFFFD9">Delete</Copy></Pressable></View>}
       </View>
     })())}
     {!room.person.group&&verifiedBenefits&&!streak&&<Card style={{...row,backgroundColor:'#F4FFD7',borderColor:lime,borderWidth:2}}><View style={{width:46,height:46,borderRadius:23,backgroundColor:lime,alignItems:'center',justifyContent:'center'}}><Copy size={23}>🔥</Copy></View><View style={{flex:1,gap:3}}><Copy color="#25163F" size={17} weight={800}>Start a streak</Copy><Copy size={12} color="#5A4C70">Message each other daily and unlock milestones.</Copy></View><Button label="Start" variant="fun" disabled={busy} onPress={()=>void startStreak()}/></Card>}
