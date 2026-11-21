@@ -8,7 +8,7 @@ export type {Glyph,IconRendererProps} from './icons'
 export const Design=createContext({
   theme:themes.light,
   reduced:false,
-  renderVideo:undefined as React.ComponentType<{uri:string;autoPlay?:boolean}>|undefined,
+  renderVideo:undefined as React.ComponentType<{uri:string;autoPlay?:boolean;onError?:()=>void}>|undefined,
   font:(weight:number)=>({fontWeight:String(weight) as '500'|'700'|'800'}) as object,
   renderIcon:((_:IconRendererProps)=>null) as React.ComponentType<IconRendererProps>,
 })

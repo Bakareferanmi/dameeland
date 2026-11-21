@@ -64,9 +64,12 @@ async function openGoogle(getUrl:()=>Promise<string>){
 async function selectedMedia(image:{uri:string;type?:string|null;fileName?:string|null;mimeType?:string|null;fileSize?:number|null;duration?:number|null}){
   const kind:'video'|'image'=image.type==='video'?'video':'image'
   let uri=image.uri,fileSize=image.fileSize??0
-  if(kind==='image'&&fileSize>5*1024*1024){
+  // The server only accepts JPEG, PNG and WebP photos, so convert anything else (HEIC, GIF, AVIF…) and oversized photos to JPEG.
+  const unsupported=kind==='image'&&Boolean(image.mimeType)&&!['image/jpeg','image/png','image/webp'].includes(image.mimeType!.toLowerCase())
+  const converted=kind==='image'&&(unsupported||fileSize>5*1024*1024)
+  if(converted){
     const {manipulateAsync,SaveFormat}=await import('expo-image-manipulator')
-    const compressed=await manipulateAsync(uri,[{resize:{width:1600}}],{compress:.7,format:SaveFormat.JPEG})
+    const compressed=await manipulateAsync(uri,fileSize>5*1024*1024?[{resize:{width:1600}}]:[],{compress:.7,format:SaveFormat.JPEG})
     uri=compressed.uri;fileSize=new File(uri).size
   }
   if(kind==='video'&&fileSize>25*1024*1024){
@@ -77,8 +80,8 @@ async function selectedMedia(image:{uri:string;type?:string|null;fileName?:strin
   }
   if(fileSize>(kind==='video'?25:5)*1024*1024)throw new Error(kind==='video'?'This video is still over 25 MB after compression. Choose a shorter video.':'Choose an image under 5 MB.')
   const extension=kind==='video'?'mp4':'jpg'
-  const name=image.fileName??'dameen-'+Date.now()+'.'+extension
-  const type=image.mimeType??(kind==='video'?'video/mp4':'image/jpeg')
+  const name=converted&&image.fileName?image.fileName.replace(/\.[^.]+$/,'')+'.jpg':image.fileName??'dameen-'+Date.now()+'.'+extension
+  const type=converted?'image/jpeg':image.mimeType??(kind==='video'?'video/mp4':'image/jpeg')
   return {name,uri,data:{name,type,uri},kind,duration:kind==='video'&&image.duration?image.duration/1000:undefined}
 }
 async function pickMedia(comment=false){

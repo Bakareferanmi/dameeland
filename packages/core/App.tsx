@@ -3,7 +3,7 @@ import {dailyLesson} from './learningCatalog'
 import {browserCallMedia,RoomCall,useRoomCall,type CallMedia} from './calls'
 import {readCallSignal,type CallSignal} from './callSignal'
 import React,{lazy,Suspense,useCallback,useEffect,useLayoutEffect,useRef,useState} from 'react'
-import {AccessibilityInfo,Animated,AppState,BackHandler,Easing,Image,KeyboardAvoidingView,Modal,PanResponder,Platform,Pressable,RefreshControl,ScrollView,Switch,Text,TextInput,View,useWindowDimensions,type ViewStyle} from 'react-native'
+import {AccessibilityInfo,ActivityIndicator,Animated,AppState,BackHandler,Easing,Image,KeyboardAvoidingView,Modal,PanResponder,Platform,Pressable,RefreshControl,ScrollView,Switch,Text,TextInput,View,useWindowDimensions,type ViewStyle} from 'react-native'
 import {api,ApiError,birthdayToday,validBirthDate,storyLifetime,verifiedStoryLifetime,storyVideoLimit,verifiedStoryVideoLimit,verifiedStoryLimit,capitalizeName,normalizeUsername,usernameHint,validUsername,initialChats,initialComments,initialPosts,initials,lime,me,people,questions,slides,themes,type FollowListKind,type FollowPage,type FollowStats,type Note,type Person,type Post,type BirthdayEntry,type Role,type Story,type StoryGroup,type Theme} from './index'
 import {Avatar,Button,Card,Copy,Design,displayHandle,Field,Icon,IconButton,IconTile,LinkedText,Logo,PersonName,ScreenLinks,Segmented,VerifiedBadge,row,spread,stack,useDesign,type Glyph,type IconRendererProps} from './ui'
 import type {ExtraPage} from './FeatureScreens'
@@ -93,7 +93,7 @@ type Props={
   loadToken?:()=>Promise<string|null>; saveToken?:(token:string|null)=>Promise<void>;
   openGoogle?:(getUrl:()=>Promise<string>)=>Promise<GoogleWindow>;
   callMedia?:CallMedia;
-  renderVideo?:React.ComponentType<{uri:string;autoPlay?:boolean}>; renderAudio?:React.ComponentType<{uri:string}>;
+  renderVideo?:React.ComponentType<{uri:string;autoPlay?:boolean;onError?:()=>void}>; renderAudio?:React.ComponentType<{uri:string}>;
   notificationTarget?:string;
   modalViewport?:React.ComponentType<{color:string;children:React.ReactNode}>;
   pickMedia?:()=>Promise<Media|null>; pickCamera?:(options?:{maxDuration?:number})=>Promise<Media|null>; pickCommentMedia?:()=>Promise<Media|null>; voiceRecorder?:{start:()=>Promise<void>;stop:()=>Promise<Media|null>}; saveMedia?:(url:string,name:string)=>Promise<void>; renderGif?:GifRenderer; share?:(url:string,details?:{title:string;message:string})=>Promise<void>;
@@ -296,6 +296,31 @@ function LazyImage({uri,alt,style}:{uri:string;alt:string;style:object}){
   if(Platform.OS==='web')return React.createElement('img',{src:uri,alt,loading:'lazy',decoding:'async',style})
   return <Image accessibilityLabel={alt} source={{uri}} resizeMode="cover" style={style}/>
 }
+function OnceViewer({media,retry}:{media:{kind:'image'|'video';url:string};retry:()=>Promise<void>}){
+  const {renderVideo:NativeVideo}=useDesign()
+  const [state,setState]=useState<'loading'|'ready'|'failed'>(media.kind==='video'?'ready':'loading')
+  const [reloading,setReloading]=useState(false)
+  const [problem,setProblem]=useState('')
+  const failed=()=>setState('failed')
+  const again=async()=>{
+    setReloading(true);setProblem('')
+    try{await retry()}
+    catch(reason){setProblem(errorMessage(reason))}
+    finally{setReloading(false)}
+  }
+  if(state==='failed')return <View style={{alignItems:'center',gap:12,paddingHorizontal:24}}>
+    <Copy color="#fff" center weight={800}>Couldn’t load this.</Copy>
+    <Copy color="#FFFFFFCC" center size={12}>{problem||'You can try loading it again for a couple of minutes.'}</Copy>
+    <Button label={reloading?'Trying again…':'Try again'} variant="fun" disabled={reloading} onPress={()=>void again()}/>
+  </View>
+  if(media.kind==='image')return <View style={{width:'100%',height:'85%',justifyContent:'center'}}>
+    <Image accessibilityLabel="View-once photo" source={{uri:media.url}} resizeMode="contain" onLoad={()=>setState('ready')} onError={failed} style={{width:'100%',height:'100%'}}/>
+    {state==='loading'&&<View pointerEvents="none" style={{position:'absolute',left:0,right:0,top:0,bottom:0,alignItems:'center',justifyContent:'center'}}><ActivityIndicator color="#fff"/></View>}
+  </View>
+  if(Platform.OS==='web')return React.createElement('video',{src:media.url,controls:true,autoPlay:true,playsInline:true,onError:failed,style:{width:'100%',maxHeight:'85%',borderRadius:14,backgroundColor:'#000'}})
+  if(NativeVideo)return <NativeVideo uri={media.url} autoPlay onError={failed}/>
+  return <Copy color="#fff" center>Video preview is unavailable on this device.</Copy>
+}
 function UploadedMedia({post}:{post:Post}){
   const {theme,renderVideo:NativeVideo}=useDesign()
   if(!post.media)return null
@@ -497,7 +522,7 @@ export default function App(props:Props){
   const [message,setMessage]=useState(''),[comment,setComment]=useState('')
   const [chatMedia,setChatMedia]=useState<Media|null>(null),[chatViewOnce,setChatViewOnce]=useState(false),[chatTools,setChatTools]=useState(false)
   const [voiceRecording,setVoiceRecording]=useState(false)
-  const [openedOnce,setOpenedOnce]=useState<{kind:'image'|'video';url:string}|null>(null)
+  const [openedOnce,setOpenedOnce]=useState<{kind:'image'|'video';url:string;id:string;room:string}|null>(null)
   const [streak,setStreak]=useState<ChatStreak|null>(null)
   const [replyTarget,setReplyTarget]=useState<Note|null>(null)
   const [commentMedia,setCommentMedia]=useState<Media|Exclude<CommentAttachment,{kind:'image'}>|null>(null)
@@ -1605,8 +1630,14 @@ export default function App(props:Props){
     try{
       const media=await call<{kind:'image'|'video';url:string}>('/rooms/'+room.id+'/messages/'+item.id+'/open-once',{method:'POST'})
       setChats(previous=>({...previous,[room.id]:(previous[room.id]??[]).map(saved=>saved.id===item.id?{...saved,viewOnce:saved.viewOnce?{...saved.viewOnce,opened:true,canOpen:false}:undefined}:saved)}))
-      setOpenedOnce(media)
+      setOpenedOnce({...media,id:item.id,room:room.id})
     }catch(reason){fail(reason)}finally{setBusy(false)}
+  }
+  async function retryViewOnce(){
+    if(!openedOnce)return
+    const ticket=openedOnce.url.split('/').pop()??''
+    const media=await call<{kind:'image'|'video';url:string}>('/rooms/'+openedOnce.room+'/messages/'+openedOnce.id+'/open-once',json({retry:ticket}))
+    setOpenedOnce({...media,id:openedOnce.id,room:openedOnce.room})
   }
   async function loadMoreRooms(){
     if(demo||!token||!roomsNextCursor||roomsLoadingMore)return
@@ -2184,7 +2215,7 @@ export default function App(props:Props){
       <ModalViewport color="#120D1F">
         <View style={{flex:1,padding:16,gap:16,justifyContent:'center'}}>
           <View style={{position:'absolute',right:12,top:12,zIndex:2}}><IconButton name="close" label="Close view-once media" tint="#fff" onPress={()=>setOpenedOnce(null)}/></View>
-          {openedOnce?.kind==='image'?<Image accessibilityLabel="View-once photo" source={{uri:openedOnce.url}} resizeMode="contain" style={{width:'100%',height:'85%'}}/>:openedOnce&&props.renderVideo?<props.renderVideo uri={openedOnce.url} autoPlay/>:<Copy color="#fff" center>Video preview is unavailable on this device.</Copy>}
+          {openedOnce&&<OnceViewer key={openedOnce.url} media={openedOnce} retry={retryViewOnce}/>}
           <Copy color="#fff" center size={12}>This media cannot be opened again after you close it.</Copy>
         </View>
       </ModalViewport>

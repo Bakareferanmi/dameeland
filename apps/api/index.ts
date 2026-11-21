@@ -27,6 +27,8 @@ const person=(user:PublicAccount,url:string):Person=>({id:user.id,name:user.name
 const readBody=async(request:Request)=>request.json<Record<string,unknown>>().catch(()=>null)
 const time=(date:number)=>new Date(date).toISOString()
 const now=()=>Date.now()
+const viewOnceTicketMs=180000
+const viewOnceRetryMs=120000
 const sessionLifetime=30*86400000
 const sessionRefreshWindow=7*86400000
 const touchPresence=(db:D1Database,userId:string,online:boolean)=>db.prepare('INSERT INTO presence (user_id,online,last_seen) VALUES (?,?,?) ON CONFLICT(user_id) DO UPDATE SET online=excluded.online,last_seen=excluded.last_seen').bind(userId,online?1:0,now()).run()
@@ -193,7 +195,7 @@ app.get('/api/public/post-media/:id',async c=>{
   if(!publicPostId.test(id))return c.json({error:'Media unavailable.'},404)
   const post=await c.env.DB.prepare('SELECT media FROM posts WHERE id=? AND search_public=1').bind(id).first<{media:string|null}>()
   if(!post?.media)return c.json({error:'Media unavailable.'},404)
-  return storedMedia(c.env.MEDIA,post.media,'no-store')
+  return storedMedia(c.env.MEDIA,post.media,'no-store',c.req.raw)
 })
 app.get('/api/public/profiles/:username',async c=>{
   const username=normalizeUsername(c.req.param('username'))
@@ -421,25 +423,39 @@ app.post('/api/google/exchange',async c=>{
   if(!account)return c.json({error:'Account unavailable.'},404)
   return c.json(await session(c.env,c.executionCtx,account,c.req.url))
 })
-async function storedMedia(bucket:R2Bucket,id:string,cacheControl:string){
-  const object=await bucket.get(id)
+async function storedMedia(bucket:R2Bucket,id:string,cacheControl:string,request?:Request){
+  // Honour Range requests so video players can seek and stream instead of downloading the whole file first.
+  const asked=request?.headers.get('range')
+  const partial=asked?await bucket.get(id,{range:request!.headers}).catch(()=>null):null
+  const object=partial??await bucket.get(id)
   if(!object)return Response.json({error:'Image unavailable.'},{status:404})
-  const headers=new Headers({'X-Content-Type-Options':'nosniff','Cache-Control':cacheControl})
+  const headers=new Headers({'X-Content-Type-Options':'nosniff','Cache-Control':cacheControl,'Accept-Ranges':'bytes'})
   object.writeHttpMetadata(headers)
+  const range=partial?partial.range:undefined
+  if(range){
+    const size=object.size
+    let start:number,end:number
+    if('suffix' in range){start=Math.max(0,size-range.suffix);end=size-1}
+    else{start=range.offset??0;end=Math.min(size-1,start+(range.length??size-start)-1)}
+    headers.set('Content-Range','bytes '+start+'-'+end+'/'+size)
+    headers.set('Content-Length',String(end-start+1))
+    return new Response(object.body,{status:206,headers})
+  }
+  headers.set('Content-Length',String(object.size))
   return new Response(object.body,{headers})
 }
 app.get('/api/media/:id',async c=>{
   const id=c.req.param('id')
   const attachment=await c.env.DB.prepare('SELECT id FROM users WHERE avatar_media=? OR cover_media=? UNION ALL SELECT id FROM posts WHERE media=? UNION ALL SELECT id FROM comments WHERE media=? UNION ALL SELECT id FROM messages WHERE media=? AND view_once=0 UNION ALL SELECT id FROM chat_groups WHERE photo_media=? LIMIT 1').bind(id,id,id,id,id,id).first()
   if(!attachment) return c.json({error:'Image unavailable.'},404)
-  return storedMedia(c.env.MEDIA,id,'public, max-age=3600')
+  return storedMedia(c.env.MEDIA,id,'public, max-age=3600',c.req.raw)
 })
 app.get('/api/view-once/:id/:ticket',async c=>{
   const {id,ticket}=c.req.param()
   if(!uuidPattern.test(id)||!/^[a-f0-9]{32}$/.test(ticket))return c.json({error:'Media unavailable.'},404)
   const row=await c.env.DB.prepare('SELECT media,media_token_expires FROM messages WHERE id=? AND media_token_hash=? AND view_once=1').bind(id,await hash(ticket)).first<{media:string|null;media_token_expires:number|null}>()
   if(!row?.media||!row.media_token_expires||row.media_token_expires<now())return c.json({error:'This view-once media has expired.'},410)
-  return storedMedia(c.env.MEDIA,row.media,'private, no-store')
+  return storedMedia(c.env.MEDIA,row.media,'private, no-store',c.req.raw)
 })
 const storyKey=(user:string)=>'stories:'+user
 type StoryRecord={id:string;text:string;media?:string;kind?:'image'|'video';background?:string;created:number;expires?:number}
@@ -1450,7 +1466,8 @@ app.post('/api/rooms/:id/messages',async c=>{
     if(viewOnce&&mediaKind==='video'&&(!Number.isFinite(duration)||duration<=0||duration>10.25))return c.json({error:'View-once videos can be up to 10 seconds.'},400)
     contentType=mediaKind!=='image'&&upload.size<=25*1024*1024?upload.type:await imageType(upload)
     const limit=mediaKind==='image'?5:25
-    if(!contentType||upload.size>limit*1024*1024)return c.json({error:'This file is still too large after compression.'},400)
+    if(upload.size>limit*1024*1024)return c.json({error:'This file is still too large after compression.'},400)
+    if(!contentType)return c.json({error:'This file type isn’t supported. Use a JPEG, PNG or WebP photo, or an MP4 video.'},400)
     media=crypto.randomUUID();file=upload
   }
   if(!body&&!file) return c.json({error:'Enter a message or choose view-once media.'},400)
@@ -1484,8 +1501,16 @@ app.post('/api/rooms/:room/messages/:id/saved',async c=>{
 app.post('/api/rooms/:room/messages/:id/open-once',async c=>{
   const {room,id}=c.req.param(),user=c.get('user').id,db=c.env.DB
   if(!await member(db,room,user))return c.json({error:'Conversation unavailable.'},404)
-  const ticket=random(16),expires=now()+60000
-  const opened=await db.prepare('UPDATE messages SET viewed_at=?,media_token_hash=?,media_token_expires=? WHERE id=? AND room=? AND author!=? AND view_once=1 AND viewed_at IS NULL RETURNING media_kind').bind(now(),await hash(ticket),expires,id,room,user).first<{media_kind:'image'|'video'}>()
+  const ticket=random(16),started=now(),expires=started+viewOnceTicketMs
+  const previous=clean((await readBody(c.req.raw))?.retry,64)
+  if(previous){
+    // The person who opened it can reload it if the photo or video failed to load. They must hold the ticket they were
+    // given, and only for a couple of minutes, so nobody else in a group can use this to look at it.
+    const reloaded=/^[a-f0-9]{32}$/.test(previous)?await db.prepare('UPDATE messages SET media_token_hash=?,media_token_expires=? WHERE id=? AND room=? AND author!=? AND view_once=1 AND viewed_at>? AND media_token_hash=? RETURNING media_kind').bind(await hash(ticket),expires,id,room,user,started-viewOnceRetryMs,await hash(previous)).first<{media_kind:'image'|'video'}>():null
+    if(!reloaded)return c.json({error:'This view-once media can’t be reloaded. Ask them to send it again.'},410)
+    return c.json({kind:reloaded.media_kind,url:new URL('/api/view-once/'+id+'/'+ticket,c.req.url).href,expiresAt:time(expires)})
+  }
+  const opened=await db.prepare('UPDATE messages SET viewed_at=?,media_token_hash=?,media_token_expires=? WHERE id=? AND room=? AND author!=? AND view_once=1 AND viewed_at IS NULL RETURNING media_kind').bind(started,await hash(ticket),expires,id,room,user).first<{media_kind:'image'|'video'}>()
   if(!opened)return c.json({error:'This view-once media has already been opened.'},410)
   return c.json({kind:opened.media_kind,url:new URL('/api/view-once/'+id+'/'+ticket,c.req.url).href,expiresAt:time(expires)})
 })
