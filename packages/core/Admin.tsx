@@ -24,6 +24,13 @@ export default function Admin({base,token,sample,onSampleChange}:{base:string;to
   const [loading,setLoading]=useState(!sample),[saving,setSaving]=useState('')
   const [error,setError]=useState(''),[saveError,setSaveError]=useState('')
   const [cursor,setCursor]=useState('')
+  const [writers,setWriters]=useState<Set<string>>(()=>new Set())
+  useEffect(()=>{
+    if(sample||tab!=='Accounts')return
+    let active=true
+    api<{writers:string[]}>(base,'/admin/press',{},token).then(value=>{if(active)setWriters(new Set(value.writers))}).catch(()=>{})
+    return ()=>{active=false}
+  },[base,revision,sample,tab,token])
   useEffect(()=>{
     if(sample||tab!=='Accounts')return
     const controller=new AbortController()
@@ -69,6 +76,18 @@ export default function Admin({base,token,sample,onSampleChange}:{base:string;to
     finally{setSaving('')}
   }
 
+  async function togglePress(account:AdminAccount){
+    if(saving)return
+    const id=account.person.id,writer=!writers.has(id)
+    setSaveError('')
+    const apply=()=>setWriters(previous=>{const next=new Set(previous);writer?next.add(id):next.delete(id);return next})
+    if(sample){apply();return}
+    setSaving(id)
+    try{await api(base,'/admin/press/'+encodeURIComponent(id),{method:'PUT',body:JSON.stringify({writer})},token);apply()}
+    catch(reason){setSaveError(message(reason))}
+    finally{setSaving('')}
+  }
+
   return <>
     {sample&&<Copy size={12} color={theme.muted}>Demo data. Changes reset when you reload.</Copy>}
     <Segmented options={['Overview','Accounts']} selected={tab} onSelect={value=>{setTab(value);setSaveError('')}}/>
@@ -102,12 +121,15 @@ export default function Admin({base,token,sample,onSampleChange}:{base:string;to
       </>:tab==='Accounts'&&<>
         {accounts?.length?accounts.map(account=><Card key={account.person.id}>
           <View style={row}><Avatar person={account.person}/><View style={{flex:1}}><PersonName person={account.person}/>
-            <Copy size={12} color={theme.muted}>{account.person.username?'@'+account.person.username+' · ':''}{account.person.teacher?'Teacher':account.person.role==='tech'?'Tech creator':'Student'}</Copy>
+            <Copy size={12} color={theme.muted}>{account.person.username?account.person.username+' · ':''}{account.person.teacher?'Teacher':account.person.role==='tech'?'Tech creator':'Student'}{writers.has(account.person.id)?' · Press writer':''}</Copy>
             {!!account.email&&<Copy size={12} color={theme.muted}>{account.email}</Copy>}
+            <Copy size={12} color={theme.muted}>{account.inviteCount.toLocaleString()} successful {account.inviteCount===1?'invite':'invites'}</Copy>
           </View></View>
           <View style={{...row,flexWrap:'wrap'}}>
             <Button label={account.person.teacher?'Remove gold check':'Give gold check'} variant="secondary" disabled={!!saving}
               onPress={()=>void change(account,account.person.role,account.independentlyVerified,!account.person.teacher)}/>
+            <Button label={writers.has(account.person.id)?'Remove press writer':'Make press writer'} variant="secondary" disabled={!!saving}
+              onPress={()=>void togglePress(account)}/>
             <Button label={account.person.role==='tech'?'Remove tech role':'Assign tech role'} variant="secondary" disabled={!!saving}
               onPress={()=>void change(account,account.person.role==='tech'?'student':'tech',account.independentlyVerified)}/>
             {account.person.role==='tech'?<Copy size={12} color={theme.muted}>Verified with tech role</Copy>

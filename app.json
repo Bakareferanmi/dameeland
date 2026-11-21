@@ -1,0 +1,12 @@
+{
+  "expo": {
+    "extra": {
+      "eas": {
+        "projectId": "b48f0534-9869-446c-a265-4fbe2c2ee782"
+      }
+    },
+    "android": {
+      "package": "com.bakareferanmi.dameeland"
+    }
+  }
+}

@@ -1,0 +1,13 @@
+[
+  {
+    "relation": ["delegate_permission/common.handle_all_urls"],
+    "target": {
+      "namespace": "android_app",
+      "package_name": "com.dameeland.app",
+      "sha256_cert_fingerprints": [
+        "A4:FA:2F:EB:06:DE:A1:58:E5:1B:49:D1:AC:F0:E7:FE:91:9F:48:4F:9D:34:6C:7E:E8:A5:2E:FA:66:75:CE:2F",
+        "F8:82:72:5C:0A:01:77:D6:55:88:31:47:E8:DF:66:68:15:81:0B:79:2E:58:24:88:A6:E0:09:F3:50:4F:BF:E5"
+      ]
+    }
+  }
+]

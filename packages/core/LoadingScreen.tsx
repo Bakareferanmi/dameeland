@@ -34,7 +34,16 @@ export function LoadingScreen({compact=false}:{compact?:boolean}){
     return ()=>animation.stop()
   },[animate,pulse])
   const translateX=look.interpolate({inputRange:[-1,1],outputRange:[-5,5]})
-  return <View testID="dameeland-loading" accessibilityRole="progressbar" accessibilityLabel="Loading dameeland" accessibilityState={{busy:true}}
+  if(Platform.OS==='web'&&!compact)return React.createElement('div',{
+    className:'dameen-loading-screen',role:'progressbar','aria-label':'Loading dameen','aria-busy':true,
+  },React.createElement('svg',{className:'dameen-loading-mark',viewBox:'0 0 64 64','aria-hidden':true},
+    React.createElement('path',{d:'M10 52C10 32 19 18 32 18C45 18 54 32 54 52Q54 54 52 54H12Q10 54 10 52Z',fill:'#C8F53F'}),
+    React.createElement('circle',{cx:24,cy:38,r:8.5,fill:'#fff'}),
+    React.createElement('circle',{cx:40,cy:38,r:8.5,fill:'#fff'}),
+    React.createElement('circle',{className:'dameen-loading-pupil left',cx:26.2,cy:36.2,r:3.7,fill:'#1B1233'}),
+    React.createElement('circle',{className:'dameen-loading-pupil right',cx:42.2,cy:36.2,r:3.7,fill:'#1B1233'}),
+  ))
+  return <View testID="dameeland-loading" accessibilityRole="progressbar" accessibilityLabel="Loading dameen" accessibilityState={{busy:true}}
     style={{flex:compact?undefined:1,minHeight:compact?208:0,alignItems:'center',justifyContent:'center',backgroundColor:'#4F25D6',borderRadius:compact?20:0}}>
     <Animated.View style={{width:logoSize,height:logoSize,transform:[{scale:pulse}]}} accessibilityElementsHidden importantForAccessibility="no-hide-descendants">
       <Image source={{uri:art.loadingLogo}} resizeMode="contain" style={{width:logoSize,height:logoSize}}/>
@@ -45,3 +54,4 @@ export function LoadingScreen({compact=false}:{compact?:boolean}){
     </Animated.View>
   </View>
 }
+

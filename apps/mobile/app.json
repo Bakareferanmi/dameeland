@@ -1,20 +1,67 @@
-{
+﻿{
   "expo": {
-    "name": "dameeland",
+    "name": "dameen",
     "slug": "dameeland",
+    "scheme": "dameen",
     "version": "0.1.0",
     "orientation": "portrait",
     "userInterfaceStyle": "automatic",
     "icon": "../../packages/core/assets/dameeland-logo.png",
+    "splash": {
+      "image": "../../packages/core/assets/dameeland-logo.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#4F25D6"
+    },
     "ios": {
-      "bundleIdentifier": "com.dameeland.app"
+      "bundleIdentifier": "com.dameeland.app",
+      "bitcode": false,
+      "runtimeVersion": {
+        "policy": "appVersion"
+      }
     },
     "android": {
-      "package": "com.dameeland.app"
+      "package": "com.dameeland.app",
+      "runtimeVersion": "1.0.0",
+      "intentFilters": [
+        {
+          "action": "VIEW",
+          "autoVerify": true,
+          "data": [
+            {
+              "scheme": "https",
+              "host": "dameen.app"
+            }
+          ],
+          "category": [
+            "BROWSABLE",
+            "DEFAULT"
+          ]
+        }
+      ],
+      "permissions": [
+        "android.permission.ACCESS_NETWORK_STATE",
+        "android.permission.CAMERA",
+        "android.permission.INTERNET",
+        "android.permission.MODIFY_AUDIO_SETTINGS",
+        "android.permission.RECORD_AUDIO",
+        "android.permission.SYSTEM_ALERT_WINDOW",
+        "android.permission.WAKE_LOCK",
+        "android.permission.BLUETOOTH",
+        "android.permission.BLUETOOTH_CONNECT",
+        "android.permission.POST_NOTIFICATIONS"
+      ]
     },
     "plugins": [
       "@config-plugins/react-native-webrtc",
       "expo-notifications"
-    ]
+    ],
+    "extra": {
+      "eas": {
+        "projectId": "b48f0534-9869-446c-a265-4fbe2c2ee782"
+      }
+    },
+    "updates": {
+      "url": "https://u.expo.dev/b48f0534-9869-446c-a265-4fbe2c2ee782"
+    }
   }
 }

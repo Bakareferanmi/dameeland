@@ -1,0 +1,8 @@
+ALTER TABLE posts ADD COLUMN article_id TEXT REFERENCES articles(id) ON DELETE CASCADE;
+
+CREATE UNIQUE INDEX IF NOT EXISTS posts_article ON posts(article_id) WHERE article_id IS NOT NULL;
+
+CREATE TABLE IF NOT EXISTS press_seen (
+  user_id TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+  seen_at INTEGER NOT NULL
+);

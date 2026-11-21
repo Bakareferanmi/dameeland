@@ -29,15 +29,15 @@ export function Toast({item,reduced,onDismiss,bottom}:{item:ToastMessage;reduced
   const background=item.tone==='error'?'#8B2447':theme.card
   const ink=item.tone==='error'?'#FFFFFF':theme.text
   return <Animated.View testID="app-toast" style={{
-    position:'absolute',alignSelf:'center',bottom,zIndex:10,maxWidth:'92%',width:440,
-    borderRadius:17,borderWidth:1,borderColor:item.tone==='error'?'#8B2447':theme.border,
-    backgroundColor:background,paddingLeft:12,paddingRight:4,paddingVertical:4,
-    ...row,opacity:animation,transform:[{translateY:animation.interpolate({inputRange:[0,1],outputRange:[14,0]})}],
+    position:'absolute',alignSelf:'center',bottom,zIndex:10,maxWidth:'88%',width:380,
+    borderRadius:15,borderWidth:1,borderColor:item.tone==='error'?'#8B2447':theme.border,
+    backgroundColor:background,paddingLeft:10,paddingRight:2,paddingVertical:2,
+    ...row,gap:7,opacity:animation,transform:[{translateY:animation.interpolate({inputRange:[0,1],outputRange:[14,0]})}],
     boxShadow:'0 5px 20px #130B3533',
   }}>
     <Icon name={item.tone==='error'?'bell':'check'} color={item.tone==='error'?'#FFFFFF':theme.ink} size={19}/>
     <View style={{flex:1}} accessibilityRole={item.tone==='error'?'alert':undefined} accessibilityLiveRegion={item.tone==='error'?'assertive':'polite'}>
-      <Copy color={ink} size={13} weight={800}>{item.message}</Copy>
+      <Copy color={ink} size={12} weight={700}>{item.message}</Copy>
     </View>
     <IconButton name="close" label="Dismiss notification" onPress={()=>dismiss.current()} size={17} tint={ink}/>
   </Animated.View>

@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "598609845883",
+    "project_id": "dameen-e447c",
+    "storage_bucket": "dameen-e447c.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:598609845883:android:9163447a34acf42a028cde",
+        "android_client_info": {
+          "package_name": "com.dameeland.app"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyDe3cZF9Vl2m6GVP4U2Z9Ef5SWbKtQCbek"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
