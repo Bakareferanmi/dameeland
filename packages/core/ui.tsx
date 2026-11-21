@@ -74,14 +74,18 @@ export function Button({label,onPress,variant='primary',disabled=false,leading,t
   </Pressable>
 }
 
-export function Segmented({options,selected,onSelect}:{options:readonly string[];selected:string;onSelect:(option:string)=>void}){
+export function Segmented({options,selected,onSelect,badges}:{options:readonly string[];selected:string;onSelect:(option:string)=>void;badges?:Record<string,number>}){
   const {theme}=useDesign()
   return <View style={{...row,gap:4,backgroundColor:theme.chip,borderRadius:15,padding:4}}>
     {options.map(option=>{
       const active=selected===option
-      return <Pressable key={option} accessibilityRole="button" accessibilityState={{selected:active}} onPress={()=>onSelect(option)}
+      const count=badges?.[option]??0
+      return <Pressable key={option} accessibilityRole="button" accessibilityLabel={count?option+', '+count+' unread':option} accessibilityState={{selected:active}} onPress={()=>onSelect(option)}
         style={({pressed})=>({flex:1,minHeight:44,justifyContent:'center',alignItems:'center',borderRadius:11,backgroundColor:active?theme.card:'transparent',opacity:pressed?.7:1,borderWidth:1,borderColor:active?theme.border:'transparent'})}>
-        <Copy size={13} color={active?theme.ink:theme.muted} weight={800}>{option}</Copy>
+        <View style={{...row,gap:6}}>
+          <Copy size={13} color={active?theme.ink:theme.muted} weight={800}>{option}</Copy>
+          {count>0&&<View style={{minWidth:18,height:18,paddingHorizontal:5,borderRadius:9,alignItems:'center',justifyContent:'center',backgroundColor:'#E64661'}}><Copy color="#FFFFFF" size={10} weight={800}>{count>99?'99+':count}</Copy></View>}
+        </View>
       </Pressable>
     })}
   </View>

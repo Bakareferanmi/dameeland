@@ -16,6 +16,7 @@ import {Comments,type GifRenderer} from './Comments'
 import type {AdminAccount,AdminOverview,CommentAttachment,Viewer} from './index'
 
 const Admin=lazy(()=>import('./Admin'))
+const Press=lazy(()=>import('./Press'))
 const FeatureScreen=lazy(()=>import('./FeatureScreens'))
 const FriendWhot=lazy(()=>import('./FriendWhot'))
 
@@ -39,7 +40,7 @@ function ChatWhot({base,token,room,opponent}:{base:string;token:string;room:stri
 
 const sampleFollows:Record<string,string[]>={ada:['tobi','zee'],tobi:['ada','code'],zee:['ada','bello'],bello:['ada'],code:['tobi'],maths:['bello'],squad:['code']}
 
-type Page=ExtraPage|'Home'|'Learn'|'Explore'|'Play'|'Messages'|'Chat'|'Notifications'|'Profile'|'Settings'|'Quiz'|'Admin'
+type Page=ExtraPage|'Home'|'Learn'|'Explore'|'Play'|'Messages'|'Chat'|'Notifications'|'Profile'|'Settings'|'Quiz'|'Admin'|'Press'
 type Room={id:string;person:Person;lastActivity?:string;lastActivityAt?:string;streak?:ChatStreak;unreadCount?:number}
 type RoomPage={items:Room[];nextCursor:string|null}
 type MessagePage={items:Note[];nextCursor:string|null}
@@ -1744,6 +1745,7 @@ export default function App(props:Props){
   const canAddStory=ownStoryCount<(verifiedBenefits?verifiedStoryLimit:1)
   const home=<>
     {(demo||token)&&<View style={{paddingHorizontal:2}}><StoryRow onStory={person=>selectOverlay({kind:'story',person})} onCreate={()=>selectOverlay(hasOwnStory?{kind:'story',person:user}:{kind:'newStory'})} onAdd={canAddStory?()=>selectOverlay({kind:'newStory'}):undefined} seen={seenAuthors} own={hasOwnStory?user:null} others={demo?demoStories:activeStories.map(group=>group.author).filter(author=>author.id!==user.id)}/></View>}
+    <Pressable accessibilityRole="button" accessibilityLabel="Open the Press Club" onPress={()=>open('Press')}><Card style={{...row}}><IconTile name="type"/><View style={{flex:1}}><Copy weight={800}>Press Club</Copy><Copy size={12} color={theme.muted}>Articles written by students</Copy></View><Icon name="plus" color={theme.purple}/></Card></Pressable>
     {(ownBirthday||birthdayPeople.length>0)&&<Card>
       {ownBirthday&&<View style={{gap:4}}><Copy size={19} weight={800}>Happy birthday, {user.name.split(' ')[0]}! 🎂</Copy><Copy color={theme.muted}>Have a great day. Friends can send you a wish today.</Copy></View>}
       {birthdayPeople.length>0&&<>{section('Birthdays today')}{birthdayPeople.map(person=><View key={person.id} style={{...row,flexWrap:'wrap'}}>
@@ -1775,7 +1777,7 @@ export default function App(props:Props){
   const roomList=rooms.filter(r=>inboxTab==='Chats'?!r.person.group:inboxTab==='Groups'?r.person.group:false)
   const groupChoices=groupPeople.filter(person=>(person.name+' '+displayHandle(person)).toLowerCase().includes(groupQuery.trim().toLowerCase()))
   const inbox=<>
-    <Segmented options={['Chats','Groups','Requests']} selected={inboxTab} onSelect={setInboxTab}/>
+    <Segmented options={['Chats','Groups','Requests']} selected={inboxTab} onSelect={setInboxTab} badges={{Chats:rooms.filter(r=>!r.person.group).reduce((sum,r)=>sum+(r.unreadCount??0),0),Groups:rooms.filter(r=>r.person.group).reduce((sum,r)=>sum+(r.unreadCount??0),0)}}/>
     {inboxTab==='Groups'&&<View style={{...spread,flexWrap:'wrap',gap:10,paddingTop:2}}><View style={{gap:2}}><Copy size={19} weight={800}>Your groups</Copy><Copy size={12} color={theme.muted}>Create spaces for classes, clubs and friends.</Copy></View><Button label="New group" leading="plus" onPress={()=>void openGroupCreator()}/></View>}
     {demo&&inboxTab==='Chats'&&<Card>{section('Active now')}<View style={row}>{[people[0],people[1],people[2]].map(person=><Pressable key={person.id} accessibilityRole="button" accessibilityLabel={'Message '+person.name} onPress={()=>void messagePerson(person)}><Avatar person={person} ring size={42}/></Pressable>)}</View></Card>}
     {feedError&&!rooms.length?failure:roomsLoading&&!rooms.length?<Loading/>:roomList.length?<>{roomList.map(r=><Motion key={r.id} reduced={reduced} distance={4}><Pressable accessibilityRole="button" accessibilityLabel={'Open conversation with '+displayHandle(r.person)+(r.unreadCount?`, ${r.unreadCount} unread messages`:'')} onPress={()=>openRoom(r)}><Card style={{...row,minHeight:78}}><Avatar person={r.person} size={50}/><View style={{flex:1,minWidth:0,gap:3}}><View style={spread}><PersonName person={r.person}/><View style={{...row,gap:7}}>{r.lastActivityAt&&<Copy color={r.unreadCount?theme.purple:theme.muted} size={11} weight={r.unreadCount?800:500}>{shortTime(r.lastActivityAt)}</Copy>}{Boolean(r.unreadCount)&&<View style={{minWidth:22,height:22,paddingHorizontal:6,borderRadius:11,alignItems:'center',justifyContent:'center',backgroundColor:'#E64661'}}><Copy color="#FFFFFF" size={10} weight={800}>{r.unreadCount!>99?'99+':r.unreadCount}</Copy></View>}</View></View><Copy color={r.unreadCount?theme.text:theme.muted} size={12} weight={r.unreadCount?800:500}>{chats[r.id]?.at(-1)?.body??r.lastActivity??'Open conversation'}</Copy>{r.streak&&<View style={{...row,gap:5}}><Copy size={12}>🔥</Copy><Copy size={11} weight={800} color={theme.purple}>{r.streak.status==='pending'?'Streak pending':r.streak.count+' day streak'} · {streakRemaining(r.streak.expiresAt)}</Copy></View>}</View></Card></Pressable></Motion>)}{roomsNextCursor&&inboxTab==='Chats'&&<Button label={roomsLoadingMore?'Loading conversations…':'Load more conversations'} variant="secondary" disabled={roomsLoadingMore} onPress={()=>void loadMoreRooms()}/>}</>:<Empty title={inboxTab==='Chats'?'No messages yet':inboxTab==='Groups'?'No groups yet':'No message requests'} detail={inboxTab==='Chats'?'Find a classmate and start a chat.':inboxTab==='Groups'?'Use the New group button above to create your first group.':'New requests will appear here.'} action={inboxTab==='Chats'?'Find people':undefined} onPress={()=>open('Explore')}/>}
@@ -1798,7 +1800,7 @@ export default function App(props:Props){
       const own=item.author.id===user.id
       const canEdit=own&&verifiedBenefits&&(demo||withinEditWindow(item.createdAt))
       return <View key={item.id} style={{alignSelf:own?'flex-end':'flex-start',backgroundColor:own?theme.purple:theme.card,maxWidth:'84%',borderRadius:18,borderBottomLeftRadius:own?18:5,borderBottomRightRadius:own?5:18,borderWidth:1,borderColor:own?theme.purple:theme.border,padding:12,gap:5}}>
-        {!own&&room.person.group&&<View style={{...row,gap:6}}><Avatar person={item.author} size={20}/><Copy size={11} weight={800} color={theme.purple}>{item.author.name||displayHandle(item.author)}</Copy></View>}
+        {!own&&room.person.group&&<View style={{...row,gap:6}}><Avatar person={item.author} size={20}/><Copy size={11} weight={800} color={theme.purple}>{displayHandle(item.author)}</Copy></View>}
         {!!item.body&&<LinkedText color={own?'#fff':theme.text} linkColor={own?lime:theme.purple}>{item.body}</LinkedText>}
         {item.chatMedia&&<View style={{gap:7,minWidth:220}}>
           {item.chatMedia.kind==='image'?<Image accessibilityLabel="Chat photo" source={{uri:item.chatMedia.url}} resizeMode="cover" style={{width:260,maxWidth:'100%',height:220,borderRadius:13}}/>:item.chatMedia.kind==='video'?(Platform.OS==='web'?React.createElement('video',{src:item.chatMedia.url,controls:true,playsInline:true,style:{width:'100%',maxHeight:280,borderRadius:13,backgroundColor:'#000'}}):props.renderVideo?<props.renderVideo uri={item.chatMedia.url}/>:<Copy color={own?'#fff':theme.text}>Video</Copy>):Platform.OS==='web'?React.createElement('audio',{src:item.chatMedia.url,controls:true,style:{width:'100%'}}):props.renderAudio?<props.renderAudio uri={item.chatMedia.url}/>:<Copy color={own?'#fff':theme.text}>Voice note</Copy>}
@@ -1891,6 +1893,7 @@ export default function App(props:Props){
     Lesson:<StudyLesson key={lessonId} id={lessonId} done={completedLessons.includes(lessonId)} onComplete={completeLesson}/>,
     Progress:<LearningProgress done={completedLessons} error={learningError} retry={()=>setLearningRetry(n=>n+1)} open={openLesson}/>,
     Quiz:<Quiz onBack={goBack}/>,
+    Press:<Suspense fallback={<Loading/>}><Press base={base} token={token} demo={demo}/></Suspense>,
     Admin:(demo||user.isAdmin)&&<Suspense fallback={<Loading/>}><Admin base={base} token={token}
       sample={demo?{overview:demoOverview,accounts:demoAccounts}:undefined} onSampleChange={changeDemoAccount}/></Suspense>,
     Notifications:demo&&notifications?<Card><View style={row}><Avatar person={people[1]}/><View style={{flex:1}}><Copy weight={800}>Tobi A. liked your post</Copy><Copy color={theme.muted} size={12}>Today</Copy></View></View><View style={row}><Avatar person={people[4]}/><View style={{flex:1}}><Copy weight={800}>Code Club shared a new post</Copy><Copy color={theme.muted} size={12}>Yesterday</Copy></View></View></Card>:notificationsLoading?<Loading/>:notificationItems.length?<View style={stack}>{notificationItems.map(item=><Pressable key={item.id} accessibilityRole="button" onPress={()=>void openNotification(item)} style={{...row,alignItems:'flex-start',padding:13,borderRadius:16,borderWidth:1,borderColor:theme.border,backgroundColor:item.read?theme.card:theme.chip}}>{item.actor?<Avatar person={item.actor} size={42}/>:<IconTile name="bell" size={42}/>}<View style={{flex:1,gap:3}}><Copy weight={item.read?600:800}>{item.body}</Copy><Copy size={12} color={theme.muted}>{shortTime(item.created)}</Copy></View></Pressable>)}<View style={{...row,justifyContent:'space-between',flexWrap:'wrap'}}><Button label="Mark all as read" variant="secondary" onPress={()=>{void call('/notifications/read-all',{method:'PUT'});setNotificationItems(previous=>previous.map(item=>({...item,read:true})));setUnread(false)}}/><View style={row}>{notificationHistory.length>0&&<Button label="Previous" variant="plain" onPress={()=>{const previous=[...notificationHistory];setNotificationCursor(previous.pop()??'');setNotificationHistory(previous)}}/>}{notificationNextCursor&&<Button label="Next" variant="secondary" onPress={()=>{setNotificationHistory(previous=>[...previous,notificationCursor]);setNotificationCursor(notificationNextCursor)}}/>}</View></View><Copy center size={12} color={theme.muted}>Page {notificationHistory.length+1}</Copy></View>:<Empty title="You’re all caught up" detail="New activity will appear here."/>,
@@ -2033,7 +2036,7 @@ export default function App(props:Props){
             </>:<>
             <View style={{...row,flex:1}}>
               {!desktop&&page==='Home'?<Logo size={40}/>:!tabs.some(([name])=>name===page)&&<IconButton name="back" label="Go back" onPress={goBack}/>}
-              {(desktop||page!=='Home')&&<Copy weight={800} size={desktop?28:21}>{page==='Quiz'?'Quiz Duel':page==='Chat'?'Chat':page}</Copy>}
+              {(desktop||page!=='Home')&&<Copy weight={800} size={desktop?28:21}>{page==='Quiz'?'Quiz Duel':page==='Chat'?'Chat':page==='Press'?'Press Club':page}</Copy>}
             </View>
             <View style={{...row,gap:0}}>
               <IconButton name={themeName==='dark'?'sun':'moon'} label="Toggle light or dark mode" onPress={()=>setAppearance(themeName==='light'?'dark':'light')}/>

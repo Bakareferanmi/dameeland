@@ -1574,6 +1574,73 @@ app.get('/api/rooms/:id/socket',async c=>{
   await touchPresence(c.env.DB,user,true)
   return c.env.ROOMS.getByName(room).fetch('https://room.internal/socket',{headers:{Upgrade:'websocket','X-Room-User':user}})
 })
+type ArticleRow=PublicAccount&{article_id:string;title:string;summary:string;body?:string;status:'draft'|'published';updated:number;published_at:number|null;size:number}
+const articleList='a.id article_id,a.title,a.summary,a.status,a.updated,a.published_at,length(a.body) size,u.id,u.name,u.role,u.username,u.verified,u.teacher,u.dob,u.avatar_media,u.cover_media,u.bio'
+const articleCanWrite=async(env:Env,account:PublicAccount)=>isAdmin(env,account)||Boolean(await env.DB.prepare('SELECT user_id FROM press_writers WHERE user_id=?').bind(account.id).first())
+const articleView=(row:ArticleRow,url:string)=>({id:row.article_id,title:row.title,summary:row.summary,author:person(row,url),status:row.status,minutes:Math.max(1,Math.ceil(row.size/1200)),publishedAt:row.published_at?time(row.published_at):undefined,updatedAt:time(row.updated),body:row.body})
+const articleInput=(input:Record<string,unknown>|null)=>({title:clean(input?.title,140),summary:clean(input?.summary,240),body:clean(input?.body,30000),publish:input?.publish===true})
+const articleProblem=(input:{title:string;body:string;publish:boolean})=>input.title.length<3?'Give the article a title of at least 3 characters.':!input.body?'Write something before saving.':input.publish&&input.body.length<100?'Write a few paragraphs before publishing.':''
+app.get('/api/articles/access',async c=>c.json({canWrite:await articleCanWrite(c.env,c.get('user'))}))
+app.get('/api/articles/mine',async c=>{
+  const account=c.get('user')
+  if(!await articleCanWrite(c.env,account))return c.json({error:'Only press club writers can open this page.'},403)
+  const {results}=await c.env.DB.prepare(`SELECT ${articleList} FROM articles a JOIN users u ON u.id=a.author WHERE a.author=? ORDER BY a.updated DESC LIMIT 100`).bind(account.id).all<ArticleRow>()
+  c.header('Cache-Control','no-store')
+  return c.json(results.map(row=>articleView(row,c.req.url)))
+})
+app.get('/api/articles',async c=>{
+  const cursor=Number(c.req.query('cursor')),before=Number.isFinite(cursor)&&cursor>0?cursor:now()+1
+  const {results}=await c.env.DB.prepare(`SELECT ${articleList} FROM articles a JOIN users u ON u.id=a.author WHERE a.status='published' AND a.published_at<? ORDER BY a.published_at DESC LIMIT 21`).bind(before).all<ArticleRow>()
+  const page=results.slice(0,20)
+  c.header('Cache-Control','no-store')
+  return c.json({items:page.map(row=>articleView(row,c.req.url)),nextCursor:results.length>20?String(page[19].published_at):null})
+})
+app.get('/api/articles/:id',async c=>{
+  const account=c.get('user')
+  const row=await c.env.DB.prepare(`SELECT ${articleList},a.body FROM articles a JOIN users u ON u.id=a.author WHERE a.id=?`).bind(c.req.param('id')).first<ArticleRow>()
+  if(!row||(row.status!=='published'&&row.id!==account.id&&!isAdmin(c.env,account)))return c.json({error:'This article is unavailable.'},404)
+  c.header('Cache-Control','no-store')
+  return c.json(articleView(row,c.req.url))
+})
+app.post('/api/articles',async c=>{
+  const account=c.get('user')
+  if(!await articleCanWrite(c.env,account))return c.json({error:'Only press club writers can publish articles.'},403)
+  const input=articleInput(await readBody(c.req.raw)),problem=articleProblem(input)
+  if(problem)return c.json({error:problem},400)
+  const id=crypto.randomUUID(),at=now()
+  await c.env.DB.prepare('INSERT INTO articles(id,author,title,summary,body,status,created,updated,published_at) VALUES (?,?,?,?,?,?,?,?,?)').bind(id,account.id,input.title,input.summary,input.body,input.publish?'published':'draft',at,at,input.publish?at:null).run()
+  return c.json({id,status:input.publish?'published':'draft'},201)
+})
+app.put('/api/articles/:id',async c=>{
+  const account=c.get('user'),id=c.req.param('id')
+  if(!await articleCanWrite(c.env,account))return c.json({error:'Only press club writers can edit articles.'},403)
+  const existing=await c.env.DB.prepare('SELECT author,published_at FROM articles WHERE id=?').bind(id).first<{author:string;published_at:number|null}>()
+  if(!existing||existing.author!==account.id)return c.json({error:'This article is unavailable.'},404)
+  const input=articleInput(await readBody(c.req.raw)),problem=articleProblem(input)
+  if(problem)return c.json({error:problem},400)
+  const at=now()
+  await c.env.DB.prepare('UPDATE articles SET title=?,summary=?,body=?,status=?,updated=?,published_at=? WHERE id=?').bind(input.title,input.summary,input.body,input.publish?'published':'draft',at,input.publish?(existing.published_at??at):existing.published_at,id).run()
+  return c.json({id,status:input.publish?'published':'draft'})
+})
+app.delete('/api/articles/:id',async c=>{
+  const account=c.get('user'),id=c.req.param('id')
+  const existing=await c.env.DB.prepare('SELECT author FROM articles WHERE id=?').bind(id).first<{author:string}>()
+  if(!existing||(existing.author!==account.id&&!isAdmin(c.env,account)))return c.json({error:'This article is unavailable.'},404)
+  await c.env.DB.prepare('DELETE FROM articles WHERE id=?').bind(id).run()
+  return c.json({ok:true})
+})
+app.get('/api/admin/press',async c=>{
+  const {results}=await c.env.DB.prepare('SELECT user_id FROM press_writers').all<{user_id:string}>()
+  return c.json({writers:results.map(row=>row.user_id)})
+})
+app.put('/api/admin/press/:id',async c=>{
+  const id=c.req.param('id'),input=await readBody(c.req.raw)
+  if(typeof input?.writer!=='boolean')return c.json({error:'Choose a valid press writer status.'},400)
+  if(!await c.env.DB.prepare('SELECT id FROM users WHERE id=?').bind(id).first())return c.json({error:'Account unavailable.'},404)
+  if(input.writer)await c.env.DB.prepare('INSERT INTO press_writers(user_id,granted_by,granted_at) VALUES (?,?,?) ON CONFLICT DO NOTHING').bind(id,c.get('user').id,now()).run()
+  else await c.env.DB.prepare('DELETE FROM press_writers WHERE user_id=?').bind(id).run()
+  return c.json({writer:input.writer})
+})
 app.onError((error,c)=>{
   if(error instanceof HTTPException)return c.json({error:error.message||'The request could not be completed.'},error.status)
   console.error(error)
