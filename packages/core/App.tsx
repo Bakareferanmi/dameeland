@@ -94,7 +94,7 @@ type Props={
   notificationTarget?:string;
   modalViewport?:React.ComponentType<{color:string;children:React.ReactNode}>;
   pickMedia?:()=>Promise<Media|null>; pickCamera?:()=>Promise<Media|null>; pickCommentMedia?:()=>Promise<Media|null>; voiceRecorder?:{start:()=>Promise<void>;stop:()=>Promise<Media|null>}; saveMedia?:(url:string,name:string)=>Promise<void>; renderGif?:GifRenderer; share?:(url:string,details?:{title:string;message:string})=>Promise<void>;
-  requestNotifications?:()=>Promise<boolean>; getNotificationDevice?:()=>Promise<{platform:'android'|'ios';token:string}|null>; notifyDevice?:(title:string,body:string)=>Promise<void>;
+  requestNotifications?:()=>Promise<boolean>; getNotificationDevice?:()=>Promise<{platform:'android'|'ios'|'pwa';token:string;endpoint?:string}|null>; notifyDevice?:(title:string,body:string)=>Promise<void>;
   onReady?:()=>void;
 }
 type Overlay={kind:'connections';list:FollowListKind;person:Person}|{kind:'comments'|'share'|'post'|'editPost';post:Post;targetId?:string}|{kind:'editMessage';message:Note}|{kind:'story';person:Person}|{kind:'photo';person:Person;photo:'avatar'|'cover'}|{kind:'create'|'createGroup'|'groupSettings'|'wish'|'newStory'|'editProfile'|'editUsername'}|{kind:'call';video:boolean;person:Person;ringing?:boolean;incoming?:boolean}

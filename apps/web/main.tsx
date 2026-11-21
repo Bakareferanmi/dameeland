@@ -11,6 +11,7 @@ const offline=location.protocol==='file:'||document.documentElement.dataset.prev
 const phone=params.get('view')==='phone'||document.documentElement.dataset.view==='phone'
 const demo=offline||(import.meta.env.DEV&&params.get('demo')==='1')
 const initialTheme=params.get('theme')==='dark'||matchMedia('(prefers-color-scheme: dark)').matches?'dark':'light'
+const apiBase=offline?'':import.meta.env.VITE_API_URL??'https://dameeland-api.bakareferanmi96.workers.dev'
 const font=(weight:number)=>({fontFamily:'Plus Jakarta Sans Variable, sans-serif',fontWeight:String(weight)})
 const storageKey='dameeland-session'
 const loadToken=async()=>{
@@ -135,6 +136,23 @@ const requestNotifications=async()=>{
   if(Notification.permission==='granted')return true
   return (await Notification.requestPermission())==='granted'
 }
+const vapidBytes=(value:string)=>Uint8Array.from(atob(value.replace(/-/g,'+').replace(/_/g,'/')+'='.repeat((4-value.length%4)%4)),char=>char.charCodeAt(0))
+const sameBytes=(first:Uint8Array,second:Uint8Array)=>first.length===second.length&&first.every((value,index)=>value===second[index])
+const getNotificationDevice=async()=>{
+  if(!('Notification' in window)||Notification.permission!=='granted'||!('serviceWorker' in navigator)||!('PushManager' in window))return null
+  const {publicKey}=await fetch(apiBase.replace(/\/$/,'')+'/api/notification-public-key').then(response=>response.ok?response.json() as Promise<{publicKey:string}>:Promise.reject(new Error('Push notifications are not configured.')))
+  const applicationServerKey=vapidBytes(publicKey)
+  const registration=await navigator.serviceWorker.ready
+  let subscription=await registration.pushManager.getSubscription()
+  const currentKey=subscription?.options.applicationServerKey
+  if(subscription&&currentKey&&!sameBytes(new Uint8Array(currentKey as ArrayBuffer),applicationServerKey)){
+    await subscription.unsubscribe()
+    subscription=null
+  }
+  subscription??=await registration.pushManager.subscribe({userVisibleOnly:true,applicationServerKey})
+  const keys=subscription.toJSON().keys??{}
+  return {platform:'pwa' as const,endpoint:subscription.endpoint,token:JSON.stringify(keys)}
+}
 const notifyDevice=async(title:string,body:string)=>{
   if(!('Notification' in window)||Notification.permission!=='granted')return
   if(document.visibilityState==='visible')return
@@ -153,5 +171,5 @@ const dismissBoot=()=>{
   boot.classList.add('ready')
   window.setTimeout(()=>boot.remove(),380)
 }
-createRoot(document.getElementById('dameen-app')!).render(<App demo={demo} phone={phone} base={offline?'':import.meta.env.VITE_API_URL??'https://dameeland-api.bakareferanmi96.workers.dev'} renderIcon={HugeiconsIcon} initialTheme={initialTheme} font={font} loadToken={loadToken} saveToken={saveToken} openGoogle={openGoogle} pickMedia={()=>pickMedia()} pickCamera={()=>pickMedia(false,true)} pickCommentMedia={()=>pickMedia(true)} voiceRecorder={voice} saveMedia={saveMedia} share={share} requestNotifications={requestNotifications} notifyDevice={notifyDevice} onReady={dismissBoot}/>)
+createRoot(document.getElementById('dameen-app')!).render(<App demo={demo} phone={phone} base={apiBase} renderIcon={HugeiconsIcon} initialTheme={initialTheme} font={font} loadToken={loadToken} saveToken={saveToken} openGoogle={openGoogle} pickMedia={()=>pickMedia()} pickCamera={()=>pickMedia(false,true)} pickCommentMedia={()=>pickMedia(true)} voiceRecorder={voice} saveMedia={saveMedia} share={share} requestNotifications={requestNotifications} getNotificationDevice={getNotificationDevice} notifyDevice={notifyDevice} onReady={dismissBoot}/>)
 
