@@ -1,4 +1,4 @@
-import React,{useEffect,useState} from 'react'
+import React,{useEffect,useRef,useState} from 'react'
 import {ActivityIndicator,Platform,Pressable,Text,TextInput,View} from 'react-native'
 import {api,type Person} from './index'
 import {Avatar,Button,Card,Copy,Field,Segmented,displayHandle,row,useDesign} from './ui'
@@ -50,11 +50,12 @@ function Byline({article}:{article:Article}){
   </View>
 }
 
-function ArticleCard({article,onPress}:{article:Article;onPress:()=>void}){
+function ArticleCard({article,onPress,isNew=false}:{article:Article;onPress:()=>void;isNew?:boolean}){
   const {theme}=useDesign()
   return <Pressable accessibilityRole="button" accessibilityLabel={'Read '+article.title} onPress={onPress}>
     <Card style={{gap:8}}>
       {article.status==='draft'&&<Copy size={11} weight={800} color={theme.purple}>DRAFT</Copy>}
+      {isNew&&<Copy size={11} weight={800} color="#E64661">NEW</Copy>}
       <Text style={{fontFamily:serif,fontSize:21,lineHeight:28,fontWeight:'800',color:theme.text}}>{article.title}</Text>
       {!!article.summary&&<Copy color={theme.muted}>{article.summary}</Copy>}
       <Byline article={article}/>
@@ -62,7 +63,7 @@ function ArticleCard({article,onPress}:{article:Article;onPress:()=>void}){
   </Pressable>
 }
 
-function Reader({base,token,demo,id,onBack,onEdit,canEdit}:{base:string;token:string;demo:boolean;id:string;onBack:()=>void;onEdit:(id:string)=>void;canEdit:boolean}){
+function Reader({base,token,demo,id,onBack,onEdit,canEdit=false}:{base:string;token:string;demo:boolean;id:string;onBack?:()=>void;onEdit?:(id:string)=>void;canEdit?:boolean}){
   const {theme}=useDesign()
   const [article,setArticle]=useState<Article|null>(demo?sampleArticles.find(item=>item.id===id)??null:null)
   const [error,setError]=useState('')
@@ -76,7 +77,7 @@ function Reader({base,token,demo,id,onBack,onEdit,canEdit}:{base:string;token:st
   },[base,demo,id,token])
   return <View style={{gap:16,width:'100%',maxWidth:680,alignSelf:'center'}}>
     <View style={{...row,justifyContent:'space-between'}}>
-      <Button label="Back to articles" leading="back" variant="plain" onPress={onBack}/>
+      {onBack?<Button label="Back to articles" leading="back" variant="plain" onPress={onBack}/>:<View/>}
       <View style={row}>
         <Button label="A−" variant="secondary" disabled={size<=14} onPress={()=>setSize(value=>Math.max(14,value-1))}/>
         <Button label="A+" variant="secondary" disabled={size>=24} onPress={()=>setSize(value=>Math.min(24,value+1))}/>
@@ -91,9 +92,13 @@ function Reader({base,token,demo,id,onBack,onEdit,canEdit}:{base:string;token:st
         <Byline article={article}/>
         <View style={{height:1,backgroundColor:theme.border}}/>
         <ArticleBody text={article.body??''} size={size}/>
-        {canEdit&&!demo&&<Button label="Edit article" variant="secondary" onPress={()=>onEdit(article.id)}/>}
+        {canEdit&&!demo&&!!onEdit&&<Button label="Edit article" variant="secondary" onPress={()=>onEdit(article.id)}/>}
       </>}
   </View>
+}
+
+export function ArticleReader({base,token,demo,id}:{base:string;token:string;demo:boolean;id:string}){
+  return <Reader base={base} token={token} demo={demo} id={id}/>
 }
 
 function Editor({base,token,id,onBack,onSaved}:{base:string;token:string;id?:string;onBack:()=>void;onSaved:(id:string,published:boolean)=>void}){
@@ -162,9 +167,10 @@ function Editor({base,token,id,onBack,onSaved}:{base:string;token:string;id?:str
   </View>
 }
 
-export default function Press({base,token,demo}:{base:string;token:string;demo:boolean}){
+export default function Press({base,token,demo,initialArticle,onSeen}:{base:string;token:string;demo:boolean;initialArticle?:string;onSeen?:()=>void}){
   const {theme}=useDesign()
-  const [screen,setScreen]=useState<Screen>({name:'list'})
+  const [screen,setScreen]=useState<Screen>(initialArticle?{name:'read',id:initialArticle,back:'list'}:{name:'list'})
+  const seenRef=useRef<number|null>(null)
   const [canWrite,setCanWrite]=useState(false)
   const [items,setItems]=useState<Article[]|null>(demo?sampleArticles:null)
   const [next,setNext]=useState<string|null>(null)
@@ -180,7 +186,12 @@ export default function Press({base,token,demo}:{base:string;token:string;demo:b
     if(demo||screen.name!=='list')return
     let active=true
     setError('')
-    api<{items:Article[];nextCursor:string|null}>(base,'/articles',{},token).then(value=>{if(active){setItems(value.items);setNext(value.nextCursor)}}).catch(reason=>{if(active)setError(message(reason))})
+    api<{items:Article[];nextCursor:string|null;seenAt?:number}>(base,'/articles',{},token).then(value=>{
+      if(!active)return
+      if(seenRef.current===null)seenRef.current=value.seenAt??Date.now()
+      setItems(value.items);setNext(value.nextCursor)
+      api(base,'/articles/seen',{method:'PUT'},token).then(()=>onSeen?.()).catch(()=>{})
+    }).catch(reason=>{if(active)setError(message(reason))})
     return ()=>{active=false}
   },[base,demo,revision,screen.name,token])
   useEffect(()=>{
@@ -210,7 +221,7 @@ export default function Press({base,token,demo}:{base:string;token:string;demo:b
     </View>}
     {error?<Card><Copy weight={800}>Couldn’t load articles</Copy><Copy color={theme.muted}>{error}</Copy><Button label="Try again" onPress={()=>setRevision(value=>value+1)}/></Card>
       :!list?<ActivityIndicator accessibilityLabel="Loading articles" color={theme.purple}/>
-      :list.length?list.map(article=><ArticleCard key={article.id} article={article} onPress={()=>setScreen({name:'read',id:article.id,back:screen.name==='mine'?'mine':'list'})}/>)
+      :list.length?list.map(article=><ArticleCard key={article.id} article={article} isNew={screen.name==='list'&&!demo&&seenRef.current!==null&&!!article.publishedAt&&Date.parse(article.publishedAt)>seenRef.current} onPress={()=>setScreen({name:'read',id:article.id,back:screen.name==='mine'?'mine':'list'})}/>)
       :<Card><Copy weight={800}>{screen.name==='mine'?'You haven’t written anything yet':'No articles yet'}</Copy><Copy color={theme.muted}>{screen.name==='mine'?'Tap “Write an article” to start your first piece.':'Articles from the Press Club will appear here.'}</Copy></Card>}
     {screen.name==='list'&&!!next&&!error&&<Button label={more?'Loading…':'Load more articles'} variant="secondary" disabled={more} onPress={()=>void loadMore()}/>}
     {!canWrite&&!demo&&<Copy size={12} color={theme.muted}>Want to write for the Press Club? Ask an admin to give your account writer access.</Copy>}

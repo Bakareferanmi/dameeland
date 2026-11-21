@@ -3,7 +3,7 @@ import {dailyLesson} from './learningCatalog'
 import {browserCallMedia,RoomCall,useRoomCall,type CallMedia} from './calls'
 import {readCallSignal,type CallSignal} from './callSignal'
 import React,{lazy,Suspense,useCallback,useEffect,useLayoutEffect,useRef,useState} from 'react'
-import {AccessibilityInfo,Animated,AppState,BackHandler,Easing,Image,KeyboardAvoidingView,Modal,PanResponder,Platform,Pressable,RefreshControl,ScrollView,Switch,TextInput,View,useWindowDimensions,type ViewStyle} from 'react-native'
+import {AccessibilityInfo,Animated,AppState,BackHandler,Easing,Image,KeyboardAvoidingView,Modal,PanResponder,Platform,Pressable,RefreshControl,ScrollView,Switch,Text,TextInput,View,useWindowDimensions,type ViewStyle} from 'react-native'
 import {api,ApiError,birthdayToday,validBirthDate,storyLifetime,verifiedStoryLifetime,storyVideoLimit,verifiedStoryVideoLimit,verifiedStoryLimit,capitalizeName,normalizeUsername,usernameHint,validUsername,initialChats,initialComments,initialPosts,initials,lime,me,people,questions,slides,themes,type FollowListKind,type FollowPage,type FollowStats,type Note,type Person,type Post,type BirthdayEntry,type Role,type Story,type StoryGroup,type Theme} from './index'
 import {Avatar,Button,Card,Copy,Design,displayHandle,Field,Icon,IconButton,IconTile,LinkedText,Logo,PersonName,ScreenLinks,Segmented,VerifiedBadge,row,spread,stack,useDesign,type Glyph,type IconRendererProps} from './ui'
 import type {ExtraPage} from './FeatureScreens'
@@ -17,6 +17,8 @@ import type {AdminAccount,AdminOverview,CommentAttachment,Viewer} from './index'
 
 const Admin=lazy(()=>import('./Admin'))
 const Press=lazy(()=>import('./Press'))
+const ArticleReader=lazy(()=>import('./Press').then(module=>({default:module.ArticleReader})))
+const articleSerif=Platform.select({ios:'Georgia',android:'serif',default:'Georgia, "Times New Roman", serif'})
 const FeatureScreen=lazy(()=>import('./FeatureScreens'))
 const FriendWhot=lazy(()=>import('./FriendWhot'))
 
@@ -98,7 +100,7 @@ type Props={
   requestNotifications?:()=>Promise<boolean>; getNotificationDevice?:()=>Promise<{platform:'android'|'ios'|'pwa';token:string;endpoint?:string}|null>; notifyDevice?:(title:string,body:string)=>Promise<void>;
   onReady?:()=>void;
 }
-type Overlay={kind:'connections';list:FollowListKind;person:Person}|{kind:'comments'|'share'|'post'|'editPost';post:Post;targetId?:string}|{kind:'editMessage';message:Note}|{kind:'story';person:Person}|{kind:'photo';person:Person;photo:'avatar'|'cover'}|{kind:'create'|'createGroup'|'groupSettings'|'wish'|'newStory'|'editProfile'|'editUsername'}|{kind:'call';video:boolean;person:Person;ringing?:boolean;incoming?:boolean}
+type Overlay={kind:'connections';list:FollowListKind;person:Person}|{kind:'comments'|'share'|'post'|'editPost';post:Post;targetId?:string}|{kind:'editMessage';message:Note}|{kind:'article';articleId:string}|{kind:'story';person:Person}|{kind:'photo';person:Person;photo:'avatar'|'cover'}|{kind:'create'|'createGroup'|'groupSettings'|'wish'|'newStory'|'editProfile'|'editUsername'}|{kind:'call';video:boolean;person:Person;ringing?:boolean;incoming?:boolean}
 type PageEntry={page:Page;profile:Person;room:Room|null;overlays:Overlay[];scrollY:number;lessonId:string}
 const tabs:[Page,Glyph][]=[['Home','home'],['Learn','book'],['Explore','search'],['Play','game']]
 const localRooms=people.filter(p=>p.id in initialChats).map(person=>({id:person.id,person}))
@@ -303,12 +305,19 @@ function UploadedMedia({post}:{post:Post}){
   return <LazyImage uri={post.media} alt="Post attachment" style={{width:'100%',height:195,borderRadius:14,backgroundColor:theme.chip,objectFit:'cover'}}/>
 }
 
-function PostCard({post,onReact,onOverlay,onProfile,detail=false}:{post:Post;detail?:boolean;onReact:(p:Post,k:'like'|'repost')=>void;onOverlay:(o:Overlay)=>void;onProfile:(p:Person)=>void}){
+function PostCard({post,onReact,onOverlay,onProfile,onArticle,detail=false}:{post:Post;detail?:boolean;onReact:(p:Post,k:'like'|'repost')=>void;onOverlay:(o:Overlay)=>void;onProfile:(p:Person)=>void;onArticle?:(id:string)=>void}){
   const {theme}=useDesign()
   return <Card style={{padding:14,gap:9}}>
     <Pressable accessibilityRole="button" accessibilityLabel={'Open '+displayHandle(post.author)+' profile'} onPress={()=>onProfile(post.author)} style={row}><Avatar person={post.author} size={40}/><View style={{flex:1}}><PersonName person={post.author}/><Copy color={theme.muted} size={12}>{shortTime(post.time)}{post.editedAt?' · Edited':''}</Copy></View></Pressable>
-    {!!post.body&&(detail?<LinkedText size={15}>{post.body}</LinkedText>:<Pressable accessibilityRole="button" accessibilityLabel="Open post details" onPress={()=>onOverlay({kind:'post',post})} style={{minHeight:32,justifyContent:'center'}}><LinkedText size={15}>{post.body}</LinkedText></Pressable>)}
+    {post.article?<Pressable accessibilityRole="button" accessibilityLabel={'Read article: '+post.article.title} onPress={()=>onArticle?.(post.article!.id)} style={({pressed})=>({borderRadius:16,borderWidth:1,borderColor:theme.border,backgroundColor:theme.chip,padding:14,gap:8,opacity:pressed?.8:1})}>
+      <View style={{...row,gap:6}}><Icon name="type" size={14} color={theme.purple}/><Copy size={11} weight={800} color={theme.purple}>PRESS CLUB · {post.article.minutes} MIN READ</Copy></View>
+      <Text numberOfLines={3} style={{fontFamily:articleSerif,fontSize:21,lineHeight:28,fontWeight:'800',color:theme.text}}>{post.article.title}</Text>
+      {!!post.article.summary&&<Text numberOfLines={2} style={{fontFamily:articleSerif,fontSize:15,lineHeight:22,color:theme.text}}>{post.article.summary}</Text>}
+      {!!post.article.excerpt&&<Text numberOfLines={3} style={{fontFamily:articleSerif,fontSize:14,lineHeight:21,color:theme.muted}}>{post.article.excerpt}</Text>}
+      <Copy weight={800} color={theme.purple}>Read full article →</Copy>
+    </Pressable>:!!post.body&&(detail?<LinkedText size={15}>{post.body}</LinkedText>:<Pressable accessibilityRole="button" accessibilityLabel="Open post details" onPress={()=>onOverlay({kind:'post',post})} style={{minHeight:32,justifyContent:'center'}}><LinkedText size={15}>{post.body}</LinkedText></Pressable>)}
     {post.media?<UploadedMedia post={post}/>:post.kind&&<PreviewMedia kind={post.kind}/>}
+    {!post.article&&!!post.articleId&&!!onArticle&&<Button label="Read the full article" leading="type" onPress={()=>onArticle(post.articleId!)}/>}
     <View style={{...row,justifyContent:'space-between',gap:1,borderTopWidth:1,borderColor:theme.border,paddingTop:3}}><IconButton name={post.liked?'heartOn':'heart'} label={post.liked?'Unlike post':'Like post'} active={post.liked} count={post.likes} onPress={()=>onReact(post,'like')}/><IconButton name="cm" label="Comments" count={post.comments} onPress={()=>onOverlay({kind:'comments',post})}/><IconButton name="rp" label={post.reposted?'Undo repost':'Repost'} active={post.reposted} count={post.reposts} onPress={()=>onReact(post,'repost')}/><IconButton name="sh" label="Share post" onPress={()=>onOverlay({kind:'share',post})}/></View>
   </Card>
 }
@@ -934,7 +943,7 @@ export default function App(props:Props){
     setOverlay(null)
     clearComment()
   }
-  function open(next:Page,details?:{profile?:Person;room?:Room;lessonId?:string}){
+  function open(next:Page,details?:{profile?:Person;room?:Room;lessonId?:string;articleId?:string}){
     const sameDestination=next===page&&(!details?.profile||details.profile.id===profile.id)&&(!details?.room||details.room.id===room?.id)&&(!details?.lessonId||details.lessonId===lessonId)
     const isTab=tabs.some(([tab])=>tab===next)
     if(sameDestination&&!overlay){
@@ -946,8 +955,17 @@ export default function App(props:Props){
     if(details?.profile)setProfile(details.profile)
     if(details?.room)setRoom(details.room)
     if(details?.lessonId)setLessonId(details.lessonId)
+    if(next==='Press')setPressArticle(details?.articleId)
     changePage(next,isTab?scrollOffsets.current[next]??0:0)
   }
+  const [pressUnread,setPressUnread]=useState(0)
+  const [pressArticle,setPressArticle]=useState<string|undefined>()
+  useEffect(()=>{
+    if(demo||!token||page!=='Home')return
+    let active=true
+    api<{count:number}>(base,'/articles/unread',{},token).then(value=>{if(active)setPressUnread(value.count)}).catch(()=>{})
+    return ()=>{active=false}
+  },[base,demo,page,token])
   const startQuiz=()=>open('Quiz')
   const featuredLesson=dailyLesson(clock)
   const openLesson=(id:string)=>open('Lesson',{lessonId:id})
@@ -1745,7 +1763,7 @@ export default function App(props:Props){
   const canAddStory=ownStoryCount<(verifiedBenefits?verifiedStoryLimit:1)
   const home=<>
     {(demo||token)&&<View style={{paddingHorizontal:2}}><StoryRow onStory={person=>selectOverlay({kind:'story',person})} onCreate={()=>selectOverlay(hasOwnStory?{kind:'story',person:user}:{kind:'newStory'})} onAdd={canAddStory?()=>selectOverlay({kind:'newStory'}):undefined} seen={seenAuthors} own={hasOwnStory?user:null} others={demo?demoStories:activeStories.map(group=>group.author).filter(author=>author.id!==user.id)}/></View>}
-    <Pressable accessibilityRole="button" accessibilityLabel="Open the Press Club" onPress={()=>open('Press')}><Card style={{...row}}><IconTile name="type"/><View style={{flex:1}}><Copy weight={800}>Press Club</Copy><Copy size={12} color={theme.muted}>Articles written by students</Copy></View><Icon name="plus" color={theme.purple}/></Card></Pressable>
+    <Pressable accessibilityRole="button" accessibilityLabel={pressUnread?'Open the Press Club, '+pressUnread+' new '+(pressUnread===1?'article':'articles'):'Open the Press Club'} onPress={()=>open('Press')}><Card style={{...row}}><IconTile name="type"/><View style={{flex:1}}><Copy weight={800}>Press Club</Copy><Copy size={12} color={theme.muted}>{pressUnread?pressUnread+' new '+(pressUnread===1?'article':'articles')+' to read':'Articles written by students'}</Copy></View>{pressUnread>0?<View style={{minWidth:24,height:24,paddingHorizontal:7,borderRadius:12,alignItems:'center',justifyContent:'center',backgroundColor:'#E64661'}}><Copy color="#FFFFFF" size={12} weight={800}>{pressUnread>99?'99+':pressUnread}</Copy></View>:<Icon name="plus" color={theme.purple}/>}</Card></Pressable>
     {(ownBirthday||birthdayPeople.length>0)&&<Card>
       {ownBirthday&&<View style={{gap:4}}><Copy size={19} weight={800}>Happy birthday, {user.name.split(' ')[0]}! 🎂</Copy><Copy color={theme.muted}>Have a great day. Friends can send you a wish today.</Copy></View>}
       {birthdayPeople.length>0&&<>{section('Birthdays today')}{birthdayPeople.map(person=><View key={person.id} style={{...row,flexWrap:'wrap'}}>
@@ -1757,7 +1775,7 @@ export default function App(props:Props){
     </Card>}
     {!demo&&!!token&&!user.dob&&<Card>{section('Add your birthday')}<Copy color={theme.muted}>Friends can wish you a happy birthday. Only the day and month are shown to others.</Copy><BirthdayFields value={birthDraft} onChange={setBirthDraft}/><Button label="Save birthday" disabled={busy||!birthIso(birthDraft)} onPress={()=>void saveBirthday()}/></Card>}
     <Segmented options={['For you','Following']} selected={followingOnly?'Following':'For you'} onSelect={value=>setFollowingOnly(value==='Following')}/>
-    {feedError?failure:loading?<Loading/>:displayedPosts.length?displayedPosts.map(post=><PostCard key={post.id} post={post} onReact={react} onOverlay={selectOverlay} onProfile={showProfile}/>):<Empty title={followingOnly?'Your following feed is empty':'Start the conversation'} detail={followingOnly?'Follow classmates to see their posts here.':'Share the first post with your classmates.'} action={followingOnly?'Find people':'Create post'} onPress={followingOnly?()=>open('Explore'):compose}/>}
+    {feedError?failure:loading?<Loading/>:displayedPosts.length?displayedPosts.map(post=><PostCard key={post.id} post={post} onReact={react} onOverlay={selectOverlay} onProfile={showProfile} onArticle={id=>selectOverlay({kind:'article',articleId:id})}/>):<Empty title={followingOnly?'Your following feed is empty':'Start the conversation'} detail={followingOnly?'Follow classmates to see their posts here.':'Share the first post with your classmates.'} action={followingOnly?'Find people':'Create post'} onPress={followingOnly?()=>open('Explore'):compose}/>}
     {demo&&!followingOnly&&<View style={{...row,flexWrap:'wrap'}}>
       <Button label="Birthdays" leading="gift" variant="secondary" onPress={()=>open('Birthdays')}/>
       <Button label="Events" leading="grp" variant="secondary" onPress={()=>open('Events')}/>
@@ -1859,7 +1877,7 @@ export default function App(props:Props){
     {ownProfile&&inviteInfo&&<Card><Copy weight={800} size={18}>Invite friends to dameen</Copy><Copy color={theme.muted}>Share your personal link. New accounts created through it are added to your invite count.</Copy><Copy size={13} weight={700}>{inviteInfo.url}</Copy><Button label="Share my invite link" leading="sh" onPress={()=>void props.share?.(inviteInfo.url,{title:'Join me on dameen',message:'Join me on dameen to learn, build, play and connect.'}).catch(fail)}/></Card>}
     {profile.role==='tech'&&<Card><View style={row}><IconTile name="code"/><View style={{flex:1}}><Copy weight={800}>Tech creator</Copy></View></View></Card>}
     {section('Posts')}
-    {posts.filter(p=>p.author.id===profile.id).map(post=><PostCard key={post.id} post={post} onReact={react} onOverlay={selectOverlay} onProfile={showProfile}/>)}
+    {posts.filter(p=>p.author.id===profile.id).map(post=><PostCard key={post.id} post={post} onReact={react} onOverlay={selectOverlay} onProfile={showProfile} onArticle={id=>selectOverlay({kind:'article',articleId:id})}/>)}
     {!posts.some(p=>p.author.id===profile.id)&&<Empty title="No posts to show" detail="Posts from this profile will appear here."/>}
   </>
   const settings=<>
@@ -1893,7 +1911,7 @@ export default function App(props:Props){
     Lesson:<StudyLesson key={lessonId} id={lessonId} done={completedLessons.includes(lessonId)} onComplete={completeLesson}/>,
     Progress:<LearningProgress done={completedLessons} error={learningError} retry={()=>setLearningRetry(n=>n+1)} open={openLesson}/>,
     Quiz:<Quiz onBack={goBack}/>,
-    Press:<Suspense fallback={<Loading/>}><Press base={base} token={token} demo={demo}/></Suspense>,
+    Press:<Suspense fallback={<Loading/>}><Press base={base} token={token} demo={demo} initialArticle={pressArticle} onSeen={()=>setPressUnread(0)}/></Suspense>,
     Admin:(demo||user.isAdmin)&&<Suspense fallback={<Loading/>}><Admin base={base} token={token}
       sample={demo?{overview:demoOverview,accounts:demoAccounts}:undefined} onSampleChange={changeDemoAccount}/></Suspense>,
     Notifications:demo&&notifications?<Card><View style={row}><Avatar person={people[1]}/><View style={{flex:1}}><Copy weight={800}>Tobi A. liked your post</Copy><Copy color={theme.muted} size={12}>Today</Copy></View></View><View style={row}><Avatar person={people[4]}/><View style={{flex:1}}><Copy weight={800}>Code Club shared a new post</Copy><Copy color={theme.muted} size={12}>Yesterday</Copy></View></View></Card>:notificationsLoading?<Loading/>:notificationItems.length?<View style={stack}>{notificationItems.map(item=><Pressable key={item.id} accessibilityRole="button" onPress={()=>void openNotification(item)} style={{...row,alignItems:'flex-start',padding:13,borderRadius:16,borderWidth:1,borderColor:theme.border,backgroundColor:item.read?theme.card:theme.chip}}>{item.actor?<Avatar person={item.actor} size={42}/>:<IconTile name="bell" size={42}/>}<View style={{flex:1,gap:3}}><Copy weight={item.read?600:800}>{item.body}</Copy><Copy size={12} color={theme.muted}>{shortTime(item.created)}</Copy></View></Pressable>)}<View style={{...row,justifyContent:'space-between',flexWrap:'wrap'}}><Button label="Mark all as read" variant="secondary" onPress={()=>{void call('/notifications/read-all',{method:'PUT'});setNotificationItems(previous=>previous.map(item=>({...item,read:true})));setUnread(false)}}/><View style={row}>{notificationHistory.length>0&&<Button label="Previous" variant="plain" onPress={()=>{const previous=[...notificationHistory];setNotificationCursor(previous.pop()??'');setNotificationHistory(previous)}}/>}{notificationNextCursor&&<Button label="Next" variant="secondary" onPress={()=>{setNotificationHistory(previous=>[...previous,notificationCursor]);setNotificationCursor(notificationNextCursor)}}/>}</View></View><Copy center size={12} color={theme.muted}>Page {notificationHistory.length+1}</Copy></View>:<Empty title="You’re all caught up" detail="New activity will appear here."/>,
@@ -1904,7 +1922,9 @@ export default function App(props:Props){
   }else if(overlay?.kind==='post'){
     const post=posts.find(item=>item.id===overlay.post.id)??overlay.post
     const ownVerified=verifiedBenefits&&post.author.id===user.id
-    sheet=<><PostCard detail post={post} onReact={react} onOverlay={selectOverlay} onProfile={showProfile}/><Button label="Read comments" variant="secondary" onPress={()=>selectOverlay({kind:'comments',post})}/>{ownVerified&&<View style={{...row,flexWrap:'wrap'}}>{(demo||withinEditWindow(post.time))&&<Button label="Edit post" variant="secondary" onPress={()=>{setComment(post.body);selectOverlay({kind:'editPost',post})}}/>}<Button label="Delete post" variant="danger" onPress={()=>void deletePost(post)}/></View>}</>
+    sheet=<><PostCard detail post={post} onReact={react} onOverlay={selectOverlay} onProfile={showProfile} onArticle={id=>selectOverlay({kind:'article',articleId:id})}/><Button label="Read comments" variant="secondary" onPress={()=>selectOverlay({kind:'comments',post})}/>{ownVerified&&<View style={{...row,flexWrap:'wrap'}}>{(demo||withinEditWindow(post.time))&&<Button label="Edit post" variant="secondary" onPress={()=>{setComment(post.body);selectOverlay({kind:'editPost',post})}}/>}<Button label="Delete post" variant="danger" onPress={()=>void deletePost(post)}/></View>}</>
+  }else if(overlay?.kind==='article'){
+    sheet=<Suspense fallback={<Loading/>}><ArticleReader key={overlay.articleId} base={base} token={token} demo={demo} id={overlay.articleId}/></Suspense>
   }else if(overlay?.kind==='editPost'){
     sheet=<><Field label="Edit post" value={comment} onChangeText={setComment} multiline maxLength={1200} style={{minHeight:106,textAlignVertical:'top'}}/><Copy size={12} color={theme.muted}>Verified posts can be edited for one hour after publishing.</Copy><Button label={busy?'Saving…':'Save changes'} disabled={busy||!comment.trim()} onPress={()=>void editPost(overlay.post)}/></>
   }else if(overlay?.kind==='editMessage'){
@@ -1994,7 +2014,7 @@ export default function App(props:Props){
   const overlayTitle=overlay?.kind==='connections'?(overlay.list==='followers'?'Followers':'Following')
     :overlay?.kind==='call'?(overlay.ringing?'Ringing':overlay.video?'Video call':'Voice call')
     :overlay?.kind==='photo'?overlay.photo==='avatar'?'Profile picture':'Cover photo'
-    :overlay&&overlay.kind!=='story'?{editProfile:'Edit profile',editUsername:'Change username',editPost:'Edit post',editMessage:'Edit message',comments:'Comments',share:'Share post',post:'Post detail',create:'Create post',createGroup:'Create group',groupSettings:'Group settings',wish:'Happy birthday, Zee!',newStory:'Create story'}[overlay.kind]:''
+    :overlay&&overlay.kind!=='story'?{article:'Press Club',editProfile:'Edit profile',editUsername:'Change username',editPost:'Edit post',editMessage:'Edit message',comments:'Comments',share:'Share post',post:'Post detail',create:'Create post',createGroup:'Create group',groupSettings:'Group settings',wish:'Happy birthday, Zee!',newStory:'Create story'}[overlay.kind]:''
   const story=overlay?.kind==='story'?(demoAccounts.find(account=>account.person.id===overlay.person.id)?.person??overlay.person):null
   const liveGroup=story&&!demo?activeStories.find(group=>group.author.id===story.id):undefined
   const activeIndex=liveGroup?Math.min(storyIndex,liveGroup.stories.length-1):0

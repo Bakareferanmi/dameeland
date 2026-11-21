@@ -52,7 +52,7 @@ export type AdminAccounts = {accounts:AdminAccount[];nextCursor:string|null}
 export type FollowListKind = 'followers'|'following'
 export type FollowPage = {people:Person[]; nextCursor:string|null}
 export type FollowStats = {followers:number; following:number; followedByViewer:boolean;followsViewer:boolean}
-export type Post = {id:string; author:Person; body:string; likes:number; liked:boolean; comments:number; reposts:number; reposted:boolean; time:string; createdAt?:number; editedAt?:string; kind?:'image'|'video'; media?:string; searchPublic?:boolean}
+export type Post = {id:string; author:Person; body:string; likes:number; liked:boolean; comments:number; reposts:number; reposted:boolean; time:string; createdAt?:number; editedAt?:string; kind?:'image'|'video'; media?:string; searchPublic?:boolean; articleId?:string; article?:{id:string;title:string;summary:string;excerpt:string;minutes:number}}
 export const commentGifs = {cheer:'Cheer',sparkle:'Sparkle',highfive:'High five'} as const
 export const commentStickers = {
   nice:{label:'Nice!',emoji:'✨'},

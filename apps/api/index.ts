@@ -900,9 +900,13 @@ app.post('/api/logout',async c=>{
   await c.env.DB.prepare('DELETE FROM sessions WHERE token_hash=?').bind(c.get('tokenHash')).run()
   return c.json({ok:true})
 })
-type PostRow=PublicAccount&{post_id:string;body:string;created:number;edited_at:number|null;media:string|null;media_kind:'image'|'video'|null;likes:number;liked:number;comments:number;reposts:number;reposted:number;rank_score:number;search_public:number;article_id:string|null}
+type PostRow=PublicAccount&{post_id:string;body:string;created:number;edited_at:number|null;media:string|null;media_kind:'image'|'video'|null;likes:number;liked:number;comments:number;reposts:number;reposted:number;rank_score:number;search_public:number;article_id:string|null;article_title:string|null;article_summary:string|null;article_excerpt:string|null;article_size:number|null}
 const postProjection=`
     SELECT u.id,u.name,u.role,u.username,u.verified,u.teacher,u.dob,u.avatar_media,u.cover_media,u.bio,p.id post_id,p.body,p.created,p.edited_at,p.media,p.media_kind,p.search_public,p.article_id,
+    (SELECT title FROM articles WHERE id=p.article_id) article_title,
+    (SELECT summary FROM articles WHERE id=p.article_id) article_summary,
+    (SELECT substr(body,1,700) FROM articles WHERE id=p.article_id) article_excerpt,
+    (SELECT length(body) FROM articles WHERE id=p.article_id) article_size,
     (SELECT COUNT(*) FROM reactions r WHERE r.post_id=p.id AND kind='like') likes,
     EXISTS(SELECT 1 FROM reactions r WHERE r.post_id=p.id AND r.user_id=? AND kind='like') liked,
     (SELECT COUNT(*) FROM comments x WHERE x.post_id=p.id) comments,
@@ -917,7 +921,8 @@ const postProjection=`
       / (1 + ((strftime('%s','now') * 1000 - p.created) / 3600000.0) / 12.0) rank_score
     FROM posts p JOIN users u ON u.id=p.author
 `
-const postView=(r:PostRow,url:string)=>({id:r.post_id,author:person(r,url),body:r.body,time:time(r.created),createdAt:r.created,editedAt:r.edited_at?time(r.edited_at):undefined,likes:r.likes,liked:Boolean(r.liked),comments:r.comments,reposts:r.reposts,reposted:Boolean(r.reposted),searchPublic:Boolean(r.search_public),articleId:r.article_id??undefined,kind:r.media_kind??undefined,media:r.media?new URL('/api/media/'+r.media,url).href:undefined})
+const articleExcerpt=(text:string)=>{const plain=text.replace(/^\s*(#{1,6}|>|[-*])\s+/gm,'').replace(/\*\*/g,'').replace(/\s+/g,' ').trim();return plain.length>220?plain.slice(0,220).replace(/\s+\S*$/,'')+'…':plain}
+const postView=(r:PostRow,url:string)=>({id:r.post_id,author:person(r,url),body:r.body,time:time(r.created),createdAt:r.created,editedAt:r.edited_at?time(r.edited_at):undefined,likes:r.likes,liked:Boolean(r.liked),comments:r.comments,reposts:r.reposts,reposted:Boolean(r.reposted),searchPublic:Boolean(r.search_public),articleId:r.article_id??undefined,article:r.article_id&&r.article_title!=null?{id:r.article_id,title:r.article_title,summary:r.article_summary??'',excerpt:articleExcerpt(r.article_excerpt??''),minutes:Math.max(1,Math.ceil((r.article_size??0)/1200))}:undefined,kind:r.media_kind??undefined,media:r.media?new URL('/api/media/'+r.media,url).href:undefined})
 app.get('/api/feed',async c=>{
   const id=c.get('user').id
   const following=c.req.query('following')==='1'
