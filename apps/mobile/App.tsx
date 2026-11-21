@@ -61,6 +61,13 @@ async function openGoogle(getUrl:()=>Promise<string>){
   await Linking.openURL(await getUrl())
   return {close:()=>{}}
 }
+// Expo's fetch (the default in SDK 58) builds multipart bodies itself and rejects React Native's {uri,name,type} shortcut
+// with "Unsupported FormDataPart implementation". It accepts an object with bytes(), so hand it the file's bytes and keep
+// uri/name/type so the shape still matches what the shared app expects. Every photo, video and voice upload goes through here.
+function uploadPart(uri:string,name:string,type:string){
+  const file=new File(uri)
+  return {uri,name,type,bytes:()=>file.bytes()}
+}
 async function selectedMedia(image:{uri:string;type?:string|null;fileName?:string|null;mimeType?:string|null;fileSize?:number|null;duration?:number|null}){
   const kind:'video'|'image'=image.type==='video'?'video':'image'
   let uri=image.uri,fileSize=image.fileSize??0
@@ -82,7 +89,7 @@ async function selectedMedia(image:{uri:string;type?:string|null;fileName?:strin
   const extension=kind==='video'?'mp4':'jpg'
   const name=converted&&image.fileName?image.fileName.replace(/\.[^.]+$/,'')+'.jpg':image.fileName??'dameen-'+Date.now()+'.'+extension
   const type=converted?'image/jpeg':image.mimeType??(kind==='video'?'video/mp4':'image/jpeg')
-  return {name,uri,data:{name,type,uri},kind,duration:kind==='video'&&image.duration?image.duration/1000:undefined}
+  return {name,uri,data:uploadPart(uri,name,type),kind,duration:kind==='video'&&image.duration?image.duration/1000:undefined}
 }
 async function pickMedia(comment=false){
   const ImagePicker=await import('expo-image-picker')
@@ -140,7 +147,7 @@ export default function App(){
       await setAudioModeAsync({playsInSilentMode:true,allowsRecording:false})
       if(!uri)return null
       const name='dameen-voice-'+Date.now()+'.m4a'
-      return {name,uri,data:{uri,name,type:'audio/m4a'},kind:'audio' as const,duration:Math.max(1,(Date.now()-recordingStarted.current)/1000)}
+      return {name,uri,data:uploadPart(uri,name,'audio/m4a'),kind:'audio' as const,duration:Math.max(1,(Date.now()-recordingStarted.current)/1000)}
     },
   }
   const [callMedia,setCallMedia]=useState<CallMedia>()
