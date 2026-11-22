@@ -13,6 +13,7 @@ import AccountRecovery from './AccountRecovery'
 import {useBrowserModalBack} from './useBrowserModalBack'
 import {Toast,type ToastMessage} from './Toast'
 import {Comments,type GifRenderer} from './Comments'
+import {MentionField,MessageActions,PersonPicker,QuoteEmbed,ReactionChips,ReplyPreview,SwipeToReply,applyReaction,replyFromNote} from './Social'
 import type {AdminAccount,AdminOverview,CommentAttachment,Viewer} from './index'
 
 const Admin=lazy(()=>import('./Admin'))
@@ -330,10 +331,12 @@ function UploadedMedia({post}:{post:Post}){
   return <LazyImage uri={post.media} alt="Post attachment" style={{width:'100%',height:195,borderRadius:14,backgroundColor:theme.chip,objectFit:'cover'}}/>
 }
 
-function PostCard({post,onReact,onOverlay,onProfile,onArticle,detail=false}:{post:Post;detail?:boolean;onReact:(p:Post,k:'like'|'repost')=>void;onOverlay:(o:Overlay)=>void;onProfile:(p:Person)=>void;onArticle?:(id:string)=>void}){
+function PostCard({post,onReact,onOverlay,onProfile,onArticle,onQuote,onInvite,detail=false}:{post:Post;detail?:boolean;onReact:(p:Post,k:'like'|'repost')=>void;onOverlay:(o:Overlay)=>void;onProfile:(p:Person)=>void;onArticle?:(id:string)=>void;onQuote?:(p:Post)=>void;onInvite?:(p:Post,accept:boolean)=>void}){
   const {theme}=useDesign()
+  const team=post.coAuthors??[]
   return <Card style={{padding:14,gap:9}}>
-    <Pressable accessibilityRole="button" accessibilityLabel={'Open '+displayHandle(post.author)+' profile'} onPress={()=>onProfile(post.author)} style={row}><Avatar person={post.author} size={40}/><View style={{flex:1}}><PersonName person={post.author}/><Copy color={theme.muted} size={12}>{shortTime(post.time)}{post.editedAt?' · Edited':''}</Copy></View></Pressable>
+    {post.coAuthorInvite&&<View accessibilityLabel={'Co-author invite from '+displayHandle(post.author)} style={{borderRadius:14,backgroundColor:theme.chip,padding:12,gap:8}}><Copy weight={800} size={13}>{displayHandle(post.author)} invited you to share this post</Copy><View style={{...row,gap:8}}><View style={{flex:1}}><Button label="Accept" onPress={()=>onInvite?.(post,true)}/></View><View style={{flex:1}}><Button label="Decline" variant="secondary" onPress={()=>onInvite?.(post,false)}/></View></View></View>}
+    <Pressable accessibilityRole="button" accessibilityLabel={'Open '+displayHandle(post.author)+' profile'} onPress={()=>onProfile(post.author)} style={row}><Avatar person={post.author} size={40}/><View style={{flex:1}}><PersonName person={post.author}/><Copy color={theme.muted} size={12}>{shortTime(post.time)}{post.editedAt?' · Edited':''}</Copy>{team.length>0&&<Text numberOfLines={2} style={{color:theme.muted,fontSize:12,lineHeight:17}}>with {team.map((entry,index)=>(index?', ':'')+'@'+displayHandle(entry.person)+(entry.status==='pending'?' (invited)':'')).join('')}</Text>}</View></Pressable>
     {post.article?<Pressable accessibilityRole="button" accessibilityLabel={'Read article: '+post.article.title} onPress={()=>onArticle?.(post.article!.id)} style={({pressed})=>({borderRadius:16,borderWidth:1,borderColor:theme.border,backgroundColor:theme.chip,padding:14,gap:8,opacity:pressed?.8:1})}>
       <View style={{...row,gap:6}}><Icon name="type" size={14} color={theme.purple}/><Copy size={11} weight={800} color={theme.purple}>PRESS CLUB · {post.article.minutes} MIN READ</Copy></View>
       <Text numberOfLines={3} style={{fontFamily:articleSerif,fontSize:21,lineHeight:28,fontWeight:'800',color:theme.text}}>{post.article.title}</Text>
@@ -342,8 +345,9 @@ function PostCard({post,onReact,onOverlay,onProfile,onArticle,detail=false}:{pos
       <Copy weight={800} color={theme.purple}>Read full article →</Copy>
     </Pressable>:!!post.body&&(detail?<LinkedText size={15}>{post.body}</LinkedText>:<Pressable accessibilityRole="button" accessibilityLabel="Open post details" onPress={()=>onOverlay({kind:'post',post})} style={{minHeight:32,justifyContent:'center'}}><LinkedText size={15}>{post.body}</LinkedText></Pressable>)}
     {post.media?<UploadedMedia post={post}/>:post.kind&&<PreviewMedia kind={post.kind}/>}
+    {post.quote&&<QuoteEmbed quote={post.quote} onPress={post.quote.unavailable?undefined:()=>onOverlay({kind:'post',post:{...post,id:post.quote!.id}})}/>}
     {!post.article&&!!post.articleId&&!!onArticle&&<Button label="Read the full article" leading="type" onPress={()=>onArticle(post.articleId!)}/>}
-    <View style={{...row,justifyContent:'space-between',gap:1,borderTopWidth:1,borderColor:theme.border,paddingTop:3}}><IconButton name={post.liked?'heartOn':'heart'} label={post.liked?'Unlike post':'Like post'} active={post.liked} count={post.likes} onPress={()=>onReact(post,'like')}/><IconButton name="cm" label="Comments" count={post.comments} onPress={()=>onOverlay({kind:'comments',post})}/><IconButton name="rp" label={post.reposted?'Undo repost':'Repost'} active={post.reposted} count={post.reposts} onPress={()=>onReact(post,'repost')}/><IconButton name="sh" label="Share post" onPress={()=>onOverlay({kind:'share',post})}/></View>
+    <View style={{...row,justifyContent:'space-between',gap:1,borderTopWidth:1,borderColor:theme.border,paddingTop:3}}><IconButton name={post.liked?'heartOn':'heart'} label={post.liked?'Unlike post':'Like post'} active={post.liked} count={post.likes} onPress={()=>onReact(post,'like')}/><IconButton name="cm" label="Comments" count={post.comments} onPress={()=>onOverlay({kind:'comments',post})}/><IconButton name="rp" label={post.reposted?'Undo repost':'Repost'} active={post.reposted} count={post.reposts} onPress={()=>onReact(post,'repost')}/>{onQuote&&!post.article&&<IconButton name="type" label="Quote post" onPress={()=>onQuote(post)}/>}<IconButton name="sh" label="Share post" onPress={()=>onOverlay({kind:'share',post})}/></View>
   </Card>
 }
 function ConnectionList({base,token,profile,list,samples,onProfile}:{base:string;token:string;profile:Person;list:FollowListKind;samples?:Person[];onProfile:(person:Person)=>void}){
@@ -525,8 +529,11 @@ export default function App(props:Props){
   const [openedOnce,setOpenedOnce]=useState<{kind:'image'|'video';url:string;id:string;room:string}|null>(null)
   const [streak,setStreak]=useState<ChatStreak|null>(null)
   const [replyTarget,setReplyTarget]=useState<Note|null>(null)
+  const [quoteTarget,setQuoteTarget]=useState<Post|null>(null),[coAuthors,setCoAuthors]=useState<Person[]>([])
+  const [messageReply,setMessageReply]=useState<Note|null>(null),[actionTarget,setActionTarget]=useState<Note|null>(null)
   const [commentMedia,setCommentMedia]=useState<Media|Exclude<CommentAttachment,{kind:'image'}>|null>(null)
   const commentDraft=useRef(0)
+  useEffect(()=>{if(overlay?.kind!=='create'){setQuoteTarget(null);setCoAuthors([])}},[overlay?.kind])
   const clearComment=()=>{commentDraft.current+=1;setComment('');setCommentMedia(null);setReplyTarget(null)}
   useEffect(()=>{
     if(Platform.OS!=='web'||overlay?.kind!=='comments'||!window.visualViewport)return
@@ -862,6 +869,10 @@ export default function App(props:Props){
       }
       if(data?.type==='message-updated'&&typeof data.id==='string'&&typeof data.body==='string'){
         setChats(previous=>({...previous,[roomId]:(previous[roomId]??[]).map(item=>item.id===data.id?{...item,body:data.body,editedAt:data.editedAt}:item)}))
+        return
+      }
+      if(data?.type==='message-reaction'&&typeof data.id==='string'&&Array.isArray(data.reactions)){
+        setChats(previous=>({...previous,[roomId]:(previous[roomId]??[]).map(item=>item.id===data.id?{...item,reactions:data.reactions}:item)}))
         return
       }
       if(data?.type==='message-deleted'&&typeof data.id==='string'){
@@ -1270,22 +1281,34 @@ export default function App(props:Props){
     }catch(reason){if(session===demoSession.current)fail(reason)}
     finally{photoLock.current=false;setPhotoBusy(null)}
   }
+  function startQuote(post:Post){setQuoteTarget(post);setCoAuthors([]);setDraft('');setAttachment(null);selectOverlay({kind:'create'})}
+  async function answerInvite(post:Post,accept:boolean){
+    if(busy)return
+    setBusy(true)
+    try{
+      if(!demo)await call('/posts/'+encodeURIComponent(post.id)+'/coauthor',json({accept},'PUT'))
+      setPosts(previous=>accept?previous.map(item=>item.id===post.id?{...item,coAuthorInvite:undefined,coAuthors:item.coAuthors?.map(entry=>entry.person.id===user.id?{...entry,status:'accepted' as const}:entry)}:item):previous.filter(item=>item.id!==post.id))
+      notify(accept?'You are now a co-author':'Invite declined')
+    }catch(reason){fail(reason)}finally{setBusy(false)}
+  }
   async function createPost(){
     if(busy||(!draft.trim()&&!attachment))return
     setBusy(true)
     try{
-      if(demo)setPosts(previous=>[{id:uid(),author:user,body:draft.trim(),media:attachment?.uri,kind:attachment?.kind==='video'?'video':'image',time:'Just now',likes:0,comments:0,reposts:0,liked:false,reposted:false},...previous])
+      if(demo)setPosts(previous=>[{id:uid(),author:user,body:draft.trim(),media:attachment?.uri,kind:attachment?.kind==='video'?'video':'image',time:'Just now',likes:0,comments:0,reposts:0,liked:false,reposted:false,quote:quoteTarget?{id:quoteTarget.id,author:quoteTarget.author,body:quoteTarget.body,time:quoteTarget.time}:undefined,coAuthors:coAuthors.length?coAuthors.map(person=>({person,status:'pending' as const})):undefined},...previous])
       else{
         const form=new FormData()
         form.append('body',draft.trim())
         if(postSearchPublic)form.append('searchPublic','true')
+        if(quoteTarget)form.append('quoteOf',quoteTarget.id)
+        for(const person of coAuthors)form.append('coAuthor',person.id)
         if(attachment?.kind==='video'&&attachment.duration)form.append('duration',String(attachment.duration))
         if(attachment?.data instanceof Blob)form.append(attachment.kind==='video'?'video':'image',attachment.data,attachment.name)
         else if(attachment)form.append(attachment.kind==='video'?'video':'image',attachment.data as unknown as Blob)
-        await call('/posts',attachment?{method:'POST',body:form}:json({body:draft,searchPublic:postSearchPublic}))
+        await call('/posts',attachment||quoteTarget||coAuthors.length?{method:'POST',body:form}:json({body:draft,searchPublic:postSearchPublic}))
         setRetry(n=>n+1)
       }
-      setDraft('');setAttachment(null);setPostSearchPublic(false);dismissOverlays();setFollowingOnly(false);open('Home');notify('Post shared')
+      setDraft('');setAttachment(null);setPostSearchPublic(false);setQuoteTarget(null);setCoAuthors([]);dismissOverlays();setFollowingOnly(false);open('Home');notify(coAuthors.length?'Post shared. Invites sent.':'Post shared')
     }catch(reason){fail(reason)}finally{setBusy(false)}
   }
   async function updatePostSearchVisibility(post:Post,searchPublic:boolean){
@@ -1467,7 +1490,7 @@ export default function App(props:Props){
     stickToChatEnd.current=true;initialChatScroll.current=true
     const opened={...next,unreadCount:0}
     setRooms(previous=>previous.map(saved=>saved.id===next.id?opened:saved))
-    setMessage('');open('Chat',{room:opened})
+    setMessage('');setMessageReply(null);setActionTarget(null);open('Chat',{room:opened})
   }
   async function messagePerson(person:Person){
     try{
@@ -1568,7 +1591,8 @@ export default function App(props:Props){
         const commentTarget=parts[0]==='comment'?parts[2]:undefined
         const postId=commentTarget?parts[1]:target
         const post=await call<Post>('/posts/'+encodeURIComponent(postId))
-        selectOverlay({kind:item.kind==='comment'||!!commentTarget?'comments':'post',post,targetId:commentTarget})
+        const postLevel=!commentTarget&&/invited you|mentioned you in a post|joined your|quoted your/.test(item.body)
+        selectOverlay({kind:!postLevel&&(item.kind==='comment'||!!commentTarget)?'comments':'post',post,targetId:commentTarget})
       }
     }catch(reason){fail(reason)}
   }
@@ -1579,24 +1603,36 @@ export default function App(props:Props){
     setBusy(true)
     try{
       let item:Note
-      if(demo)item={id:uid(),author:user,body:message.trim()}
+      const replyTo=messageReply?.id
+      if(demo)item={id:uid(),author:user,body:message.trim(),reply:messageReply?replyFromNote(messageReply):undefined}
       else if(chatMedia){
         const form=new FormData();form.append('body',message.trim())
+        if(replyTo)form.append('replyTo',replyTo)
         form.append('viewOnce',String(chatViewOnce))
         if(chatMedia.duration)form.append('duration',String(chatMedia.duration))
         const field=chatMedia.kind==='audio'?'audio':chatMedia.kind==='video'?'video':'image'
         if(chatMedia.data instanceof Blob)form.append(field,chatMedia.data,chatMedia.name)
         else form.append(field,chatMedia.data as unknown as Blob)
         item=await call<Note>('/rooms/'+id+'/messages',{method:'POST',body:form})
-      }else item=await call<Note>('/rooms/'+id+'/messages',json({body:message}))
+      }else item=await call<Note>('/rooms/'+id+'/messages',json({body:message,replyTo}))
       stickToChatEnd.current=true
-      append(item);setMessage('');setChatMedia(null);setChatViewOnce(false);setChatTools(false)
+      append(item);setMessageReply(null);setMessage('');setChatMedia(null);setChatViewOnce(false);setChatTools(false)
       if(!demo&&!room.person.group){const latest=await call<ChatStreak|null>('/rooms/'+id+'/streak');setStreak(latest);setRooms(previous=>previous.map(saved=>saved.id===id?{...saved,streak:latest??undefined}:saved))}
       if(demo){
         const session=demoSession.current
         replyTimers.current.push(setTimeout(()=>{if(session===demoSession.current){append({id:uid(),author:room.person,body:'Thanks for the message! See you at school.'});void props.notifyDevice?.(room.person.name,'Thanks for the message! See you at school.')}},950))
       }
     }catch(reason){fail(reason)}finally{setBusy(false)}
+  }
+  async function reactToMessage(item:Note,emoji:string|null){
+    if(!room)return
+    const roomId=room.id
+    const before=item.reactions
+    const set=(reactions:Note['reactions'])=>setChats(previous=>({...previous,[roomId]:(previous[roomId]??[]).map(entry=>entry.id===item.id?{...entry,reactions}:entry)}))
+    set(applyReaction(before,user.id,emoji))
+    if(demo)return
+    try{await call('/rooms/'+roomId+'/messages/'+encodeURIComponent(item.id)+'/reaction',json({emoji},'PUT'))}
+    catch(reason){set(before);fail(reason)}
   }
   async function pickChatMedia(source:'gallery'|'camera',viewOnce=false){
     try{
@@ -1806,7 +1842,7 @@ export default function App(props:Props){
     </Card>}
     {!demo&&!!token&&!user.dob&&<Card>{section('Add your birthday')}<Copy color={theme.muted}>Friends can wish you a happy birthday. Only the day and month are shown to others.</Copy><BirthdayFields value={birthDraft} onChange={setBirthDraft}/><Button label="Save birthday" disabled={busy||!birthIso(birthDraft)} onPress={()=>void saveBirthday()}/></Card>}
     <Segmented options={['For you','Following']} selected={followingOnly?'Following':'For you'} onSelect={value=>setFollowingOnly(value==='Following')}/>
-    {feedError?failure:loading?<Loading/>:displayedPosts.length?displayedPosts.map(post=><PostCard key={post.id} post={post} onReact={react} onOverlay={selectOverlay} onProfile={showProfile} onArticle={id=>selectOverlay({kind:'article',articleId:id})}/>):<Empty title={followingOnly?'Your following feed is empty':'Start the conversation'} detail={followingOnly?'Follow classmates to see their posts here.':'Share the first post with your classmates.'} action={followingOnly?'Find people':'Create post'} onPress={followingOnly?()=>open('Explore'):compose}/>}
+    {feedError?failure:loading?<Loading/>:displayedPosts.length?displayedPosts.map(post=><PostCard key={post.id} post={post} onReact={react} onOverlay={selectOverlay} onProfile={showProfile} onArticle={id=>selectOverlay({kind:'article',articleId:id})} onQuote={startQuote} onInvite={(item,accept)=>void answerInvite(item,accept)}/>):<Empty title={followingOnly?'Your following feed is empty':'Start the conversation'} detail={followingOnly?'Follow classmates to see their posts here.':'Share the first post with your classmates.'} action={followingOnly?'Find people':'Create post'} onPress={followingOnly?()=>open('Explore'):compose}/>}
     {demo&&!followingOnly&&<View style={{...row,flexWrap:'wrap'}}>
       <Button label="Birthdays" leading="gift" variant="secondary" onPress={()=>open('Birthdays')}/>
       <Button label="Events" leading="grp" variant="secondary" onPress={()=>open('Events')}/>
@@ -1848,8 +1884,9 @@ export default function App(props:Props){
     </View>:(()=>{
       const own=item.author.id===user.id
       const canEdit=own&&verifiedBenefits&&(demo||withinEditWindow(item.createdAt))
-      return <View key={item.id} style={{alignSelf:own?'flex-end':'flex-start',backgroundColor:own?theme.purple:theme.card,maxWidth:'84%',borderRadius:18,borderBottomLeftRadius:own?18:5,borderBottomRightRadius:own?5:18,borderWidth:1,borderColor:own?theme.purple:theme.border,padding:12,gap:5}}>
+      return <SwipeToReply key={item.id} own={own} onReply={()=>setMessageReply(item)} onLongPress={()=>setActionTarget(item)}><View style={{backgroundColor:own?theme.purple:theme.card,borderRadius:18,borderBottomLeftRadius:own?18:5,borderBottomRightRadius:own?5:18,borderWidth:1,borderColor:own?theme.purple:theme.border,padding:12,gap:5}}>
         {!own&&room.person.group&&<View style={{...row,gap:6}}><Avatar person={item.author} size={20}/><Copy size={11} weight={800} color={theme.purple}>{displayHandle(item.author)}</Copy></View>}
+        {item.reply&&<ReplyPreview reply={item.reply} own={own}/>}
         {!!item.body&&<LinkedText color={own?'#fff':theme.text} linkColor={own?lime:theme.purple}>{item.body}</LinkedText>}
         {item.chatMedia&&<View style={{gap:7,minWidth:220}}>
           {item.chatMedia.kind==='image'?<Image accessibilityLabel="Chat photo" source={{uri:item.chatMedia.url}} resizeMode="cover" style={{width:260,maxWidth:'100%',height:220,borderRadius:13}}/>:item.chatMedia.kind==='video'?(Platform.OS==='web'?React.createElement('video',{src:item.chatMedia.url,controls:true,playsInline:true,style:{width:'100%',maxHeight:280,borderRadius:13,backgroundColor:'#000'}}):props.renderVideo?<props.renderVideo uri={item.chatMedia.url}/>:<Copy color={own?'#fff':theme.text}>Video</Copy>):Platform.OS==='web'?React.createElement('audio',{src:item.chatMedia.url,controls:true,style:{width:'100%'}}):props.renderAudio?<props.renderAudio uri={item.chatMedia.url}/>:<Copy color={own?'#fff':theme.text}>Voice note</Copy>}
@@ -1860,6 +1897,8 @@ export default function App(props:Props){
         {own&&lastOwnMessageId===item.id&&<Copy size={11} color="#FFFFFFCC">{item.readAt?'Seen · '+shortTime(item.readAt):'Sent'}</Copy>}
         {own&&verifiedBenefits&&<View style={{...row,gap:16,flexWrap:'wrap',borderTopWidth:1,borderTopColor:'#FFFFFF2E',paddingTop:2}}>{canEdit&&<Pressable accessibilityRole="button" accessibilityLabel="Edit message" onPress={()=>{setComment(item.body);selectOverlay({kind:'editMessage',message:item})}} style={{minHeight:36,justifyContent:'center'}}><Copy size={12} weight={800} color="#FFFFFFD9">Edit</Copy></Pressable>}<Pressable accessibilityRole="button" accessibilityLabel="Delete message" onPress={()=>void deleteMessage(item)} style={{minHeight:36,justifyContent:'center'}}><Copy size={12} weight={800} color="#FFFFFFD9">Delete</Copy></Pressable></View>}
       </View>
+      <ReactionChips reactions={item.reactions} viewer={user.id} own={own} onToggle={emoji=>void reactToMessage(item,item.reactions?.some(entry=>entry.userId===user.id&&entry.emoji===emoji)?null:emoji)}/>
+      </SwipeToReply>
     })())}
     {!room.person.group&&verifiedBenefits&&!streak&&<Card style={{...row,backgroundColor:'#F4FFD7',borderColor:lime,borderWidth:2}}><View style={{width:46,height:46,borderRadius:23,backgroundColor:lime,alignItems:'center',justifyContent:'center'}}><Copy size={23}>🔥</Copy></View><View style={{flex:1,gap:3}}><Copy color="#25163F" size={17} weight={800}>Start a streak</Copy><Copy size={12} color="#5A4C70">Message each other daily and unlock milestones.</Copy></View><Button label="Start" variant="fun" disabled={busy} onPress={()=>void startStreak()}/></Card>}
     {!room.person.group&&streak&&<Card style={{...row,backgroundColor:theme.chip,borderColor:lime}}><Copy size={24}>🔥</Copy><View style={{flex:1,gap:3}}><Copy weight={800}>{streak.status==='pending'?'Streak invitation sent':streak.count+' day streak'}</Copy><Copy size={12} color={theme.muted}>{streak.status==='pending'?'Waiting for '+displayHandle(room.person)+' to reply · ':streak.nextMilestone?streak.nextMilestone-streak.count+' days to the '+streak.nextMilestone+'-day milestone · ':''}{streakRemaining(streak.expiresAt)}</Copy></View></Card>}
@@ -1908,7 +1947,7 @@ export default function App(props:Props){
     {ownProfile&&inviteInfo&&<Card><Copy weight={800} size={18}>Invite friends to dameen</Copy><Copy color={theme.muted}>Share your personal link. New accounts created through it are added to your invite count.</Copy><Copy size={13} weight={700}>{inviteInfo.url}</Copy><Button label="Share my invite link" leading="sh" onPress={()=>void props.share?.(inviteInfo.url,{title:'Join me on dameen',message:'Join me on dameen to learn, build, play and connect.'}).catch(fail)}/></Card>}
     {profile.role==='tech'&&<Card><View style={row}><IconTile name="code"/><View style={{flex:1}}><Copy weight={800}>Tech creator</Copy></View></View></Card>}
     {section('Posts')}
-    {posts.filter(p=>p.author.id===profile.id).map(post=><PostCard key={post.id} post={post} onReact={react} onOverlay={selectOverlay} onProfile={showProfile} onArticle={id=>selectOverlay({kind:'article',articleId:id})}/>)}
+    {posts.filter(p=>p.author.id===profile.id).map(post=><PostCard key={post.id} post={post} onReact={react} onOverlay={selectOverlay} onProfile={showProfile} onArticle={id=>selectOverlay({kind:'article',articleId:id})} onQuote={startQuote} onInvite={(item,accept)=>void answerInvite(item,accept)}/>)}
     {!posts.some(p=>p.author.id===profile.id)&&<Empty title="No posts to show" detail="Posts from this profile will appear here."/>}
   </>
   const settings=<>
@@ -1953,7 +1992,7 @@ export default function App(props:Props){
   }else if(overlay?.kind==='post'){
     const post=posts.find(item=>item.id===overlay.post.id)??overlay.post
     const ownVerified=verifiedBenefits&&post.author.id===user.id
-    sheet=<><PostCard detail post={post} onReact={react} onOverlay={selectOverlay} onProfile={showProfile} onArticle={id=>selectOverlay({kind:'article',articleId:id})}/><Button label="Read comments" variant="secondary" onPress={()=>selectOverlay({kind:'comments',post})}/>{ownVerified&&<View style={{...row,flexWrap:'wrap'}}>{(demo||withinEditWindow(post.time))&&<Button label="Edit post" variant="secondary" onPress={()=>{setComment(post.body);selectOverlay({kind:'editPost',post})}}/>}<Button label="Delete post" variant="danger" onPress={()=>void deletePost(post)}/></View>}</>
+    sheet=<><PostCard detail post={post} onReact={react} onOverlay={selectOverlay} onProfile={showProfile} onArticle={id=>selectOverlay({kind:'article',articleId:id})} onQuote={startQuote} onInvite={(item,accept)=>void answerInvite(item,accept)}/><Button label="Read comments" variant="secondary" onPress={()=>selectOverlay({kind:'comments',post})}/>{ownVerified&&<View style={{...row,flexWrap:'wrap'}}>{(demo||withinEditWindow(post.time))&&<Button label="Edit post" variant="secondary" onPress={()=>{setComment(post.body);selectOverlay({kind:'editPost',post})}}/>}<Button label="Delete post" variant="danger" onPress={()=>void deletePost(post)}/></View>}</>
   }else if(overlay?.kind==='article'){
     sheet=<Suspense fallback={<Loading/>}><ArticleReader key={overlay.articleId} base={base} token={token} demo={demo} id={overlay.articleId}/></Suspense>
   }else if(overlay?.kind==='editPost'){
@@ -1962,7 +2001,7 @@ export default function App(props:Props){
     sheet=<><Field label="Edit message" value={comment} onChangeText={setComment} multiline maxLength={800}/><Copy size={12} color={theme.muted}>Verified messages can be edited for one hour after sending.</Copy><Button label={busy?'Saving…':'Save changes'} disabled={busy||!comment.trim()} onPress={()=>void editMessage(overlay.message)}/></>
   }else if(overlay?.kind==='comments'){
     const list=notes[overlay.post.id]??(demo&&overlay.post.id==='quadratics'?initialComments:[])
-    sheet=<Comments key={overlay.post.id} list={list} body={comment} onBody={value=>{commentDraft.current++;setComment(value)}} busy={busy} renderGif={props.renderGif}
+    sheet=<Comments key={overlay.post.id} base={props.base} token={token} demo={demo} list={list} body={comment} onBody={value=>{commentDraft.current++;setComment(value)}} busy={busy} renderGif={props.renderGif}
       replyTo={replyTarget} highlightId={overlay.targetId} onReply={item=>{commentDraft.current++;setReplyTarget(item)}} onCancelReply={()=>{commentDraft.current++;setReplyTarget(null)}} onLike={item=>void likeComment(overlay.post.id,item)}
       attachment={commentMedia&&'uri' in commentMedia?{kind:'image',url:commentMedia.uri}:commentMedia??undefined}
       onPreset={value=>{commentDraft.current+=1;setCommentMedia(value)}} onRemove={()=>{commentDraft.current+=1;setCommentMedia(null)}}
@@ -1985,11 +2024,13 @@ export default function App(props:Props){
     sheet=<View style={{alignItems:'center',gap:18}}>{url?<Image accessibilityLabel={overlay.photo==='avatar'?'Profile picture':'Cover photo'} source={{uri:url}} resizeMode="contain" style={{width:'100%',height:Math.min(460,width*1.15)}}/>:overlay.photo==='avatar'?<Avatar person={overlay.person} size={160}/>:<View style={{backgroundColor:'#4F25D6',width:'100%',height:190}}/>}
       <Copy weight={800}>{displayHandle(overlay.person)}</Copy></View>
   }else if(overlay?.kind==='create'){
-    sheet=<><View style={row}><Avatar person={user}/><PersonName person={user}/></View><Field label="What’s happening?" value={draft} onChangeText={setDraft} multiline maxLength={1200} style={{minHeight:106,textAlignVertical:'top'}}/>
+    sheet=<><View style={row}><Avatar person={user}/><PersonName person={user}/></View><MentionField label={quoteTarget?'Add your thoughts':'What’s happening? Tag people with @'} value={draft} onChange={setDraft} base={props.base} token={token} demo={demo} maxLength={1200} style={{minHeight:106,textAlignVertical:'top'}}/>
+      {quoteTarget&&<View style={{gap:6}}><QuoteEmbed quote={{id:quoteTarget.id,author:quoteTarget.author,body:quoteTarget.body,kind:quoteTarget.kind,media:quoteTarget.media,time:quoteTarget.time}}/><Button label="Remove quoted post" variant="plain" onPress={()=>setQuoteTarget(null)}/></View>}
+      {!quoteTarget&&<PersonPicker selected={coAuthors} onChange={setCoAuthors} max={2} base={props.base} token={token} demo={demo} disabled={busy}/>}
       {attachment&&<View style={spread}><Copy size={12}>{attachment.name}</Copy><IconButton name="close" label="Remove image" onPress={()=>setAttachment(null)}/></View>}
       {props.pickMedia&&<Button label="Add image or video" leading="image" variant="secondary" onPress={()=>{void props.pickMedia?.().then(value=>{if(!value)return;if(value.kind==='video'&&(!value.duration||value.duration>videoLimit+.25)){fail(new Error('Videos can be up to '+videoLimit+' seconds.'));return}setAttachment(value)}).catch(fail)}}/>}
       {!demo&&<SearchVisibility label="Show post in web search" detail="Search engines can show this post and its media to anyone." value={postSearchPublic} onChange={setPostSearchPublic} disabled={busy}/>}
-      <Button label={busy?'Posting…':'Publish post'} onPress={()=>void createPost()} disabled={busy||(!draft.trim()&&!attachment)}/></>
+      <Button label={busy?'Posting…':coAuthors.length?'Publish and invite':quoteTarget?'Quote post':'Publish post'} onPress={()=>void createPost()} disabled={busy||(!draft.trim()&&!attachment)}/></>
   }else if(overlay?.kind==='createGroup'){
     sheet=<>
       <Copy color={theme.muted}>Give the group a clear name, then choose the people you want to add.</Copy>
@@ -2131,6 +2172,8 @@ export default function App(props:Props){
               {verifiedBenefits&&<Button label="View once" leading="eye" variant="secondary" onPress={()=>void pickChatMedia('gallery',true)}/>}
               {verifiedBenefits&&props.pickCamera&&<Button label="Camera once" leading="eye" variant="secondary" onPress={()=>void pickChatMedia('camera',true)}/>}
             </View>}
+            {actionTarget&&<MessageActions current={actionTarget.reactions?.find(entry=>entry.userId===user.id)?.emoji} onClose={()=>setActionTarget(null)} onReply={()=>{setMessageReply(actionTarget);setActionTarget(null)}} onReact={emoji=>{const target=actionTarget;setActionTarget(null);void reactToMessage(target,emoji)}}/>}
+            {messageReply&&<View style={{...row,paddingHorizontal:12,paddingTop:8,backgroundColor:theme.card}}><View style={{flex:1,minWidth:0}}><ReplyPreview reply={replyFromNote(messageReply)} own={false}/></View><IconButton name="close" label="Cancel reply" onPress={()=>setMessageReply(null)}/></View>}
             {chatMedia&&<View style={{...row,paddingHorizontal:14,paddingTop:8,backgroundColor:theme.card}}><Icon name={chatMedia.kind==='audio'?'mic':chatMedia.kind==='video'?'vid':'image'} color={theme.purple}/><View style={{flex:1}}><Copy weight={800}>{chatViewOnce?'View once ':''}{chatMedia.kind==='audio'?'voice note':chatMedia.kind}</Copy><Copy size={11} color={theme.muted}>Compressed and ready to send</Copy></View><IconButton name="close" label="Remove chat media" onPress={()=>{setChatMedia(null);setChatViewOnce(false)}}/></View>}
             <View style={{...row,paddingHorizontal:12,paddingVertical:9,borderTopWidth:1,borderColor:theme.border,backgroundColor:theme.card}}>
               {props.pickMedia&&<IconButton name={chatTools?'close':'plus'} label={chatTools?'Close media tools':'Add media'} active={chatTools} onPress={()=>setChatTools(value=>!value)}/>}

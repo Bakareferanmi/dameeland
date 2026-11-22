@@ -9,6 +9,11 @@ export type Role = 'student' | 'tech'
 export const usernameHint = 'Use 3–24 letters, numbers or underscores.'
 export const normalizeUsername = (value:string) => value.trim().toLowerCase()
 export const validUsername = (value:string) => /^[a-z0-9_]{3,24}$/.test(value)
+/** @username tags in posts and comments. The same rule runs on the server (to notify people) and in the app (to highlight them). */
+export const mentionPattern = /(^|[^\w@])@([a-zA-Z0-9_]{3,24})(?![\w@])/g
+export const extractMentions = (body:string) => [...new Set([...body.matchAll(mentionPattern)].map(match=>match[2].toLowerCase()))].slice(0,10)
+export const maxPostAuthors = 3
+export const messageReactionEmojis = ['❤️','😂','😮','😢','👍','🔥'] as const
 export const capitalizeName = (value:string) => value.replace(/^(\s*)(\p{L})/u,(_,space:string,letter:string)=>space+letter.toUpperCase())
 const pad=(value:number)=>String(value).padStart(2,'0')
 /** Month and day only (MM-DD). The birth year is never shown to other people. */
@@ -52,7 +57,9 @@ export type AdminAccounts = {accounts:AdminAccount[];nextCursor:string|null}
 export type FollowListKind = 'followers'|'following'
 export type FollowPage = {people:Person[]; nextCursor:string|null}
 export type FollowStats = {followers:number; following:number; followedByViewer:boolean;followsViewer:boolean}
-export type Post = {id:string; author:Person; body:string; likes:number; liked:boolean; comments:number; reposts:number; reposted:boolean; time:string; createdAt?:number; editedAt?:string; kind?:'image'|'video'; media?:string; searchPublic?:boolean; articleId?:string; article?:{id:string;title:string;summary:string;excerpt:string;minutes:number}}
+export type QuotedPost = {id:string; unavailable?:boolean; author?:Person; body?:string; kind?:'image'|'video'; media?:string; time?:string}
+export type PostCoAuthor = {person:Person; status:'pending'|'accepted'}
+export type Post = {id:string; author:Person; body:string; likes:number; liked:boolean; comments:number; reposts:number; reposted:boolean; time:string; createdAt?:number; editedAt?:string; kind?:'image'|'video'; media?:string; searchPublic?:boolean; articleId?:string; article?:{id:string;title:string;summary:string;excerpt:string;minutes:number}; quote?:QuotedPost; coAuthors?:PostCoAuthor[]; coAuthorInvite?:boolean}
 export const commentGifs = {cheer:'Cheer',sparkle:'Sparkle',highfive:'High five'} as const
 export const commentStickers = {
   nice:{label:'Nice!',emoji:'✨'},
@@ -64,7 +71,9 @@ export type CommentAttachment =
   | {kind:'image';url:string}
   | {kind:'gif';id:keyof typeof commentGifs}
   | {kind:'sticker';id:keyof typeof commentStickers}
-export type Note = {id:string; author:Person; body:string; attachment?:CommentAttachment;chatMedia?:{kind:'image'|'video'|'audio';url:string};parentId?:string;replyTo?:string;likes?:number;liked?:boolean;readAt?:string;createdAt?:string;editedAt?:string;viewOnce?:{kind:'image'|'video';opened:boolean;canOpen:boolean};call?:{id:string;video:boolean;outcome:'completed'|'missed'|'declined';durationSeconds:number}}
+export type MessageReply = {id:string; authorName:string; body:string; kind?:'image'|'video'|'audio'; deleted?:boolean}
+export type MessageReaction = {userId:string; emoji:string}
+export type Note = {id:string; author:Person; body:string; attachment?:CommentAttachment;chatMedia?:{kind:'image'|'video'|'audio';url:string};parentId?:string;replyTo?:string;reply?:MessageReply;reactions?:MessageReaction[];likes?:number;liked?:boolean;readAt?:string;createdAt?:string;editedAt?:string;viewOnce?:{kind:'image'|'video';opened:boolean;canOpen:boolean};call?:{id:string;video:boolean;outcome:'completed'|'missed'|'declined';durationSeconds:number}}
 export const me:Person = {id:'you',name:'You',initials:'YO',role:'student',color:lime,detail:'Student'}
 export const people:Person[] = [
   {id:'ada',username:'ada',name:'Ada O.',initials:'AO',role:'student',color:'#FFD9B8',detail:'SS2 · Student',verified:true},

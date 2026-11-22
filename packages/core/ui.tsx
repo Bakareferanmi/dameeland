@@ -29,7 +29,11 @@ export function LinkedText({children,size=14,weight=500,color,linkColor}:{childr
   const lineHeight=Math.ceil(size*(size>=30?1.1:size>=20?1.22:1.42))
   const pieces=children.split(postedLink)
   return <Text style={[{color:color??theme.text,fontSize:size,lineHeight},font(weight)]}>{pieces.map((piece,index)=>{
-    if(!/^(?:https?:\/\/|www\.)/i.test(piece))return piece
+    if(!/^(?:https?:\/\/|www\.)/i.test(piece)){
+      const parts=piece.split(/(@[a-zA-Z0-9_]{3,24}(?![\w@]))/g)
+      if(parts.length===1)return piece
+      return <React.Fragment key={index}>{parts.map((part,at)=>part.startsWith('@')&&!/[\w@]$/.test(parts[at-1]??' ')?<Text key={at} style={[{color:linkColor??theme.purple},font(800)]}>{part}</Text>:part)}</React.Fragment>
+    }
     const match=piece.match(/^(.*?)([.,!?;:)}\]]*)$/)
     const label=match?.[1]??piece,suffix=match?.[2]??''
     const url=/^www\./i.test(label)?'https://'+label:label

@@ -7,7 +7,7 @@ import {bodyLimit} from 'hono/body-limit'
 import {HTTPException} from 'hono/http-exception'
 import {DurableObject} from 'cloudflare:workers'
 import * as webpush from 'web-push'
-import {lessons,commentGifs,validBirthDate,type BirthdayEntry,storyLimit,storyLifetime,verifiedStoryLimit,verifiedStoryLifetime,storyVideoLimit,verifiedStoryVideoLimit,type Story,type StoryGroup,commentStickers,capitalizeName,initials,normalizeUsername,usernameHint,validUsername,type AdminAccount,type AdminActivity,type AdminDay,type AdminOverview,type CommentAttachment,type FollowPage,type FollowStats,type Person,type Role} from '@dameeland/core'
+import {lessons,commentGifs,validBirthDate,type BirthdayEntry,storyLimit,storyLifetime,verifiedStoryLimit,verifiedStoryLifetime,storyVideoLimit,verifiedStoryVideoLimit,type Story,type StoryGroup,commentStickers,capitalizeName,initials,normalizeUsername,usernameHint,validUsername,type AdminAccount,type AdminActivity,type AdminDay,type AdminOverview,type CommentAttachment,type FollowPage,type FollowStats,type Person,type Role,extractMentions,maxPostAuthors,messageReactionEmojis,type MessageReply} from '@dameeland/core'
 
 interface Env {DB:D1Database;MEDIA:R2Bucket;STORIES:KVNamespace;ROOMS:DurableObjectNamespace<ChatRoom>;ALLOWED_ORIGIN:string;VAPID_PUBLIC_KEY?:string;VAPID_PRIVATE_KEY?:string;VAPID_SUBJECT?:string;GOOGLE_CLIENT_ID?:string;GOOGLE_CLIENT_SECRET?:string;GOOGLE_REDIRECT_URI?:string;ADMIN_USER_IDS?:string;RESEND_API_KEY?:string;RECOVERY_FROM?:string}
 type Account={id:string;email:string;name:string;role:Role;salt:string;password_hash:string;username?:string|null;verified?:number;teacher?:number;dob?:string|null}
@@ -916,9 +916,9 @@ app.post('/api/logout',async c=>{
   await c.env.DB.prepare('DELETE FROM sessions WHERE token_hash=?').bind(c.get('tokenHash')).run()
   return c.json({ok:true})
 })
-type PostRow=PublicAccount&{post_id:string;body:string;created:number;edited_at:number|null;media:string|null;media_kind:'image'|'video'|null;likes:number;liked:number;comments:number;reposts:number;reposted:number;rank_score:number;search_public:number;article_id:string|null;article_title:string|null;article_summary:string|null;article_excerpt:string|null;article_size:number|null}
+type PostRow=PublicAccount&{post_id:string;body:string;created:number;edited_at:number|null;media:string|null;media_kind:'image'|'video'|null;likes:number;liked:number;comments:number;reposts:number;reposted:number;rank_score:number;search_public:number;article_id:string|null;article_title:string|null;article_summary:string|null;article_excerpt:string|null;article_size:number|null;quote_of:string|null}
 const postProjection=`
-    SELECT u.id,u.name,u.role,u.username,u.verified,u.teacher,u.dob,u.avatar_media,u.cover_media,u.bio,p.id post_id,p.body,p.created,p.edited_at,p.media,p.media_kind,p.search_public,p.article_id,
+    SELECT u.id,u.name,u.role,u.username,u.verified,u.teacher,u.dob,u.avatar_media,u.cover_media,u.bio,p.id post_id,p.body,p.created,p.edited_at,p.media,p.media_kind,p.search_public,p.article_id,p.quote_of,
     (SELECT title FROM articles WHERE id=p.article_id) article_title,
     (SELECT summary FROM articles WHERE id=p.article_id) article_summary,
     (SELECT substr(body,1,700) FROM articles WHERE id=p.article_id) article_excerpt,
@@ -939,6 +939,35 @@ const postProjection=`
 `
 const articleExcerpt=(text:string)=>{const plain=text.replace(/^\s*(#{1,6}|>|[-*])\s+/gm,'').replace(/\*\*/g,'').replace(/\s+/g,' ').trim();return plain.length>220?plain.slice(0,220).replace(/\s+\S*$/,'')+'…':plain}
 const postView=(r:PostRow,url:string)=>({id:r.post_id,author:person(r,url),body:r.body,time:time(r.created),createdAt:r.created,editedAt:r.edited_at?time(r.edited_at):undefined,likes:r.likes,liked:Boolean(r.liked),comments:r.comments,reposts:r.reposts,reposted:Boolean(r.reposted),searchPublic:Boolean(r.search_public),articleId:r.article_id??undefined,article:r.article_id&&r.article_title!=null?{id:r.article_id,title:r.article_title,summary:r.article_summary??'',excerpt:articleExcerpt(r.article_excerpt??''),minutes:Math.max(1,Math.ceil((r.article_size??0)/1200))}:undefined,kind:r.media_kind??undefined,media:r.media?new URL('/api/media/'+r.media,url).href:undefined})
+type QuoteRow=PublicAccount&{post_id:string;body:string;media:string|null;media_kind:'image'|'video'|null;created:number}
+type TeamRow=PublicAccount&{post_id:string;status:'pending'|'accepted'}
+const accountColumns='u.id,u.name,u.role,u.username,u.verified,u.teacher,u.dob,u.avatar_media,u.cover_media,u.bio'
+const placeholders=(list:unknown[])=>list.map(()=>'?').join(',')
+// People tagged with @username in a post or comment. Anyone in `skip` was already told about it some other way.
+async function mentionedUsers(db:D1Database,body:string,skip:(string|undefined)[]){
+  const names=extractMentions(body)
+  if(!names.length)return []
+  const {results}=await db.prepare(`SELECT id FROM users WHERE username IN (${placeholders(names)})`).bind(...names).all<{id:string}>()
+  return results.map(row=>row.id).filter(id=>!skip.includes(id))
+}
+// Adds the quoted post and the co-author list to each post. The feed query stays one row per post.
+async function postsView(db:D1Database,rows:PostRow[],viewer:string,url:string){
+  const ids=rows.map(row=>row.post_id)
+  const quoteIds=[...new Set(rows.map(row=>row.quote_of).filter((id):id is string=>!!id))]
+  const [quotes,team]=await Promise.all([
+    quoteIds.length?db.prepare(`SELECT ${accountColumns},p.id post_id,p.body,p.media,p.media_kind,p.created FROM posts p JOIN users u ON u.id=p.author WHERE p.id IN (${placeholders(quoteIds)})`).bind(...quoteIds).all<QuoteRow>():Promise.resolve({results:[] as QuoteRow[]}),
+    ids.length?db.prepare(`SELECT ${accountColumns},a.post_id,a.status FROM post_authors a JOIN users u ON u.id=a.user_id WHERE a.post_id IN (${placeholders(ids)}) ORDER BY a.created`).bind(...ids).all<TeamRow>():Promise.resolve({results:[] as TeamRow[]}),
+  ])
+  const quoted=new Map(quotes.results.map(row=>[row.post_id,row]))
+  return rows.map(row=>{
+    const view=postView(row,url)
+    const source=row.quote_of?quoted.get(row.quote_of):undefined
+    const quote=row.quote_of?source?{id:source.post_id,author:person(source,url),body:source.body.slice(0,400),kind:source.media_kind??undefined,media:source.media?new URL('/api/media/'+source.media,url).href:undefined,time:time(source.created)}:{id:row.quote_of,unavailable:true}:undefined
+    // Accepted co-authors are public. A pending invite is only visible to the author and the person invited.
+    const people=team.results.filter(entry=>entry.post_id===row.post_id&&(entry.status==='accepted'||row.id===viewer||entry.id===viewer))
+    return {...view,quote,coAuthors:people.length?people.map(entry=>({person:person(entry,url),status:entry.status})):undefined,coAuthorInvite:people.some(entry=>entry.id===viewer&&entry.status==='pending')||undefined}
+  })
+}
 app.get('/api/feed',async c=>{
   const id=c.get('user').id
   const following=c.req.query('following')==='1'
@@ -947,14 +976,14 @@ app.get('/api/feed',async c=>{
     ORDER BY p.created DESC LIMIT 60
   `).bind(id,id,Number(following),id,id).all<PostRow>()
   c.header('Cache-Control',c.req.query('refresh')?'no-store':'private, max-age=15, stale-while-revalidate=30')
-  return c.json(results.map(r=>postView(r,c.req.url)))
+  return c.json(await postsView(c.env.DB,results,id,c.req.url))
 })
 app.get('/api/posts/:id',async c=>{
   const id=c.get('user').id
   const post=await c.env.DB.prepare(`${postProjection} WHERE p.id=?`).bind(id,id,c.req.param('id')).first<PostRow>()
   if(!post)return c.json({error:'Post unavailable.'},404)
   c.header('Cache-Control','no-store')
-  return c.json(postView(post,c.req.url))
+  return c.json((await postsView(c.env.DB,[post],id,c.req.url))[0])
 })
 app.post('/api/posts',async c=>{
   const db=c.env.DB
@@ -964,6 +993,21 @@ app.post('/api/posts',async c=>{
   let media:string|null=null
   let mediaKind:'image'|'video'|null=null
   let searchPublic=false
+  let quoteOf='',coAuthorIds:string[]=[]
+  // Runs before any upload is stored so a rejected post leaves nothing behind.
+  const checkSocial=async(text:string)=>{
+    coAuthorIds=[...new Set(coAuthorIds)].filter(other=>other!==user.id)
+    if(coAuthorIds.length>maxPostAuthors-1)return c.json({error:'A shared post can have up to '+maxPostAuthors+' people, including you.'},400)
+    if(coAuthorIds.length){
+      const found=await db.prepare(`SELECT id FROM users WHERE id IN (${placeholders(coAuthorIds)})`).bind(...coAuthorIds).all<{id:string}>()
+      if(found.results.length!==coAuthorIds.length)return c.json({error:'One of the people you invited is unavailable.'},404)
+    }
+    if(quoteOf){
+      if(!text)return c.json({error:'Add your thoughts to quote this post.'},400)
+      if(!await db.prepare('SELECT id FROM posts WHERE id=?').bind(quoteOf).first())return c.json({error:'The post you are quoting is unavailable.'},404)
+    }
+    return null
+  }
   if(c.req.header('Content-Type')?.startsWith('multipart/form-data')){
     if(Number(c.req.header('Content-Length'))>30000000) return c.json({error:'Choose a video under 25 MB or an image under 5 MB.'},413)
     const form=await c.req.raw.formData().catch(()=>null)
@@ -971,6 +1015,10 @@ app.post('/api/posts',async c=>{
     const publicChoice=form?.get('searchPublic')
     if(publicChoice!=null&&publicChoice!=='true'&&publicChoice!=='false')return c.json({error:'Choose a search visibility setting.'},400)
     searchPublic=publicChoice==='true'
+    quoteOf=clean(form?.get('quoteOf'),80)
+    coAuthorIds=(form?.getAll('coAuthor')??[]).map(value=>clean(value,80)).filter(Boolean)
+    const rejected=await checkSocial(body)
+    if(rejected)return rejected
     const file:unknown=form?.get('image')??form?.get('video')
     if(file instanceof File){
       const isVideo=file.type.startsWith('video/')
@@ -988,10 +1036,30 @@ app.post('/api/posts',async c=>{
     if(input?.searchPublic!==undefined&&typeof input.searchPublic!=='boolean')return c.json({error:'Choose a search visibility setting.'},400)
     searchPublic=input?.searchPublic===true
     body=clean(input?.body,1200)
+    quoteOf=clean(input?.quoteOf,80)
+    coAuthorIds=Array.isArray(input?.coAuthors)?input.coAuthors.map(value=>clean(value,80)).filter(Boolean):[]
+    const rejected=await checkSocial(body)
+    if(rejected)return rejected
   }
   if(!body&&!media) return c.json({error:'Write a post or add an image.'},400)
-  try{await db.prepare('INSERT INTO posts (id,author,body,created,media,media_kind,search_public) VALUES (?,?,?,?,?,?,?)').bind(id,user.id,body,now(),media,mediaKind,Number(searchPublic)).run()}
-  catch(error){if(media) await c.env.MEDIA.delete(media);throw error}
+  try{
+    await db.prepare('INSERT INTO posts (id,author,body,created,media,media_kind,search_public,quote_of) VALUES (?,?,?,?,?,?,?,?)').bind(id,user.id,body,now(),media,mediaKind,Number(searchPublic),quoteOf||null).run()
+    if(coAuthorIds.length)await db.batch(coAuthorIds.map(other=>db.prepare("INSERT INTO post_authors(post_id,user_id,status,invited_by,created) VALUES (?,?,'pending',?,?)").bind(id,other,user.id,now())))
+  }catch(error){if(media) await c.env.MEDIA.delete(media);throw error}
+  const told:(string|undefined)[]=[user.id]
+  if(quoteOf){
+    const quoted=await db.prepare('SELECT author FROM posts WHERE id=?').bind(quoteOf).first<{author:string}>()
+    if(quoted&&!told.includes(quoted.author)){told.push(quoted.author);await createNotification(c.env,c.executionCtx,db,quoted.author,user.id,'reaction',id,'quoted your post','post:'+id+':quote')}
+  }
+  for(const other of coAuthorIds){
+    if(told.includes(other))continue
+    told.push(other)
+    await createNotification(c.env,c.executionCtx,db,other,user.id,'comment',id,'invited you to share a post','post:'+id+':invite')
+  }
+  for(const other of await mentionedUsers(db,body,told)){
+    told.push(other)
+    await createNotification(c.env,c.executionCtx,db,other,user.id,'comment',id,'mentioned you in a post','post:'+id+':mention')
+  }
   return c.json({id},201)
 })
 app.put('/api/posts/:id',async c=>{
@@ -1022,6 +1090,19 @@ app.put('/api/posts/:id/search-visibility',async c=>{
     .bind(Number(searchPublic),c.req.param('id'),c.get('user').id).first()
   if(!post)return c.json({error:'Post unavailable.'},404)
   return c.json({searchPublic})
+})
+app.put('/api/posts/:id/coauthor',async c=>{
+  const id=c.req.param('id'),user=c.get('user'),db=c.env.DB
+  const accept=(await readBody(c.req.raw))?.accept
+  if(typeof accept!=='boolean')return c.json({error:'Choose accept or decline.'},400)
+  const post=await db.prepare('SELECT author FROM posts WHERE id=?').bind(id).first<{author:string}>()
+  if(!post)return c.json({error:'Post unavailable.'},404)
+  const result=accept
+    ?await db.prepare("UPDATE post_authors SET status='accepted' WHERE post_id=? AND user_id=? AND status='pending'").bind(id,user.id).run()
+    :await db.prepare('DELETE FROM post_authors WHERE post_id=? AND user_id=?').bind(id,user.id).run()
+  if(!result.meta.changes)return c.json({error:'This invite is no longer available.'},404)
+  if(accept)await createNotification(c.env,c.executionCtx,db,post.author,user.id,'comment',id,'joined your shared post','post:'+id+':joined:'+user.id)
+  return c.json({ok:true,accepted:accept})
 })
 app.put('/api/posts/:id/:kind',async c=>{
   const {id,kind}=c.req.param()
@@ -1111,6 +1192,7 @@ app.post('/api/posts/:id/comments',async c=>{
   const postOwner=await DB.prepare('SELECT author FROM posts WHERE id=?').bind(post).first<{author:string}>()
   if(parent)await createNotification(c.env,c.executionCtx,DB,parent.author,author.id,'comment','comment:'+post+':'+parentId,'replied to your comment')
   if(postOwner?.author!==parent?.author&&postOwner)await createNotification(c.env,c.executionCtx,DB,postOwner.author,author.id,'comment','comment:'+post+':'+id,'commented on your post')
+  for(const other of await mentionedUsers(DB,body,[author.id,parent?.author,postOwner?.author]))await createNotification(c.env,c.executionCtx,DB,other,author.id,'comment','comment:'+post+':'+id,'mentioned you in a comment')
   return c.json({id,author:person(author,c.req.url),body,attachment:commentAttachment(attachment,c.req.url),parentId:parentId||undefined,replyTo:parent?.username??undefined,likes:0,liked:false},201)
 })
 app.get('/api/people',async c=>{
@@ -1403,6 +1485,14 @@ app.post('/api/rooms/:id/whot',async c=>{
   if(next.winner!==undefined)c.executionCtx.waitUntil(c.env.ROOMS.getByName(room).fetch('https://room.internal/notify',{method:'POST',body:JSON.stringify(result)}))
   return c.json(whotView({...row,state,version},account.id))
 })
+type ReplyColumns={reply_to:string|null;reply_body:string|null;reply_media_type:'image'|'video'|'audio'|null;reply_view_once:number|null;reply_author_name:string|null}
+// The little quoted preview shown above a reply. View-once media never leaks through it.
+const replyView=(row:ReplyColumns):MessageReply|undefined=>{
+  if(!row.reply_to)return undefined
+  if(row.reply_author_name==null)return {id:row.reply_to,authorName:'',body:'Original message deleted',deleted:true}
+  const hidden=Boolean(row.reply_view_once)
+  return {id:row.reply_to,authorName:row.reply_author_name,body:hidden?'View once media':(row.reply_body??'').slice(0,120),kind:hidden?undefined:row.reply_media_type??undefined}
+}
 app.get('/api/rooms/:id/messages',async c=>{
   const room=c.req.param('id')
   if(!await member(c.env.DB,room,c.get('user').id)) return c.json({error:'Conversation unavailable.'},404)
@@ -1411,16 +1501,19 @@ app.get('/api/rooms/:id/messages',async c=>{
   const before=Number.isFinite(beforeRaw)&&beforeRaw>0?beforeRaw:now()+1
   const messageLimit=paged?31:100
   const callLimit=paged?31:40
-  const [messages,calls]=await Promise.all([
-    c.env.DB.prepare('SELECT u.id,u.name,u.role,u.username,u.verified,u.teacher,u.dob,u.avatar_media,u.cover_media,u.bio,m.id note_id,m.body,m.read_at,m.created,m.edited_at,m.media,m.media_kind,m.media_type,m.view_once,m.viewed_at FROM messages m JOIN users u ON u.id=m.author WHERE room=? AND m.created<? ORDER BY m.created DESC LIMIT ?').bind(room,before,messageLimit).all<NoteRow&{read_at:number|null;created:number;media:string|null;media_kind:'image'|'video'|null;media_type:'image'|'video'|'audio'|null;view_once:number;viewed_at:number|null}>(),
+  const [messages,calls,reactionRows]=await Promise.all([
+    c.env.DB.prepare('SELECT u.id,u.name,u.role,u.username,u.verified,u.teacher,u.dob,u.avatar_media,u.cover_media,u.bio,m.id note_id,m.body,m.read_at,m.created,m.edited_at,m.media,m.media_kind,m.media_type,m.view_once,m.viewed_at,m.reply_to,rm.body reply_body,rm.media_type reply_media_type,rm.view_once reply_view_once,ru.name reply_author_name FROM messages m JOIN users u ON u.id=m.author LEFT JOIN messages rm ON rm.id=m.reply_to AND rm.room=m.room LEFT JOIN users ru ON ru.id=rm.author WHERE m.room=? AND m.created<? ORDER BY m.created DESC LIMIT ?').bind(room,before,messageLimit).all<NoteRow&ReplyColumns&{read_at:number|null;created:number;media:string|null;media_kind:'image'|'video'|null;media_type:'image'|'video'|'audio'|null;view_once:number;viewed_at:number|null}>(),
     c.env.DB.prepare(`SELECT x.id,x.caller,x.callee,x.video,x.state,x.created,x.expires,x.connected_at,x.ended_at,
       u.name,u.role,u.username,u.verified,u.teacher,u.dob,u.avatar_media,u.cover_media,u.bio
       FROM calls x JOIN users u ON u.id=x.caller WHERE x.room=? AND x.created<? AND (x.state IN ('ended','declined') OR (x.state IN ('offered','ringing') AND x.expires<?))
       ORDER BY x.created DESC LIMIT ?`).bind(room,before,now(),callLimit).all<CallRow&PublicAccount>(),
+    c.env.DB.prepare('SELECT message_id,user_id,emoji FROM message_reactions WHERE message_id IN (SELECT id FROM messages WHERE room=? AND created<? ORDER BY created DESC LIMIT ?)').bind(room,before,messageLimit).all<{message_id:string;user_id:string;emoji:string}>(),
   ])
+  const reactionsByMessage=new Map<string,{userId:string;emoji:string}[]>()
+  for(const entry of reactionRows.results)reactionsByMessage.set(entry.message_id,[...(reactionsByMessage.get(entry.message_id)??[]),{userId:entry.user_id,emoji:entry.emoji}])
   const viewer=c.get('user').id
   const items=[
-    ...messages.results.map(r=>{const kind=r.media_type??r.media_kind;return {...note(r,c.req.url),readAt:r.read_at?time(r.read_at):undefined,createdAt:time(r.created),chatMedia:r.media&&!r.view_once&&kind?{kind,url:mediaUrl(r.media,c.req.url)}:undefined,viewOnce:r.view_once&&kind&&kind!=='audio'?{kind,opened:Boolean(r.viewed_at),canOpen:r.id!==viewer&&!r.viewed_at}:undefined}}),
+    ...messages.results.map(r=>{const kind=r.media_type??r.media_kind;return {...note(r,c.req.url),readAt:r.read_at?time(r.read_at):undefined,createdAt:time(r.created),reply:replyView(r),reactions:reactionsByMessage.get(r.note_id),chatMedia:r.media&&!r.view_once&&kind?{kind,url:mediaUrl(r.media,c.req.url)}:undefined,viewOnce:r.view_once&&kind&&kind!=='audio'?{kind,opened:Boolean(r.viewed_at),canOpen:r.id!==viewer&&!r.viewed_at}:undefined}}),
     ...calls.results.map(r=>{
       const connected=!!r.connected_at
       const label=r.video?'Video call':'Voice call'
@@ -1457,6 +1550,7 @@ app.post('/api/rooms/:id/messages',async c=>{
   const body=clean(form?.get('body')??payload?.body,800)
   const upload:unknown=form?.get('image')??form?.get('video')??form?.get('audio')
   const viewOnce=form?.get('viewOnce')==='true'
+  const replyTo=clean(form?.get('replyTo')??payload?.replyTo,80)
   let media:string|null=null,mediaKind:'image'|'video'|'audio'|null=null,file:File|null=null,contentType:string|null=null
   if(upload instanceof File){
     if(viewOnce&&!hasVerifiedBenefits(author))return c.json({error:'View-once media is currently available to verified users.'},403)
@@ -1471,10 +1565,16 @@ app.post('/api/rooms/:id/messages',async c=>{
     media=crypto.randomUUID();file=upload
   }
   if(!body&&!file) return c.json({error:'Enter a message or choose view-once media.'},400)
+  let reply:MessageReply|undefined
+  if(replyTo){
+    const target=await c.env.DB.prepare('SELECT m.id reply_to,m.body reply_body,m.media_type reply_media_type,m.view_once reply_view_once,u.name reply_author_name FROM messages m JOIN users u ON u.id=m.author WHERE m.id=? AND m.room=?').bind(replyTo,room).first<ReplyColumns>()
+    if(!target)return c.json({error:'The message you are replying to is unavailable.'},404)
+    reply=replyView(target)
+  }
   const created=now()
-  const message={id:crypto.randomUUID(),author:person(author,c.req.url),body,createdAt:time(created),chatMedia:mediaKind&&!viewOnce?{kind:mediaKind,url:''}:undefined,viewOnce:mediaKind&&mediaKind!=='audio'&&viewOnce?{kind:mediaKind,opened:false,canOpen:false}:undefined}
+  const message={id:crypto.randomUUID(),author:person(author,c.req.url),body,createdAt:time(created),reply,chatMedia:mediaKind&&!viewOnce?{kind:mediaKind,url:''}:undefined,viewOnce:mediaKind&&mediaKind!=='audio'&&viewOnce?{kind:mediaKind,opened:false,canOpen:false}:undefined}
   if(file&&media&&contentType)await c.env.MEDIA.put(media,await file.arrayBuffer(),{httpMetadata:{contentType}})
-  try{await c.env.DB.prepare('INSERT INTO messages (id,room,author,body,created,media,media_kind,media_type,view_once) VALUES (?,?,?,?,?,?,?,?,?)').bind(message.id,room,author.id,body,created,media,mediaKind==='audio'?null:mediaKind,mediaKind,media&&viewOnce?1:0).run()}
+  try{await c.env.DB.prepare('INSERT INTO messages (id,room,author,body,created,media,media_kind,media_type,view_once,reply_to) VALUES (?,?,?,?,?,?,?,?,?,?)').bind(message.id,room,author.id,body,created,media,mediaKind==='audio'?null:mediaKind,mediaKind,media&&viewOnce?1:0,reply?replyTo:null).run()}
   catch(error){if(media)await c.env.MEDIA.delete(media);throw error}
   await recordStreakMessage(c.env.DB,room,author.id)
   const other=await c.env.DB.prepare('SELECT CASE WHEN first_user=? THEN second_user ELSE first_user END target FROM rooms WHERE id=?').bind(author.id,room).first<{target:string}>()
@@ -1529,12 +1629,28 @@ app.put('/api/rooms/:room/messages/:id',async c=>{
   c.executionCtx.waitUntil(c.env.ROOMS.getByName(room).fetch('https://room.internal/notify',{method:'POST',body:JSON.stringify(updated)}))
   return c.json(updated)
 })
+app.put('/api/rooms/:room/messages/:id/reaction',async c=>{
+  const {room,id}=c.req.param(),user=c.get('user'),db=c.env.DB
+  if(!await member(db,room,user.id))return c.json({error:'Conversation unavailable.'},404)
+  const emoji=(await readBody(c.req.raw))?.emoji
+  if(emoji!==null&&(typeof emoji!=='string'||!(messageReactionEmojis as readonly string[]).includes(emoji)))return c.json({error:'Choose one of the available reactions.'},400)
+  const message=await db.prepare('SELECT author FROM messages WHERE id=? AND room=?').bind(id,room).first<{author:string}>()
+  if(!message)return c.json({error:'Message unavailable.'},404)
+  if(emoji===null)await db.prepare('DELETE FROM message_reactions WHERE message_id=? AND user_id=?').bind(id,user.id).run()
+  else await db.prepare('INSERT INTO message_reactions(message_id,user_id,emoji,created) VALUES (?,?,?,?) ON CONFLICT(message_id,user_id) DO UPDATE SET emoji=excluded.emoji,created=excluded.created').bind(id,user.id,emoji,now()).run()
+  const {results}=await db.prepare('SELECT user_id,emoji FROM message_reactions WHERE message_id=?').bind(id).all<{user_id:string;emoji:string}>()
+  const update={type:'message-reaction',id,reactions:results.map(entry=>({userId:entry.user_id,emoji:entry.emoji}))}
+  c.executionCtx.waitUntil(c.env.ROOMS.getByName(room).fetch('https://room.internal/notify',{method:'POST',body:JSON.stringify(update)}))
+  if(typeof emoji==='string')await createNotification(c.env,c.executionCtx,db,message.author,user.id,'message',room,'reacted '+emoji+' to your message','react:'+id+':'+user.id)
+  return c.json(update)
+})
 app.delete('/api/rooms/:room/messages/:id',async c=>{
   const {room,id}=c.req.param(),user=c.get('user'),db=c.env.DB
   if(!await member(db,room,user.id))return c.json({error:'Conversation unavailable.'},404)
   if(!hasVerifiedBenefits(user))return c.json({error:'Message deletion is available to verified accounts.'},403)
   const result=await db.prepare('DELETE FROM messages WHERE id=? AND room=? AND author=?').bind(id,room,user.id).run()
   if(!result.meta.changes)return c.json({error:'Message unavailable.'},404)
+  await db.prepare('DELETE FROM message_reactions WHERE message_id=?').bind(id).run()
   c.executionCtx.waitUntil(c.env.ROOMS.getByName(room).fetch('https://room.internal/notify',{method:'POST',body:JSON.stringify({type:'message-deleted',id})}))
   return c.json({ok:true})
 })
