@@ -3,7 +3,7 @@ import {dailyLesson} from './learningCatalog'
 import {browserCallMedia,RoomCall,useRoomCall,type CallMedia} from './calls'
 import {readCallSignal,type CallSignal} from './callSignal'
 import React,{lazy,Suspense,useCallback,useEffect,useLayoutEffect,useRef,useState} from 'react'
-import {AccessibilityInfo,ActivityIndicator,Animated,AppState,BackHandler,Easing,Image,KeyboardAvoidingView,Modal,PanResponder,Platform,Pressable,RefreshControl,ScrollView,Switch,Text,TextInput,View,useWindowDimensions,type ViewStyle} from 'react-native'
+import {AccessibilityInfo,ActivityIndicator,Animated,AppState,BackHandler,Easing,Image,Keyboard,KeyboardAvoidingView,Modal,PanResponder,Platform,Pressable,RefreshControl,ScrollView,Switch,Text,TextInput,View,useWindowDimensions,type ViewStyle} from 'react-native'
 import {api,ApiError,birthdayToday,validBirthDate,storyLifetime,verifiedStoryLifetime,storyVideoLimit,verifiedStoryVideoLimit,verifiedStoryLimit,capitalizeName,normalizeUsername,usernameHint,validUsername,initialChats,initialComments,initialPosts,initials,lime,me,people,questions,slides,themes,type FollowListKind,type FollowPage,type FollowStats,type Note,type Person,type Post,type BirthdayEntry,type Role,type Story,type StoryGroup,type Theme} from './index'
 import {Avatar,Button,Card,Copy,Design,displayHandle,Field,Icon,IconButton,IconTile,LinkedText,Logo,PersonName,ScreenLinks,Segmented,VerifiedBadge,row,spread,stack,useDesign,type Glyph,type IconRendererProps} from './ui'
 import type {ExtraPage} from './FeatureScreens'
@@ -523,7 +523,7 @@ export default function App(props:Props){
   const sharedLinkHandled=useRef(false)
   const [statsRefresh,refreshStats]=useState(0)
   const [notes,setNotes]=useState<Record<string,Note[]>>({})
-  const [commentKeyboardInset,setCommentKeyboardInset]=useState(0)
+  const [keyboardInset,setKeyboardInset]=useState(0)
   const [chats,setChats]=useState<Record<string,Note[]>>(demo?initialChats:{})
   const [messageLoadingOlder,setMessageLoadingOlder]=useState(false)
   const [messageNextCursor,setMessageNextCursor]=useState<Record<string,string|null>>({})
@@ -543,17 +543,25 @@ export default function App(props:Props){
   useEffect(()=>{if(overlay?.kind!=='create'){setQuoteTarget(null);setCoAuthors([])}},[overlay?.kind])
   const clearComment=()=>{commentDraft.current+=1;setComment('');setCommentMedia(null);setReplyTarget(null)}
   useEffect(()=>{
-    if(Platform.OS!=='web'||overlay?.kind!=='comments'||!window.visualViewport)return
+    if(Platform.OS!=='web'||(overlay?.kind!=='comments'&&page!=='Chat')||!window.visualViewport)return
     const viewport=window.visualViewport
     const update=()=>{
       const covered=Math.max(0,window.innerHeight-viewport.height-viewport.offsetTop)
-      setCommentKeyboardInset(covered>120?covered:0)
+      setKeyboardInset(covered>120?covered:0)
     }
     update()
     viewport.addEventListener('resize',update)
     viewport.addEventListener('scroll',update)
-    return ()=>{viewport.removeEventListener('resize',update);viewport.removeEventListener('scroll',update);setCommentKeyboardInset(0)}
-  },[overlay?.kind])
+    return ()=>{viewport.removeEventListener('resize',update);viewport.removeEventListener('scroll',update);setKeyboardInset(0)}
+  },[overlay?.kind,page])
+  // When the keyboard opens in a chat, keep the newest message in view above it.
+  useEffect(()=>{
+    if(page!=='Chat'||overlay)return
+    const jump=()=>{if(stickToChatEnd.current)setTimeout(()=>scroll.current?.scrollToEnd({animated:false}),60)}
+    if(Platform.OS==='web'){if(keyboardInset>0)jump();return}
+    const shown=Keyboard.addListener(Platform.OS==='ios'?'keyboardWillShow':'keyboardDidShow',jump)
+    return ()=>shown.remove()
+  },[page,overlay,keyboardInset])
   const [unread,setUnread]=useState(demo)
   const [messageUnread,setMessageUnread]=useState(demo?2:0)
   const [notifications,setNotifications]=useState(true)
@@ -2172,7 +2180,7 @@ export default function App(props:Props){
             }}
             contentContainerStyle={{padding:desktop?20:13,gap:page==='Chat'?9:16,width:'100%',maxWidth:page==='Chat'?desktop?900:undefined:640,alignSelf:'center'}}>
             <Motion key={page==='Chat'?'chat:'+room?.id:page} reduced={reduced} distance={page==='Chat'?5:8} style={stack}>{content[page]??<Suspense fallback={<LoadingScreen compact/>}><FeatureScreen key={page} page={page as ExtraPage} open={open} demo={demo} user={user} startQuiz={startQuiz} completed={completedLessons.length>0} wish={()=>selectOverlay({kind:'wish'})} wishes={wishes} incomingCall={()=>selectOverlay({kind:'call',video:false,person:people[0],ringing:true,incoming:true})}/></Suspense>}</Motion></ScrollView>
-          {page==='Chat'&&<KeyboardAvoidingView behavior={Platform.OS==='ios'?'padding':undefined}>
+          {page==='Chat'&&<KeyboardAvoidingView behavior="padding" style={{paddingBottom:keyboardInset}}>
             {chatTools&&<View style={{...row,flexWrap:'wrap',paddingHorizontal:12,paddingTop:9,backgroundColor:theme.card}}>
               <Button label="Gallery" leading="image" variant="secondary" onPress={()=>void pickChatMedia('gallery',false)}/>
               {props.pickCamera&&<Button label="Camera" leading="vid" variant="secondary" onPress={()=>void pickChatMedia('camera',false)}/>}
@@ -2251,7 +2259,7 @@ export default function App(props:Props){
             <Copy size={21} weight={800}>{overlayTitle}</Copy>
           </View>
         </View>
-        {overlay?.kind==='comments'?<KeyboardAvoidingView behavior={Platform.OS==='ios'?'padding':undefined} style={{flex:1,width:'100%',maxWidth:720,alignSelf:'center',paddingBottom:commentKeyboardInset}}>
+        {overlay?.kind==='comments'?<KeyboardAvoidingView behavior="padding" style={{flex:1,width:'100%',maxWidth:720,alignSelf:'center',paddingBottom:keyboardInset}}>
           {sheet}
         </KeyboardAvoidingView>:<ScrollView key={overlay?.kind} style={{flex:1}} keyboardShouldPersistTaps="handled"
           contentContainerStyle={{width:'100%',maxWidth:720,alignSelf:'center',padding:16,paddingBottom:30,gap:14}}>
