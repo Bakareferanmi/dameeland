@@ -11,7 +11,7 @@
     "dev:api": "npm -w @dameeland/api run dev",
     "db:local": "npm -w @dameeland/api run db:local",
     "build": "npm -w @dameeland/web run build",
-    "deploy:web": "npm run build && npm -w @dameeland/web run deploy -- --branch main",
+    "deploy:web": "npm -w @dameeland/web run deploy",
     "typecheck": "npm run typecheck --workspaces",
     "test": "node --test scripts/*.test.mjs",
     "build:mobile": "npm -w @dameeland/mobile run export -- --platform all",
