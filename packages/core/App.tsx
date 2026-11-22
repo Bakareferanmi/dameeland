@@ -332,11 +332,19 @@ function UploadedMedia({post}:{post:Post}){
 }
 
 function PostCard({post,onReact,onOverlay,onProfile,onArticle,onQuote,onInvite,detail=false}:{post:Post;detail?:boolean;onReact:(p:Post,k:'like'|'repost')=>void;onOverlay:(o:Overlay)=>void;onProfile:(p:Person)=>void;onArticle?:(id:string)=>void;onQuote?:(p:Post)=>void;onInvite?:(p:Post,accept:boolean)=>void}){
-  const {theme}=useDesign()
+  const {theme,font}=useDesign()
   const team=post.coAuthors??[]
+  const authors=[{person:post.author,status:'accepted' as const},...team]
   return <Card style={{padding:14,gap:9}}>
     {post.coAuthorInvite&&<View accessibilityLabel={'Co-author invite from '+displayHandle(post.author)} style={{borderRadius:14,backgroundColor:theme.chip,padding:12,gap:8}}><Copy weight={800} size={13}>{displayHandle(post.author)} invited you to share this post</Copy><View style={{...row,gap:8}}><View style={{flex:1}}><Button label="Accept" onPress={()=>onInvite?.(post,true)}/></View><View style={{flex:1}}><Button label="Decline" variant="secondary" onPress={()=>onInvite?.(post,false)}/></View></View></View>}
-    <Pressable accessibilityRole="button" accessibilityLabel={'Open '+displayHandle(post.author)+' profile'} onPress={()=>onProfile(post.author)} style={row}><Avatar person={post.author} size={40}/><View style={{flex:1}}><PersonName person={post.author}/><Copy color={theme.muted} size={12}>{shortTime(post.time)}{post.editedAt?' · Edited':''}</Copy>{team.length>0&&<Text numberOfLines={2} style={{color:theme.muted,fontSize:12,lineHeight:17}}>with {team.map((entry,index)=>(index?', ':'')+'@'+displayHandle(entry.person)+(entry.status==='pending'?' (invited)':'')).join('')}</Text>}</View></Pressable>
+    {team.length?<View accessibilityLabel={'Shared post by '+authors.map(entry=>displayHandle(entry.person)).join(', ')} style={{gap:8}}>
+      <View style={{...row,justifyContent:'space-between'}}><View style={{...row,gap:6}}><Icon name="rp" size={14} color={theme.purple}/><Copy size={11} weight={800} color={theme.purple}>SHARED POST</Copy></View><Copy color={theme.muted} size={12}>{shortTime(post.time)}{post.editedAt?' · Edited':''}</Copy></View>
+      <View style={{flexDirection:'row',gap:8}}>{authors.map((entry,index)=><Pressable key={entry.person.id} accessibilityRole="button" accessibilityLabel={'Open '+displayHandle(entry.person)+' profile'+(entry.status==='pending'?', invited':'')} onPress={()=>onProfile(entry.person)} style={({pressed})=>({flex:1,minWidth:0,alignItems:'center',gap:5,paddingVertical:12,paddingHorizontal:6,borderRadius:16,borderWidth:1,borderColor:index===0?theme.purple:theme.border,backgroundColor:theme.chip,opacity:entry.status==='pending'?.62:pressed?.8:1})}>
+        <Avatar person={entry.person} size={48}/>
+        <Text numberOfLines={1} style={[{color:theme.text,fontSize:13,maxWidth:'100%'},font(800)]}>{entry.person.name}</Text>
+        <Text numberOfLines={1} style={[{color:theme.muted,fontSize:11,maxWidth:'100%'},font(500)]}>{entry.status==='pending'?'Invited':'@'+displayHandle(entry.person)}</Text>
+      </Pressable>)}</View>
+    </View>:<Pressable accessibilityRole="button" accessibilityLabel={'Open '+displayHandle(post.author)+' profile'} onPress={()=>onProfile(post.author)} style={row}><Avatar person={post.author} size={40}/><View style={{flex:1}}><PersonName person={post.author}/><Copy color={theme.muted} size={12}>{shortTime(post.time)}{post.editedAt?' · Edited':''}</Copy>{team.length>0&&<Text numberOfLines={2} style={{color:theme.muted,fontSize:12,lineHeight:17}}>with {team.map((entry,index)=>(index?', ':'')+'@'+displayHandle(entry.person)+(entry.status==='pending'?' (invited)':'')).join('')}</Text>}</View></Pressable>}
     {post.article?<Pressable accessibilityRole="button" accessibilityLabel={'Read article: '+post.article.title} onPress={()=>onArticle?.(post.article!.id)} style={({pressed})=>({borderRadius:16,borderWidth:1,borderColor:theme.border,backgroundColor:theme.chip,padding:14,gap:8,opacity:pressed?.8:1})}>
       <View style={{...row,gap:6}}><Icon name="type" size={14} color={theme.purple}/><Copy size={11} weight={800} color={theme.purple}>PRESS CLUB · {post.article.minutes} MIN READ</Copy></View>
       <Text numberOfLines={3} style={{fontFamily:articleSerif,fontSize:21,lineHeight:28,fontWeight:'800',color:theme.text}}>{post.article.title}</Text>
