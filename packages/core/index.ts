@@ -75,7 +75,7 @@ export type CommentAttachment =
   | {kind:'sticker';id:keyof typeof commentStickers}
 export type MessageReply = {id:string; authorName:string; body:string; kind?:'image'|'video'|'audio'; deleted?:boolean}
 export type MessageReaction = {userId:string; emoji:string}
-export type Note = {id:string; author:Person; body:string; attachment?:CommentAttachment;chatMedia?:{kind:'image'|'video'|'audio';url:string};parentId?:string;replyTo?:string;reply?:MessageReply;reactions?:MessageReaction[];likes?:number;liked?:boolean;readAt?:string;createdAt?:string;editedAt?:string;viewOnce?:{kind:'image'|'video';opened:boolean;canOpen:boolean};call?:{id:string;video:boolean;outcome:'completed'|'missed'|'declined';durationSeconds:number}}
+export type Note = {id:string; clientId?:string; pending?:boolean; author:Person; body:string; attachment?:CommentAttachment;chatMedia?:{kind:'image'|'video'|'audio';url:string};parentId?:string;replyTo?:string;reply?:MessageReply;reactions?:MessageReaction[];likes?:number;liked?:boolean;readAt?:string;createdAt?:string;editedAt?:string;viewOnce?:{kind:'image'|'video';opened:boolean;canOpen:boolean};call?:{id:string;video:boolean;outcome:'completed'|'missed'|'declined';durationSeconds:number}}
 export const me:Person = {id:'you',name:'You',initials:'YO',role:'student',color:lime,detail:'Student'}
 export const people:Person[] = [
   {id:'ada',username:'ada',name:'Ada O.',initials:'AO',role:'student',color:'#FFD9B8',detail:'SS2 · Student',verified:true},
