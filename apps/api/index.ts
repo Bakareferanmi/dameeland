@@ -1276,10 +1276,10 @@ const member=(db:D1Database,room:string,user:string)=>db.prepare(`
 `).bind(room,user,user,room,user).first()
 const groupAdmin=(db:D1Database,group:string,user:string)=>db.prepare("SELECT group_id FROM group_members WHERE group_id=? AND user_id=? AND role='admin'").bind(group,user).first()
 const streakView=async(db:D1Database,room:string)=>{
-  const row=await db.prepare('SELECT count,last_completed_at,first_sent_at,second_sent_at,expires_at FROM chat_streaks WHERE room=?').bind(room).first<{count:number;last_completed_at:number|null;first_sent_at:number|null;second_sent_at:number|null;expires_at:number|null}>()
+  const row=await db.prepare('SELECT count,started_by,last_completed_at,first_sent_at,second_sent_at,expires_at FROM chat_streaks WHERE room=?').bind(room).first<{count:number;started_by:string|null;last_completed_at:number|null;first_sent_at:number|null;second_sent_at:number|null;expires_at:number|null}>()
   if(!row)return null
   if(!row.expires_at||row.expires_at<=now()){await db.prepare('DELETE FROM chat_streaks WHERE room=?').bind(room).run();return null}
-  return {count:row.count,status:row.count?'active':'pending',expiresAt:time(row.expires_at),nextMilestone:[3,7,14,30,50,100].find(value=>value>row.count)??null}
+  return {count:row.count,status:row.count?'active':'pending',startedBy:row.started_by??undefined,expiresAt:time(row.expires_at),nextMilestone:[3,7,14,30,50,100].find(value=>value>row.count)??null}
 }
 async function recordStreakMessage(db:D1Database,room:string,user:string){
   const direct=await db.prepare('SELECT first_user,second_user FROM rooms WHERE id=?').bind(room).first<{first_user:string;second_user:string}>()
@@ -1289,8 +1289,11 @@ async function recordStreakMessage(db:D1Database,room:string,user:string){
   if(!current)return
   if(!current.expires_at||current.expires_at<=at){await db.prepare('DELETE FROM chat_streaks WHERE room=?').bind(room).run();return}
   await db.prepare(`UPDATE chat_streaks SET ${column}=? WHERE room=?`).bind(at,room).run()
-  await db.prepare(`UPDATE chat_streaks SET count=count+1,last_completed_at=?,expires_at=?,first_sent_at=NULL,second_sent_at=NULL
-    WHERE room=? AND first_sent_at IS NOT NULL AND second_sent_at IS NOT NULL`).bind(at,at+86400000,room).run()
+  // A day counts once: both people replying again within 18 hours keeps the streak alive but does not add another day.
+  await db.prepare(`UPDATE chat_streaks SET count=CASE WHEN last_completed_at IS NULL OR ?-last_completed_at>=64800000 THEN count+1 ELSE count END,
+    last_completed_at=CASE WHEN last_completed_at IS NULL OR ?-last_completed_at>=64800000 THEN ? ELSE last_completed_at END,
+    expires_at=?,first_sent_at=NULL,second_sent_at=NULL
+    WHERE room=? AND first_sent_at IS NOT NULL AND second_sent_at IS NOT NULL`).bind(at,at,at,at+86400000,room).run()
 }
 app.get('/api/rooms',async c=>{
   const user=c.get('user').id

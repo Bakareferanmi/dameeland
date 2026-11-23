@@ -55,7 +55,7 @@ type NotificationItem={id:string;kind:string;entityId?:string;body:string;create
 type Presence={online:boolean;lastSeen:string|null}
 type IncomingCall={id:string;room:string;person:Person;video:boolean;offer:string;state:string;expires:string}
 type CallStatus={id:string;room:string;state:string;answer?:string;offer?:string;expires:string}
-type ChatStreak={count:number;status:'pending'|'active';expiresAt:string;nextMilestone?:number|null}
+type ChatStreak={startedBy?:string;count:number;status:'pending'|'active';expiresAt:string;nextMilestone?:number|null}
 type GroupInfo={id:string;name:string;photo?:string;isAdmin:boolean;inviteCode?:string;members:Array<{person:Person;role:'admin'|'member';owner:boolean}>}
 type BirthDraft={day:string;month:string;year:string}
 const emptyBirth:BirthDraft={day:'',month:'',year:''}
@@ -1919,7 +1919,7 @@ export default function App(props:Props){
       </SwipeToReply>
     })())}
     {!room.person.group&&verifiedBenefits&&!streak&&<Card style={{...row,backgroundColor:'#F4FFD7',borderColor:lime,borderWidth:2}}><View style={{width:46,height:46,borderRadius:23,backgroundColor:lime,alignItems:'center',justifyContent:'center'}}><Copy size={23}>🔥</Copy></View><View style={{flex:1,gap:3}}><Copy color="#25163F" size={17} weight={800}>Start a streak</Copy><Copy size={12} color="#5A4C70">Message each other daily and unlock milestones.</Copy></View><Button label="Start" variant="fun" disabled={busy} onPress={()=>void startStreak()}/></Card>}
-    {!room.person.group&&streak&&<Card style={{...row,backgroundColor:theme.chip,borderColor:lime}}><Copy size={24}>🔥</Copy><View style={{flex:1,gap:3}}><Copy weight={800}>{streak.status==='pending'?'Streak invitation sent':streak.count+' day streak'}</Copy><Copy size={12} color={theme.muted}>{streak.status==='pending'?'Waiting for '+displayHandle(room.person)+' to reply · ':streak.nextMilestone?streak.nextMilestone-streak.count+' days to the '+streak.nextMilestone+'-day milestone · ':''}{streakRemaining(streak.expiresAt)}</Copy></View></Card>}
+    {!room.person.group&&streak&&<Card style={{...row,backgroundColor:theme.chip,borderColor:lime}}><Copy size={24}>🔥</Copy><View style={{flex:1,gap:3}}><Copy weight={800}>{streak.status==='pending'?(streak.startedBy&&streak.startedBy!==user.id?displayHandle(room.person)+' started a streak':'Streak invitation sent'):streak.count+' day streak'}</Copy><Copy size={12} color={theme.muted}>{streak.status==='pending'?(streak.startedBy&&streak.startedBy!==user.id?'Reply within 24 hours to start it · ':'Waiting for '+displayHandle(room.person)+' to reply · '):streak.nextMilestone?streak.nextMilestone-streak.count+' days to the '+streak.nextMilestone+'-day milestone · ':''}{streakRemaining(streak.expiresAt)}</Copy></View></Card>}
     {!messageLoading&&!(chats[room.id]?.length)&&!feedError&&<Empty title="Say hello" detail="Messages are visible to both people in this conversation."/>}
   </>
   const ownProfile=profile.id===user.id
