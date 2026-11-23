@@ -141,6 +141,12 @@ const streakRemaining=(expiresAt:string)=>{
 const withinEditWindow=(value:string|undefined)=>!!value&&Number.isFinite(Date.parse(value))&&Date.now()-Date.parse(value)<=3600000
 const callLength=(seconds:number)=>seconds<60?seconds+'s':Math.floor(seconds/60)+'m '+String(seconds%60).padStart(2,'0')+'s'
 const mergeNotes=(current:Note[],incoming:Note[])=>[...new Map([...current,...incoming].map(item=>[item.id,item])).values()].sort((a,b)=>Date.parse(a.createdAt??'')-Date.parse(b.createdAt??''))
+const ChatInput=React.memo(function ChatInput({draft,setter,onChange}:{draft:React.MutableRefObject<string>;setter:React.MutableRefObject<(value:string)=>void>;onChange:(value:string)=>void}){
+  const {theme,font}=useDesign()
+  const [value,setValue]=useState(draft.current)
+  setter.current=setValue
+  return <TextInput accessibilityLabel="Message" placeholder="Message" placeholderTextColor={theme.muted} value={value} onChangeText={next=>{setValue(next);onChange(next)}} multiline maxLength={800} style={[{color:theme.text,fontSize:15,minHeight:44,maxHeight:120,paddingHorizontal:15,paddingVertical:10,textAlignVertical:'center'},font(500)]}/>
+})
 function Motion({children,reduced,style,distance=10,axis='y'}:{children:React.ReactNode;reduced:boolean;style?:ViewStyle;distance?:number;axis?:'x'|'y'}){
   const animation=useRef(new Animated.Value(reduced?1:0)).current
   useEffect(()=>{
@@ -533,7 +539,10 @@ export default function App(props:Props){
   const [draft,setDraft]=useState(''),[attachment,setAttachment]=useState<Media|null>(null)
   const [postSearchPublic,setPostSearchPublic]=useState(false)
   const [profileSearchPublic,setProfileSearchPublic]=useState(false)
-  const [message,setMessage]=useState(''),[comment,setComment]=useState('')
+  const [comment,setComment]=useState('')
+  // The draft lives outside React state so typing doesn't re-render the whole app and every message bubble.
+  const messageDraft=useRef(''),composerSet=useRef<(value:string)=>void>(()=>{}),[hasMessage,setHasMessage]=useState(false)
+  const setMessage=(value:string)=>{messageDraft.current=value;composerSet.current(value);setHasMessage(!!value.trim())}
   const [chatMedia,setChatMedia]=useState<Media|null>(null),[chatViewOnce,setChatViewOnce]=useState(false),[chatTools,setChatTools]=useState(false)
   const [voiceRecording,setVoiceRecording]=useState(false)
   const [openedOnce,setOpenedOnce]=useState<{kind:'image'|'video';url:string;id:string;room:string}|null>(null)
@@ -1620,16 +1629,16 @@ export default function App(props:Props){
     }catch(reason){fail(reason)}
   }
   async function send(){
-    if(!room||busy||(!message.trim()&&!chatMedia))return
+    if(!room||busy||(!messageDraft.current.trim()&&!chatMedia))return
     const id=room.id
     const append=(item:Note)=>setChats(previous=>({...previous,[id]:[...(previous[id]??[]).filter(m=>m.id!==item.id),item]}))
     setBusy(true)
     try{
       let item:Note,pendingId=''
       const replyTo=messageReply?.id
-      if(demo)item={id:uid(),author:user,body:message.trim(),reply:messageReply?replyFromNote(messageReply):undefined}
+      if(demo)item={id:uid(),author:user,body:messageDraft.current.trim(),reply:messageReply?replyFromNote(messageReply):undefined}
       else if(chatMedia){
-        const form=new FormData();form.append('body',message.trim())
+        const form=new FormData();form.append('body',messageDraft.current.trim())
         if(replyTo)form.append('replyTo',replyTo)
         form.append('viewOnce',String(chatViewOnce))
         if(chatMedia.duration)form.append('duration',String(chatMedia.duration))
@@ -1638,7 +1647,7 @@ export default function App(props:Props){
         else form.append(field,chatMedia.data as unknown as Blob)
         item=await call<Note>('/rooms/'+id+'/messages',{method:'POST',body:form})
       }else{
-        const draft=message,quoted=messageReply
+        const draft=messageDraft.current,quoted=messageReply
         pendingId='pending-'+uid()
         stickToChatEnd.current=true
         append({id:pendingId,author:user,body:draft.trim(),createdAt:new Date().toISOString(),reply:quoted?replyFromNote(quoted):undefined})
@@ -2210,10 +2219,10 @@ export default function App(props:Props){
             <View style={{...row,paddingHorizontal:12,paddingVertical:9,borderTopWidth:1,borderColor:theme.border,backgroundColor:theme.card}}>
               {props.pickMedia&&<IconButton name={chatTools?'close':'plus'} label={chatTools?'Close media tools':'Add media'} active={chatTools} onPress={()=>setChatTools(value=>!value)}/>}
               <View style={{flex:1,minWidth:0,borderRadius:23,backgroundColor:theme.chip,borderWidth:1,borderColor:theme.border}}>
-                <TextInput accessibilityLabel="Message" placeholder="Message" placeholderTextColor={theme.muted} value={message} onChangeText={setMessage} multiline maxLength={800} style={[{color:theme.text,fontSize:15,minHeight:44,maxHeight:120,paddingHorizontal:15,paddingVertical:10,textAlignVertical:'center'},font(500)]}/>
+                <ChatInput draft={messageDraft} setter={composerSet} onChange={value=>{messageDraft.current=value;setHasMessage(!!value.trim())}}/>
               </View>
               {props.voiceRecorder&&<IconButton name={voiceRecording?'micOff':'mic'} label={voiceRecording?'Stop voice-note recording':'Record voice note'} active={voiceRecording} onPress={()=>void toggleVoiceNote()}/>}
-              <View style={{opacity:busy||(!message.trim()&&!chatMedia)?.5:1}}><IconButton name="send" label="Send" solid onPress={()=>void send()}/></View>
+              <View style={{opacity:busy||(!hasMessage&&!chatMedia)?.5:1}}><IconButton name="send" label="Send" solid onPress={()=>void send()}/></View>
             </View>
           </KeyboardAvoidingView>}
           {!desktop&&page!=='Chat'&&page!=='Messages'&&<View style={{...row,gap:0,justifyContent:'space-around',minHeight:64,paddingHorizontal:6,borderTopWidth:1,borderColor:theme.border,backgroundColor:theme.card}}>{tabs.slice(0,2).map(([name,glyph])=>navButton(name,glyph))}<View style={{width:61,alignItems:'center',marginTop:-13}}><IconButton name="plus" label="Create post" size={26} solid onPress={compose}/></View>{tabs.slice(2).map(([name,glyph])=>navButton(name,glyph))}</View>}
