@@ -304,16 +304,6 @@ function LazyImage({uri,alt,style,eager=false}:{uri:string;alt:string;style:obje
   if(Platform.OS==='web')return React.createElement('img',{src:uri,alt,loading:eager?'eager':'lazy',decoding:eager?'sync':'async',style})
   return <Image accessibilityLabel={alt} source={{uri}} resizeMode="cover" style={style}/>
 }
-// Fades the body in when one overlay replaces another (post to comments) so the swap is not a hard cut.
-// The first open is left to the modal's own slide, so content never waits behind a fade.
-function OverlayFade({children,animate,reduced}:{children:React.ReactNode;animate:boolean;reduced:boolean}){
-  const progress=useRef(new Animated.Value(animate&&!reduced?0:1)).current
-  useEffect(()=>{
-    if(!animate||reduced)return
-    Animated.timing(progress,{toValue:1,duration:140,easing:Easing.out(Easing.quad),useNativeDriver:Platform.OS!=='web',isInteraction:false}).start()
-  },[])
-  return <Animated.View style={{flex:1,opacity:progress}}>{children}</Animated.View>
-}
 function OnceViewer({media,retry}:{media:{kind:'image'|'video';url:string};retry:()=>Promise<void>}){
   const {renderVideo:NativeVideo}=useDesign()
   const [state,setState]=useState<'loading'|'ready'|'failed'>(media.kind==='video'?'ready':'loading')
@@ -480,8 +470,6 @@ export default function App(props:Props){
   const [overlay,setOverlay]=useState<Overlay|null>(null)
   // Posts, comments and lists slide in and out like a screen; the type is remembered so the exit matches the entrance.
   const modalSlides=useRef(false)
-  const lastOverlayKind=useRef<string|null>(null)
-  useEffect(()=>{lastOverlayKind.current=overlay?.kind??null},[overlay?.kind])
   const overlayHistory=useRef<Overlay[]>([])
   const pageScroll=useRef(0)
   const [toast,setToast]=useState<ToastMessage|null>(null)
@@ -1150,6 +1138,7 @@ export default function App(props:Props){
     }
   },[stage,token,demo,props.initialUrl])
   const selectOverlay=(value:Overlay)=>{
+    if(value.kind==='post')value={kind:'comments',post:value.post}
     if(value.kind==='editProfile'){setProfileNameDraft(user.name);setBioDraft(user.bio??'');setProfileSearchPublic(Boolean(user.searchPublic))}
     if(value.kind==='editUsername')setUsernameDraft(user.username??'')
     if(value.kind==='newStory'){setStoryMode('Text');setStoryImage(undefined);setStoryMedia(null);setStoryBackground('#4F25D6')}
@@ -2089,7 +2078,10 @@ export default function App(props:Props){
     sheet=<><Field label="Edit message" value={comment} onChangeText={setComment} multiline maxLength={800}/><Copy size={12} color={theme.muted}>Verified messages can be edited for one hour after sending.</Copy><Button label={busy?'Saving…':'Save changes'} disabled={busy||!comment.trim()} onPress={()=>void editMessage(overlay.message)}/></>
   }else if(overlay?.kind==='comments'){
     const list=notes[overlay.post.id]??(demo&&overlay.post.id==='quadratics'?initialComments:[])
-    sheet=<Comments key={overlay.post.id} base={props.base} token={token} demo={demo} list={list} loading={commentStatus[overlay.post.id]==='loading'&&!notes[overlay.post.id]} failed={commentStatus[overlay.post.id]==='error'&&!notes[overlay.post.id]} onRetry={()=>void loadComments(overlay.post.id)} body={comment} onBody={value=>{commentDraft.current++;setComment(value)}} renderGif={props.renderGif}
+    const shown=posts.find(item=>item.id===overlay.post.id)??overlay.post
+    const ownVerified=verifiedBenefits&&shown.author.id===user.id
+    const header=<><PostCard detail post={shown} onReact={react} onOverlay={selectOverlay} onProfile={showProfile} onArticle={id=>selectOverlay({kind:'article',articleId:id})} onQuote={startQuote} onInvite={(item,accept)=>void answerInvite(item,accept)}/>{ownVerified&&<View style={{...row,flexWrap:'wrap'}}>{(demo||withinEditWindow(shown.time))&&<Button label="Edit post" variant="secondary" onPress={()=>{setComment(shown.body);selectOverlay({kind:'editPost',post:shown})}}/>}<Button label="Delete post" variant="danger" onPress={()=>void deletePost(shown)}/></View>}</>
+    sheet=<Comments header={header} key={overlay.post.id} base={props.base} token={token} demo={demo} list={list} loading={commentStatus[overlay.post.id]==='loading'&&!notes[overlay.post.id]} failed={commentStatus[overlay.post.id]==='error'&&!notes[overlay.post.id]} onRetry={()=>void loadComments(overlay.post.id)} body={comment} onBody={value=>{commentDraft.current++;setComment(value)}} renderGif={props.renderGif}
       replyTo={replyTarget} highlightId={overlay.targetId} onReply={item=>{commentDraft.current++;setReplyTarget(item)}} onCancelReply={()=>{commentDraft.current++;setReplyTarget(null)}} onLike={item=>void likeComment(overlay.post.id,item)}
       attachment={commentMedia&&'uri' in commentMedia?{kind:'image',url:commentMedia.uri}:commentMedia??undefined}
       onPreset={value=>{commentDraft.current+=1;setCommentMedia(value)}} onRemove={()=>{commentDraft.current+=1;setCommentMedia(null)}}
@@ -2293,7 +2285,7 @@ export default function App(props:Props){
         </ScrollView>}
       </View>}
     {toast&&!overlay&&<Toast key={toast.id} item={toast} reduced={reduced} onDismiss={dismissToast} bottom={desktop?24:page==='Chat'?146:76}/>}
-    <Modal presentationStyle="fullScreen" visible={overlay!==null} animationType={reduced?'none':modalSlides.current?'slide':'fade'} onRequestClose={modalClose}>
+    <Modal presentationStyle="fullScreen" visible={overlay!==null} animationType={reduced||modalSlides.current?'none':'fade'} onRequestClose={modalClose}>
       <ModalViewport color={story?(personalStory?.background??(personalStory?.image?'#120D1F':'#4F25D6')):theme.bg}>
       {overlay?.kind==='call'&&!overlay.ringing?<CallPreview video={overlay.video} person={overlay.person} onClose={modalClose}/>:story?<View accessibilityViewIsModal style={{flex:1,backgroundColor:personalStory?.background??(personalStory?.image?'#120D1F':'#4F25D6'),padding:18}}>
         <View style={{width:'100%',maxWidth:640,alignSelf:'center',flex:1,gap:14}}>
@@ -2333,14 +2325,12 @@ export default function App(props:Props){
             <Copy size={21} weight={800}>{overlayTitle}</Copy>
           </View>
         </View>
-        <OverlayFade key={overlay?.kind} animate={lastOverlayKind.current!==null&&lastOverlayKind.current!==overlay?.kind} reduced={reduced}>
         {overlay?.kind==='comments'?<KeyboardAvoidingView behavior="padding" style={{flex:1,width:'100%',maxWidth:720,alignSelf:'center',paddingBottom:keyboardInset}}>
           {sheet}
         </KeyboardAvoidingView>:<ScrollView key={overlay?.kind} style={{flex:1}} keyboardShouldPersistTaps="handled"
           contentContainerStyle={{width:'100%',maxWidth:720,alignSelf:'center',padding:16,paddingBottom:30,gap:14}}>
           {sheet}
         </ScrollView>}
-        </OverlayFade>
         {toast&&overlay&&<Toast key={toast.id} item={toast} reduced={reduced} onDismiss={dismissToast} bottom={18}/>}
       </View>}
       </ModalViewport>
