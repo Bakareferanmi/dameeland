@@ -565,6 +565,11 @@ export default function App(props:Props){
     const shown=Keyboard.addListener(Platform.OS==='ios'?'keyboardWillShow':'keyboardDidShow',jump)
     return ()=>shown.remove()
   },[page,overlay,keyboardInset])
+  useEffect(()=>{
+    if(page!=='Chat'||!stickToChatEnd.current)return
+    const timer=setTimeout(()=>scroll.current?.scrollToEnd({animated:false}),30)
+    return ()=>clearTimeout(timer)
+  },[page,!!messageReply])
   const [unread,setUnread]=useState(demo)
   const [messageUnread,setMessageUnread]=useState(demo?2:0)
   const [notifications,setNotifications]=useState(true)
@@ -864,7 +869,7 @@ export default function App(props:Props){
       if(syncing)return
       syncing=true
       return api<MessagePage>(base,'/rooms/'+roomId+'/messages?paged=1',{},token)
-      .then(data=>{if(active){lastSync=Date.now();setMessageNextCursor(previous=>roomId in previous?previous:{...previous,[roomId]:data.nextCursor});setChats(previous=>({...previous,[roomId]:mergeNotes(previous[roomId]??[],data.items)}));setFeedError('');if(foreground()){const latest=data.items.reduce((max,item)=>!item.call&&item.author.id!==user.id?Math.max(max,Date.parse(item.createdAt??'')||0):max,0);if(latest>markedUntil){markedUntil=latest;void markRoomRead(roomId)}}}})
+      .then(data=>{if(active){lastSync=Date.now();setMessageNextCursor(previous=>roomId in previous?previous:{...previous,[roomId]:data.nextCursor});setChats(previous=>({...previous,[roomId]:mergeNotes((previous[roomId]??[]).filter(m=>!(m.id.startsWith('pending-')&&data.items.some(n=>n.author.id===user.id&&n.body===m.body))),data.items)}));setFeedError('');if(foreground()){const latest=data.items.reduce((max,item)=>!item.call&&item.author.id!==user.id?Math.max(max,Date.parse(item.createdAt??'')||0):max,0);if(latest>markedUntil){markedUntil=latest;void markRoomRead(roomId)}}}})
       .catch(reason=>{if(active)setFeedError(errorMessage(reason))})
       .finally(()=>{syncing=false})
     }
@@ -899,10 +904,10 @@ export default function App(props:Props){
       }
       const incoming=data as Note
       const item:Note=incoming.viewOnce&&incoming.author.id!==user.id&&!incoming.viewOnce.opened?{...incoming,viewOnce:{...incoming.viewOnce,canOpen:true}}:incoming
-      setChats(previous=>({...previous,[roomId]:[...(previous[roomId]??[]).filter(m=>m.id!==item.id),item]}))
+      setChats(previous=>({...previous,[roomId]:[...(previous[roomId]??[]).filter(m=>m.id!==item.id&&!(m.id.startsWith('pending-')&&item.author.id===user.id&&m.body===item.body.trim())),item]}))
       if(item.author.id!==user.id){
         if(foreground())void markRoomRead(roomId)
-        void props.notifyDevice?.(item.author.name,'New message: '+item.body)
+        if(!foreground())void props.notifyDevice?.(item.author.name,'New message: '+item.body)
       }
     }
     void refresh()
@@ -1620,7 +1625,7 @@ export default function App(props:Props){
     const append=(item:Note)=>setChats(previous=>({...previous,[id]:[...(previous[id]??[]).filter(m=>m.id!==item.id),item]}))
     setBusy(true)
     try{
-      let item:Note
+      let item:Note,pendingId=''
       const replyTo=messageReply?.id
       if(demo)item={id:uid(),author:user,body:message.trim(),reply:messageReply?replyFromNote(messageReply):undefined}
       else if(chatMedia){
@@ -1632,10 +1637,19 @@ export default function App(props:Props){
         if(chatMedia.data instanceof Blob)form.append(field,chatMedia.data,chatMedia.name)
         else form.append(field,chatMedia.data as unknown as Blob)
         item=await call<Note>('/rooms/'+id+'/messages',{method:'POST',body:form})
-      }else item=await call<Note>('/rooms/'+id+'/messages',json({body:message,replyTo}))
+      }else{
+        const draft=message,quoted=messageReply
+        pendingId='pending-'+uid()
+        stickToChatEnd.current=true
+        append({id:pendingId,author:user,body:draft.trim(),createdAt:new Date().toISOString(),reply:quoted?replyFromNote(quoted):undefined})
+        setMessage('');setMessageReply(null)
+        try{item=await call<Note>('/rooms/'+id+'/messages',json({body:draft,replyTo}))}
+        catch(reason){setChats(previous=>({...previous,[id]:(previous[id]??[]).filter(m=>m.id!==pendingId)}));setMessage(draft);setMessageReply(quoted);throw reason}
+        setChats(previous=>({...previous,[id]:(previous[id]??[]).filter(m=>m.id!==pendingId)}))
+      }
       stickToChatEnd.current=true
       append(item);setMessageReply(null);setMessage('');setChatMedia(null);setChatViewOnce(false);setChatTools(false)
-      if(!demo&&!room.person.group){const latest=await call<ChatStreak|null>('/rooms/'+id+'/streak');setStreak(latest);setRooms(previous=>previous.map(saved=>saved.id===id?{...saved,streak:latest??undefined}:saved))}
+      if(!demo&&!room.person.group){try{const latest=await call<ChatStreak|null>('/rooms/'+id+'/streak');setStreak(latest);setRooms(previous=>previous.map(saved=>saved.id===id?{...saved,streak:latest??undefined}:saved))}catch{}}
       if(demo){
         const session=demoSession.current
         replyTimers.current.push(setTimeout(()=>{if(session===demoSession.current){append({id:uid(),author:room.person,body:'Thanks for the message! See you at school.'});void props.notifyDevice?.(room.person.name,'Thanks for the message! See you at school.')}},950))
@@ -1802,8 +1816,8 @@ export default function App(props:Props){
     setRoom(previous.room)
     setLessonId(previous.lessonId)
     if(previous.page==='Chat'){
-      stickToChatEnd.current=false
-      initialChatScroll.current=false
+      stickToChatEnd.current=true
+      initialChatScroll.current=true
     }
     changePage(previous.page,previous.scrollY)
   }
