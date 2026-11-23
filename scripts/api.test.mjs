@@ -1,3 +1,4 @@
+// Local runs: put DISABLE_AUTH_LIMITS=true in apps/api/.dev.vars so many signups do not hit the sign-in rate limit. Never set it in production.
 import {test} from 'node:test'
 import assert from 'node:assert/strict'
 import {randomUUID} from 'node:crypto'
@@ -79,7 +80,7 @@ test('username cooldown, public preview, presence, and personal analytics',async
   await request('/me/presence',{token,method:'PUT',body:{online:true}})
   assert.equal((await request('/people/'+account.user.id+'/presence',{token:other.token})).online,true)
   const analytics=await request('/me/analytics',{token})
-  assert.deepEqual(analytics,{posts:0,followers:0,following:0,likes:0,reposts:0,comments:0})
+  assert.deepEqual(analytics,{posts:0,followers:0,following:0,likes:0,reposts:0,comments:0,invites:0})
   await request('/me/presence',{token,method:'PUT',body:{online:false}})
   assert.equal((await request('/people/'+account.user.id+'/presence',{token:other.token})).online,false)
 })
@@ -338,12 +339,14 @@ test('local Worker persists accounts, social activity, media, and private realti
   const photoStoryForm=new FormData()
   photoStoryForm.append('text','Notes')
   photoStoryForm.append('image',new Blob([file],{type:'image/png'}),'story.png')
-  const photoStory=await request('/stories',{token:ada.token,method:'POST',form:photoStoryForm,status:201})
+  // Accounts without a verified badge can only have one story at a time.
+  await request('/stories',{token:ada.token,method:'POST',form:photoStoryForm,status:429})
+  const photoStory=await request('/stories',{token:tobi.token,method:'POST',form:photoStoryForm,status:201})
   assert.deepEqual(Buffer.from(await (await fetch(photoStory.image)).arrayBuffer()),file)
   assert.deepEqual((await request('/stories',{token:tobi.token})).filter(group=>group.author.id===ada.user.id),[])
   const ownStories=await request('/stories',{token:ada.token})
   assert.equal(ownStories[0].author.id,ada.user.id)
-  assert.equal(ownStories[0].stories.length,2)
+  assert.equal(ownStories[0].stories.length,1)
   await request('/people/missing/follow-stats',{token:tobi.token,status:404})
   await request(followPath,{token:tobi.token,method:'PUT',body:{active:true}})
   assert.equal((await request('/people?q='+ada.username,{token:tobi.token})).find(person=>person.id===ada.user.id).followsViewer,false)
@@ -352,13 +355,13 @@ test('local Worker persists accounts, social activity, media, and private realti
   assert.equal((await request('/people?q='+tobi.username,{token:ada.token})).find(person=>person.id===tobi.user.id).followsViewer,true)
   await request('/people/'+tobi.user.id+'/follow',{token:ada.token,method:'PUT',body:{active:false}})
   const seen=await request('/stories',{token:tobi.token})
-  assert.deepEqual(seen.find(group=>group.author.id===ada.user.id)?.stories.map(item=>item.id),[story.id,photoStory.id])
+  assert.deepEqual(seen.find(group=>group.author.id===ada.user.id)?.stories.map(item=>item.id),[story.id])
   const storyPath='/stories/'+ada.user.id+'/'+story.id+'/like'
   assert.deepEqual(await request(storyPath,{token:tobi.token,method:'PUT',body:{active:true}}),{likes:1,liked:true})
   assert.equal((await request('/stories',{token:tobi.token})).find(group=>group.author.id===ada.user.id).stories[0].liked,true)
   assert.deepEqual(await request(storyPath,{token:tobi.token,method:'PUT',body:{active:false}}),{likes:0,liked:false})
   await request('/stories/'+story.id,{token:tobi.token,method:'DELETE',status:404})
-  await request('/stories/'+photoStory.id,{token:ada.token,method:'DELETE'})
+  await request('/stories/'+photoStory.id,{token:tobi.token,method:'DELETE'})
   assert.equal((await fetch(photoStory.image)).status,404)
   assert.deepEqual((await request('/stories',{token:tobi.token})).find(group=>group.author.id===ada.user.id)?.stories.map(item=>item.id),[story.id])
   await request('/stories/'+story.id,{token:ada.token,method:'DELETE'})

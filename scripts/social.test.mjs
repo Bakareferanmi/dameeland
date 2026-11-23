@@ -1,3 +1,4 @@
+// Local runs: put DISABLE_AUTH_LIMITS=true in apps/api/.dev.vars so many signups do not hit the sign-in rate limit. Never set it in production.
 import {test} from 'node:test'
 import assert from 'node:assert/strict'
 import {randomUUID} from 'node:crypto'
@@ -30,6 +31,14 @@ test('shared posts allow at most three people and need acceptance',async()=>{
   assert.deepEqual(after.coAuthors.map(entry=>entry.person.id),[b.user.id])
   await request('/posts/'+id+'/coauthor',{token:c.token,method:'PUT',body:{accept:false}})
   assert.equal((await request('/posts/'+id,{token:a.token})).coAuthors.length,1)
+  // The accepted co-author gets the post counted, and it appears for people who follow them but not the author.
+  assert.equal((await request('/me/analytics',{token:b.token})).posts,1)
+  assert.equal((await request('/me/analytics',{token:c.token})).posts,0,'declined invite does not count')
+  await request('/people/'+b.user.id+'/follow',{token:d.token,method:'PUT',body:{active:true}})
+  const following=await request('/feed?following=1',{token:d.token})
+  assert.ok(following.some(post=>post.id===id),'followers of a co-author see the shared post')
+  const stranger=await request('/feed?following=1',{token:c.token})
+  assert.ok(!stranger.some(post=>post.id===id),'unrelated people do not')
 })
 
 test('quote posts embed the original and tell its author',async()=>{

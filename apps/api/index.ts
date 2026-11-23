@@ -9,7 +9,7 @@ import {DurableObject} from 'cloudflare:workers'
 import * as webpush from 'web-push'
 import {lessons,commentGifs,validBirthDate,type BirthdayEntry,storyLimit,storyLifetime,verifiedStoryLimit,verifiedStoryLifetime,storyVideoLimit,verifiedStoryVideoLimit,type Story,type StoryGroup,commentStickers,capitalizeName,initials,normalizeUsername,usernameHint,validUsername,type AdminAccount,type AdminActivity,type AdminDay,type AdminOverview,type CommentAttachment,type FollowPage,type FollowStats,type Person,type Role,extractMentions,maxPostAuthors,messageReactionEmojis,type MessageReply} from '@dameeland/core'
 
-interface Env {DB:D1Database;MEDIA:R2Bucket;STORIES:KVNamespace;ROOMS:DurableObjectNamespace<ChatRoom>;ALLOWED_ORIGIN:string;VAPID_PUBLIC_KEY?:string;VAPID_PRIVATE_KEY?:string;VAPID_SUBJECT?:string;GOOGLE_CLIENT_ID?:string;GOOGLE_CLIENT_SECRET?:string;GOOGLE_REDIRECT_URI?:string;ADMIN_USER_IDS?:string;RESEND_API_KEY?:string;RECOVERY_FROM?:string}
+interface Env {DB:D1Database;MEDIA:R2Bucket;STORIES:KVNamespace;ROOMS:DurableObjectNamespace<ChatRoom>;ALLOWED_ORIGIN:string;DISABLE_AUTH_LIMITS?:string;VAPID_PUBLIC_KEY?:string;VAPID_PRIVATE_KEY?:string;VAPID_SUBJECT?:string;GOOGLE_CLIENT_ID?:string;GOOGLE_CLIENT_SECRET?:string;GOOGLE_REDIRECT_URI?:string;ADMIN_USER_IDS?:string;RESEND_API_KEY?:string;RECOVERY_FROM?:string}
 type Account={id:string;email:string;name:string;role:Role;salt:string;password_hash:string;username?:string|null;verified?:number;teacher?:number;dob?:string|null}
 type PublicAccount=Pick<Account,'id'|'name'|'role'|'username'|'verified'|'teacher'|'dob'> & {email?:string;avatar_media?:string|null;cover_media?:string|null;bio?:string|null;username_changed_at?:number|null;search_public?:number}
 type App={Bindings:Env;Variables:{user:PublicAccount;tokenHash:string}}
@@ -148,7 +148,10 @@ function equal(left:string,right:string){
   for(let i=0;i<left.length;i++) difference|=left.charCodeAt(i)^(right.charCodeAt(i)||0)
   return difference===0
 }
+// Only ever set in apps/api/.dev.vars for local test runs. It is not in wrangler.jsonc, so production never has it.
+let authLimitsOff=false
 async function authAllowed(db:D1Database,ip:string,flow:string,maxAttempts=25){
+  if(authLimitsOff)return true
   const window=Math.floor(now()/600000)
   const limit=await db.prepare('INSERT INTO auth_limits VALUES (?,1,?) ON CONFLICT(id) DO UPDATE SET attempts=attempts+1 RETURNING attempts')
     .bind(await hash(flow+':'+ip+':'+window),(window+1)*600000).first<number>('attempts')
@@ -158,6 +161,7 @@ const allowedOrigins=(env:Env)=>[
   ...env.ALLOWED_ORIGIN.split(',').map(origin=>origin.trim()).filter(Boolean),
   'http://127.0.0.1:5173',
 ]
+app.use('*',async(c,next)=>{authLimitsOff=c.env.DISABLE_AUTH_LIMITS==='true';await next()})
 app.use('/api/*',async(c,next)=>cors({origin:allowedOrigins(c.env),allowMethods:['GET','POST','PUT','DELETE','OPTIONS'],allowHeaders:['Authorization','Content-Type']})(c,next))
 app.use('/api/*',async(c,next)=>{
   if(c.req.method!=='POST'&&c.req.method!=='PUT')return next()
@@ -626,7 +630,7 @@ app.put('/api/me/presence',async c=>{
 })
 app.get('/api/me/analytics',async c=>{
   const data=await c.env.DB.prepare(`SELECT
-    (SELECT COUNT(*) FROM posts WHERE author=?1) posts,
+    ((SELECT COUNT(*) FROM posts WHERE author=?1)+(SELECT COUNT(*) FROM post_authors WHERE user_id=?1 AND status='accepted')) posts,
     (SELECT COUNT(*) FROM follows WHERE target=?1) followers,
     (SELECT COUNT(*) FROM follows WHERE follower=?1) following,
     (SELECT COUNT(*) FROM reactions r JOIN posts p ON p.id=r.post_id WHERE p.author=?1 AND r.kind='like') likes,
@@ -973,8 +977,9 @@ app.get('/api/feed',async c=>{
   const following=c.req.query('following')==='1'
   const {results}=await c.env.DB.prepare(`${postProjection}
     WHERE ?=0 OR p.author=? OR EXISTS(SELECT 1 FROM follows WHERE follower=? AND target=p.author)
+      OR EXISTS(SELECT 1 FROM post_authors a WHERE a.post_id=p.id AND a.status='accepted' AND (a.user_id=? OR a.user_id IN (SELECT target FROM follows WHERE follower=?)))
     ORDER BY p.created DESC LIMIT 60
-  `).bind(id,id,Number(following),id,id).all<PostRow>()
+  `).bind(id,id,Number(following),id,id,id,id).all<PostRow>()
   c.header('Cache-Control',c.req.query('refresh')?'no-store':'private, max-age=15, stale-while-revalidate=30')
   return c.json(await postsView(c.env.DB,results,id,c.req.url))
 })
@@ -1203,7 +1208,7 @@ app.get('/api/people',async c=>{
       EXISTS(SELECT 1 FROM follows WHERE follower=? AND target=u.id) following,
       EXISTS(SELECT 1 FROM follows WHERE follower=u.id AND target=?) follows_viewer,
       (SELECT COUNT(*) FROM follows f1 JOIN follows f2 ON f1.target=f2.target WHERE f1.follower=? AND f2.follower=u.id) mutuals,
-      (SELECT COUNT(*) FROM posts p WHERE p.author=u.id) post_count
+      ((SELECT COUNT(*) FROM posts p WHERE p.author=u.id)+(SELECT COUNT(*) FROM post_authors a WHERE a.user_id=u.id AND a.status='accepted')) post_count
     FROM users u
     WHERE id!=? AND (instr(lower(name),?)>0 OR instr(username,?)>0)
     ORDER BY following ASC, mutuals DESC, post_count DESC, name ASC

@@ -13,6 +13,8 @@ export const validUsername = (value:string) => /^[a-z0-9_]{3,24}$/.test(value)
 export const mentionPattern = /(^|[^\w@])@([a-zA-Z0-9_]{3,24})(?![\w@])/g
 export const extractMentions = (body:string) => [...new Set([...body.matchAll(mentionPattern)].map(match=>match[2].toLowerCase()))].slice(0,10)
 export const maxPostAuthors = 3
+/** True when the person wrote the post or has accepted an invite to co-author it. */
+export const isPostBy = (post:Post,personId:string) => post.author.id===personId || !!post.coAuthors?.some(entry=>entry.status==='accepted'&&entry.person.id===personId)
 export const messageReactionEmojis = ['❤️','😂','😮','😢','👍','🔥'] as const
 export const capitalizeName = (value:string) => value.replace(/^(\s*)(\p{L})/u,(_,space:string,letter:string)=>space+letter.toUpperCase())
 const pad=(value:number)=>String(value).padStart(2,'0')
