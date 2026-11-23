@@ -66,6 +66,15 @@ export function Comments({list,body,onBody,attachment,onPreset,onPhoto,onRemove,
   const [picker,setPicker]=useState<'gif'|'sticker'|null>(null)
   const listRef=useRef<React.ComponentRef<typeof ScrollView>>(null)
   const last=list.at(-1)
+  // Lazy list: the post, composer and first comments paint on the first frame, the rest fill in a chunk per frame.
+  const [visible,setVisible]=useState(6)
+  useEffect(()=>{
+    if(visible>=list.length)return
+    const frame=requestAnimationFrame(()=>setVisible(count=>count+10))
+    return ()=>cancelAnimationFrame(frame)
+  },[visible,list.length])
+  const highlightIndex=highlightId?list.findIndex(item=>item.id===highlightId):-1
+  const cap=Math.max(visible,highlightIndex+1,last?.pending?list.length:0)
   useEffect(()=>{if(last?.pending)requestAnimationFrame(()=>listRef.current?.scrollToEnd({animated:true}))},[last?.id,last?.pending])
   const options:Preset[]=picker==='gif'
     ? (Object.keys(commentGifs) as (keyof typeof commentGifs)[]).map(id=>({kind:'gif',id}))
@@ -73,7 +82,7 @@ export function Comments({list,body,onBody,attachment,onPreset,onPhoto,onRemove,
   return <View style={{flex:1,gap:12,padding:16}}>
     <ScrollView ref={listRef} style={{flex:1}} keyboardShouldPersistTaps="always" keyboardDismissMode="none" contentContainerStyle={{gap:14,paddingVertical:4}}>
       {header}
-      {list.length?list.map(item=><View key={item.clientId??item.id} onLayout={event=>{if(item.id===highlightId)listRef.current?.scrollTo({y:Math.max(0,event.nativeEvent.layout.y-24),animated:true})}}><CommentEntry item={item} onProfile={onProfile} onReply={onReply} onLike={onLike} highlighted={item.id===highlightId} renderGif={renderGif}/></View>):loading?<CommentSkeleton/>:failed?<View style={{gap:8,alignItems:'flex-start'}}><Copy color={theme.muted}>Couldn’t load comments.</Copy>{onRetry&&<Button label="Try again" variant="secondary" onPress={onRetry}/>}</View>:<Copy color={theme.muted}>Be the first to leave a comment.</Copy>}
+      {list.length?list.slice(0,cap).map(item=><View key={item.clientId??item.id} onLayout={event=>{if(item.id===highlightId)listRef.current?.scrollTo({y:Math.max(0,event.nativeEvent.layout.y-24),animated:true})}}><CommentEntry item={item} onProfile={onProfile} onReply={onReply} onLike={onLike} highlighted={item.id===highlightId} renderGif={renderGif}/></View>):loading?<CommentSkeleton/>:failed?<View style={{gap:8,alignItems:'flex-start'}}><Copy color={theme.muted}>Couldn’t load comments.</Copy>{onRetry&&<Button label="Try again" variant="secondary" onPress={onRetry}/>}</View>:<Copy color={theme.muted}>Be the first to leave a comment.</Copy>}
     </ScrollView>
     <View style={{gap:8,borderTopWidth:1,borderColor:theme.border,paddingTop:12}}>
       {replyTo&&<View style={spread}><Copy size={12} color={theme.muted}>Replying to {displayHandle(replyTo.author)}</Copy><IconButton name="close" label="Cancel reply" onPress={onCancelReply}/></View>}
