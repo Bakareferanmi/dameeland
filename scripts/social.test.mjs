@@ -76,3 +76,15 @@ test('chat replies and reactions work in a conversation',async()=>{
   assert.equal(messages.find(item=>item.id===reply.id).reply.authorName.length>0,true)
   await request('/rooms/'+room.id+'/messages/'+first.id+'/reaction',{token:b.token,method:'PUT',body:{emoji:null}})
 })
+
+test('reaction notifications stay quiet',async()=>{
+  const [a,b]=await Promise.all(['Qui One','Qui Two'].map(create))
+  const room=await request('/rooms',{token:a.token,method:'POST',body:{target:b.user.id}})
+  const message=await request('/rooms/'+room.id+'/messages',{token:a.token,method:'POST',body:{body:'react to me'},status:201})
+  const react=emoji=>request('/rooms/'+room.id+'/messages/'+message.id+'/reaction',{token:b.token,method:'PUT',body:{emoji}})
+  const count=async()=>(await request('/notifications',{token:a.token})).items.filter(item=>item.body.includes('to your message')).length
+  await react('🔥');assert.equal(await count(),1)
+  await react('❤️');await react('🔥');assert.equal(await count(),1,'swapping emoji does not notify again')
+  await react(null);assert.equal(await count(),0,'taking it back removes the unread notification')
+  await react('👍');assert.equal(await count(),1,'reacting again notifies once')
+})

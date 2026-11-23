@@ -1646,7 +1646,13 @@ app.put('/api/rooms/:room/messages/:id/reaction',async c=>{
   const {results}=await db.prepare('SELECT user_id,emoji FROM message_reactions WHERE message_id=?').bind(id).all<{user_id:string;emoji:string}>()
   const update={type:'message-reaction',id,reactions:results.map(entry=>({userId:entry.user_id,emoji:entry.emoji}))}
   c.executionCtx.waitUntil(c.env.ROOMS.getByName(room).fetch('https://room.internal/notify',{method:'POST',body:JSON.stringify(update)}))
-  if(typeof emoji==='string')await createNotification(c.env,c.executionCtx,db,message.author,user.id,'message',room,'reacted '+emoji+' to your message','react:'+id+':'+user.id)
+  // Reactions are quiet: one notification per message (not per tap), none for swapping emoji, and taking a reaction back removes an unread one.
+  const key='react:'+id+':'+user.id
+  if(emoji===null)await db.prepare('DELETE FROM notifications WHERE user_id=? AND group_key=? AND read=0').bind(message.author,key).run()
+  else{
+    const already=await db.prepare("SELECT 1 FROM notifications WHERE user_id=? AND group_key LIKE ? AND (read=0 OR group_key=?) LIMIT 1").bind(message.author,'react:'+id+':%',key).first()
+    if(!already)await createNotification(c.env,c.executionCtx,db,message.author,user.id,'message',room,'reacted '+emoji+' to your message',key)
+  }
   return c.json(update)
 })
 app.delete('/api/rooms/:room/messages/:id',async c=>{
