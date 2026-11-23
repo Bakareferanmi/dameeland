@@ -300,9 +300,19 @@ function PreviewMedia({kind}:{kind:'image'|'video'}){
     </View>
   </View>
 }
-function LazyImage({uri,alt,style}:{uri:string;alt:string;style:object}){
-  if(Platform.OS==='web')return React.createElement('img',{src:uri,alt,loading:'lazy',decoding:'async',style})
+function LazyImage({uri,alt,style,eager=false}:{uri:string;alt:string;style:object;eager?:boolean}){
+  if(Platform.OS==='web')return React.createElement('img',{src:uri,alt,loading:eager?'eager':'lazy',decoding:eager?'sync':'async',style})
   return <Image accessibilityLabel={alt} source={{uri}} resizeMode="cover" style={style}/>
+}
+// Fades the body in when one overlay replaces another (post to comments) so the swap is not a hard cut.
+// The first open is left to the modal's own slide, so content never waits behind a fade.
+function OverlayFade({children,animate,reduced}:{children:React.ReactNode;animate:boolean;reduced:boolean}){
+  const progress=useRef(new Animated.Value(animate&&!reduced?0:1)).current
+  useEffect(()=>{
+    if(!animate||reduced)return
+    Animated.timing(progress,{toValue:1,duration:140,easing:Easing.out(Easing.quad),useNativeDriver:Platform.OS!=='web',isInteraction:false}).start()
+  },[])
+  return <Animated.View style={{flex:1,opacity:progress}}>{children}</Animated.View>
 }
 function OnceViewer({media,retry}:{media:{kind:'image'|'video';url:string};retry:()=>Promise<void>}){
   const {renderVideo:NativeVideo}=useDesign()
@@ -329,13 +339,13 @@ function OnceViewer({media,retry}:{media:{kind:'image'|'video';url:string};retry
   if(NativeVideo)return <NativeVideo uri={media.url} autoPlay onError={failed}/>
   return <Copy color="#fff" center>Video preview is unavailable on this device.</Copy>
 }
-function UploadedMedia({post}:{post:Post}){
+function UploadedMedia({post,eager=false}:{post:Post;eager?:boolean}){
   const {theme,renderVideo:NativeVideo}=useDesign()
   if(!post.media)return null
   if(post.kind==='video'&&Platform.OS==='web')return React.createElement('video',{src:post.media,controls:true,playsInline:true,preload:'metadata',style:{width:'100%',maxHeight:360,borderRadius:14,backgroundColor:theme.chip}})
   if(post.kind==='video'&&NativeVideo)return <NativeVideo key={post.media} uri={post.media}/>
   if(post.kind==='video')return <View style={{height:210,borderRadius:14,backgroundColor:'#120D1F',alignItems:'center',justifyContent:'center',gap:10}}><IconTile name="play" size={48} color={lime} background="#FFFFFF19"/><Copy color="#fff" weight={800}>VIDEO</Copy></View>
-  return <LazyImage uri={post.media} alt="Post attachment" style={{width:'100%',height:195,borderRadius:14,backgroundColor:theme.chip,objectFit:'cover'}}/>
+  return <LazyImage eager={eager} uri={post.media} alt="Post attachment" style={{width:'100%',height:195,borderRadius:14,backgroundColor:theme.chip,objectFit:'cover'}}/>
 }
 
 // First name for the shared-post header. Titles such as Mr or Dr are skipped so "Mr. Bello" reads as Bello.
@@ -360,7 +370,7 @@ function PostCard({post,onReact,onOverlay,onProfile,onArticle,onQuote,onInvite,d
       {!!post.article.excerpt&&<Text numberOfLines={3} style={{fontFamily:articleSerif,fontSize:14,lineHeight:21,color:theme.muted}}>{post.article.excerpt}</Text>}
       <Copy weight={800} color={theme.purple}>Read full article →</Copy>
     </Pressable>:!!post.body&&(detail?<LinkedText size={15}>{post.body}</LinkedText>:<Pressable accessibilityRole="button" accessibilityLabel="Open post details" onPress={()=>onOverlay({kind:'post',post})} style={{minHeight:32,justifyContent:'center'}}><LinkedText size={15}>{post.body}</LinkedText></Pressable>)}
-    {post.media?<UploadedMedia post={post}/>:post.kind&&<PreviewMedia kind={post.kind}/>}
+    {post.media?<UploadedMedia post={post} eager={detail}/>:post.kind&&<PreviewMedia kind={post.kind}/>}
     {post.quote&&<QuoteEmbed quote={post.quote} onPress={post.quote.unavailable?undefined:()=>onOverlay({kind:'post',post:{...post,id:post.quote!.id}})}/>}
     {!post.article&&!!post.articleId&&!!onArticle&&<Button label="Read the full article" leading="type" onPress={()=>onArticle(post.articleId!)}/>}
     <View style={{...row,justifyContent:'space-between',gap:1,borderTopWidth:1,borderColor:theme.border,paddingTop:3}}><IconButton name={post.liked?'heartOn':'heart'} label={post.liked?'Unlike post':'Like post'} active={post.liked} count={post.likes} onPress={()=>onReact(post,'like')}/><IconButton name="cm" label="Comments" count={post.comments} onPress={()=>onOverlay({kind:'comments',post})}/><IconButton name="rp" label={post.reposted?'Undo repost':'Repost'} active={post.reposted} count={post.reposts} onPress={()=>onReact(post,'repost')}/>{onQuote&&!post.article&&<IconButton name="type" label="Quote post" onPress={()=>onQuote(post)}/>}<IconButton name="sh" label="Share post" onPress={()=>onOverlay({kind:'share',post})}/></View>
@@ -470,6 +480,8 @@ export default function App(props:Props){
   const [overlay,setOverlay]=useState<Overlay|null>(null)
   // Posts, comments and lists slide in and out like a screen; the type is remembered so the exit matches the entrance.
   const modalSlides=useRef(false)
+  const lastOverlayKind=useRef<string|null>(null)
+  useEffect(()=>{lastOverlayKind.current=overlay?.kind??null},[overlay?.kind])
   const overlayHistory=useRef<Overlay[]>([])
   const pageScroll=useRef(0)
   const [toast,setToast]=useState<ToastMessage|null>(null)
@@ -534,6 +546,9 @@ export default function App(props:Props){
   const sharedLinkHandled=useRef(false)
   const [statsRefresh,refreshStats]=useState(0)
   const [notes,setNotes]=useState<Record<string,Note[]>>({})
+  const notesRef=useRef(notes)
+  notesRef.current=notes
+  const [commentStatus,setCommentStatus]=useState<Record<string,'loading'|'ready'|'error'>>({})
   const [keyboardInset,setKeyboardInset]=useState(0)
   const [chats,setChats]=useState<Record<string,Note[]>>(demo?initialChats:{})
   const [messageLoadingOlder,setMessageLoadingOlder]=useState(false)
@@ -1147,10 +1162,24 @@ export default function App(props:Props){
       setStoryIndex(demo?0:Math.max(0,unread));setStoryReplyDraft('')
       if(demo)setSeen(previous=>new Set(previous).add(value.person.id))
     }
-    if(value.kind==='comments'&&!demo){
-      const id=value.post.id
-      call<Note[]>('/posts/'+id+'/comments').then(data=>setNotes(previous=>({...previous,[id]:[...data,...(previous[id]??[]).filter(item=>!data.some(match=>match.id===item.id))]}))).catch(fail)
-    }
+    if(value.kind==='comments'||value.kind==='post')void loadComments(value.post.id)
+  }
+  // Cached comments render at once; the fetch only refreshes them. Only a first load with nothing cached shows a loading state.
+  function loadComments(id:string){
+    const key='load-comments:'+id
+    if(demo||pending.current.has(key))return
+    pending.current.add(key)
+    const session=demoSession.current
+    if(notesRef.current[id]===undefined)setCommentStatus(previous=>({...previous,[id]:'loading'}))
+    call<Note[]>('/posts/'+id+'/comments').then(data=>{
+      if(session!==demoSession.current)return
+      setNotes(previous=>({...previous,[id]:[...data,...(previous[id]??[]).filter(item=>!data.some(match=>match.id===item.id))]}))
+      setCommentStatus(previous=>({...previous,[id]:'ready'}))
+    }).catch(reason=>{
+      if(session!==demoSession.current)return
+      setCommentStatus(previous=>({...previous,[id]:'error'}))
+      if(notesRef.current[id]!==undefined)fail(reason)
+    }).finally(()=>pending.current.delete(key))
   }
   async function authenticate(mode:'signup'|'login',values:Credentials){
     if(busy)return
@@ -1232,7 +1261,7 @@ export default function App(props:Props){
       replyTimers.current.forEach(clearTimeout);replyTimers.current=[]
       scrollOffsets.current={};pendingOffset.current=null;setToast(null)
       roomCall.end();pageHistory.current=[];dismissOverlays();setToken('');setUser(me);setPage('Home');setStage('auth');setError('')
-      setPosts(props.demo?initialPosts:[]);setNotes({});setChats(props.demo?initialChats:{});setMessageNextCursor({});setRoomsLoading(true);setRoomsNextCursor(null);setFollows({});setProfileStats(null)
+      setPosts(props.demo?initialPosts:[]);setNotes({});setCommentStatus({});setChats(props.demo?initialChats:{});setMessageNextCursor({});setRoomsLoading(true);setRoomsNextCursor(null);setFollows({});setProfileStats(null)
       setNotificationItems([]);setNotificationCursor('');setNotificationNextCursor(null);setNotificationHistory([]);setUnread(false);setMessageUnread(0)
       setRooms(props.demo?localRooms:[]);setRoom(null);setDraft('');setAttachment(null);setPostSearchPublic(false);clearComment();setMessage('');setSeen(new Set());setOwnStory(null);setDemoEntered(false);setBirthdays([]);setBirthdayWall([]);setWishedBirthdays(new Set());setLiveStories([]);setStoryIndex(0);setStoryMedia(null);setWishes([]);setCompletedLessons([]);setLearningError(false);setVoicePlaying(false);setQuietMode(false);setFollowingOnly(false)
     }catch(reason){fail(reason)}
@@ -1452,49 +1481,65 @@ export default function App(props:Props){
       if(media&&revision===commentDraft.current)setCommentMedia(media)
     }catch(reason){if(revision===commentDraft.current)fail(reason)}
   }
+  // Optimistic: the comment and the count update on the first frame and the composer clears at once.
+  // The server reply swaps in the saved comment under the same key, so nothing remounts or flickers.
+  // On failure the comment is removed and the draft goes back into the composer.
   async function addComment(post:Post){
-    const key='comment:'+post.id
     const body=comment.trim()
-    if(busy||pending.current.has(key)||(!body&&!commentMedia))return
-    const revision=commentDraft.current
+    if(!body&&!commentMedia)return
+    const media=commentMedia,target=replyTarget
+    const clientId='tmp-'+uid()
+    const key='comment:'+clientId
     const session=demoSession.current
+    const draft:Note={id:clientId,clientId,pending:true,author:user,body,parentId:target?.id,replyTo:target?displayHandle(target.author):undefined,likes:0,liked:false,attachment:media&&'uri' in media?{kind:'image',url:media.uri}:media??undefined}
     pending.current.add(key)
-    setBusy(true)
+    setNotes(previous=>({...previous,[post.id]:[...(previous[post.id]??(demo&&post.id==='quadratics'?initialComments:[])),draft]}))
+    setPosts(previous=>previous.map(p=>p.id===post.id?{...p,comments:p.comments+1}:p))
+    clearComment()
     try{
       let item:Note
       if(demo){
-        item={id:uid(),author:user,body,parentId:replyTarget?.id,replyTo:replyTarget?displayHandle(replyTarget.author):undefined,likes:0,liked:false,attachment:commentMedia&&'uri' in commentMedia?{kind:'image',url:commentMedia.uri}:commentMedia??undefined}
+        item={...draft,id:uid(),pending:undefined}
       }else{
-        let request=json({body,parentId:replyTarget?.id,...(commentMedia&&'uri' in commentMedia?{}:commentMedia?{[commentMedia.kind]:commentMedia.id}:{})}) as RequestInit
-        if(commentMedia&&'uri' in commentMedia){
+        let request=json({body,parentId:target?.id,...(media&&'uri' in media?{}:media?{[media.kind]:media.id}:{})}) as RequestInit
+        if(media&&'uri' in media){
           const form=new FormData()
           form.append('body',body)
-          if(replyTarget)form.append('parentId',replyTarget.id)
-          if(commentMedia.data instanceof Blob)form.append('image',commentMedia.data,commentMedia.name)
-          else form.append('image',commentMedia.data as unknown as Blob)
+          if(target)form.append('parentId',target.id)
+          if(media.data instanceof Blob)form.append('image',media.data,media.name)
+          else form.append('image',media.data as unknown as Blob)
           request={method:'POST',body:form}
         }
         item=await call<Note>('/posts/'+post.id+'/comments',request)
       }
       if(session!==demoSession.current)return
       setNotes(previous=>{
-        const existing=previous[post.id]??(demo&&post.id==='quadratics'?initialComments:[])
-        return {...previous,[post.id]:existing.some(note=>note.id===item.id)?existing:[...existing,item]}
+        const list=previous[post.id]??[]
+        return {...previous,[post.id]:list.some(note=>note.id===item.id)?list.filter(note=>note.id!==clientId):list.map(note=>note.id===clientId?{...item,clientId}:note)}
       })
-      setPosts(previous=>previous.map(p=>p.id===post.id?{...p,comments:p.comments+1}:p))
-      if(revision===commentDraft.current)clearComment()
-    }catch(reason){if(session===demoSession.current)fail(reason)}
-    finally{pending.current.delete(key);setBusy(false)}
+    }catch(reason){
+      if(session!==demoSession.current)return
+      setNotes(previous=>({...previous,[post.id]:(previous[post.id]??[]).filter(note=>note.id!==clientId)}))
+      setPosts(previous=>previous.map(p=>p.id===post.id?{...p,comments:Math.max(0,p.comments-1)}:p))
+      setComment(current=>current||body)
+      setCommentMedia(current=>current??media)
+      setReplyTarget(current=>current??target)
+      fail(reason)
+    }finally{pending.current.delete(key)}
   }
   async function likeComment(postId:string,item:Note){
     const key='comment-like:'+item.id
-    if(pending.current.has(key))return
+    if(item.pending||pending.current.has(key))return
     pending.current.add(key)
+    const patch=(change:Partial<Note>)=>setNotes(previous=>({...previous,[postId]:(previous[postId]??[]).map(note=>note.id===item.id?{...note,...change}:note)}))
+    const next=!item.liked
+    patch({liked:next,likes:Math.max(0,(item.likes??0)+(next?1:-1))})
     try{
-      const result=demo?{liked:!item.liked,likes:(item.likes??0)+(item.liked?-1:1)}
-        :await call<{liked:boolean;likes:number}>('/comments/'+item.id+'/like',json({active:!item.liked},'PUT'))
-      setNotes(previous=>({...previous,[postId]:(previous[postId]??[]).map(note=>note.id===item.id?{...note,...result}:note)}))
-    }catch(reason){fail(reason)}finally{pending.current.delete(key)}
+      if(!demo){
+        const result=await call<{liked:boolean;likes:number}>('/comments/'+item.id+'/like',json({active:next},'PUT'))
+        patch(result)
+      }
+    }catch(reason){patch({liked:item.liked,likes:item.likes});fail(reason)}finally{pending.current.delete(key)}
   }
   async function likeStory(author:Person,story:Story){
     const key='story-like:'+story.id
@@ -2044,7 +2089,7 @@ export default function App(props:Props){
     sheet=<><Field label="Edit message" value={comment} onChangeText={setComment} multiline maxLength={800}/><Copy size={12} color={theme.muted}>Verified messages can be edited for one hour after sending.</Copy><Button label={busy?'Saving…':'Save changes'} disabled={busy||!comment.trim()} onPress={()=>void editMessage(overlay.message)}/></>
   }else if(overlay?.kind==='comments'){
     const list=notes[overlay.post.id]??(demo&&overlay.post.id==='quadratics'?initialComments:[])
-    sheet=<Comments key={overlay.post.id} base={props.base} token={token} demo={demo} list={list} body={comment} onBody={value=>{commentDraft.current++;setComment(value)}} busy={busy} renderGif={props.renderGif}
+    sheet=<Comments key={overlay.post.id} base={props.base} token={token} demo={demo} list={list} loading={commentStatus[overlay.post.id]==='loading'&&!notes[overlay.post.id]} failed={commentStatus[overlay.post.id]==='error'&&!notes[overlay.post.id]} onRetry={()=>void loadComments(overlay.post.id)} body={comment} onBody={value=>{commentDraft.current++;setComment(value)}} renderGif={props.renderGif}
       replyTo={replyTarget} highlightId={overlay.targetId} onReply={item=>{commentDraft.current++;setReplyTarget(item)}} onCancelReply={()=>{commentDraft.current++;setReplyTarget(null)}} onLike={item=>void likeComment(overlay.post.id,item)}
       attachment={commentMedia&&'uri' in commentMedia?{kind:'image',url:commentMedia.uri}:commentMedia??undefined}
       onPreset={value=>{commentDraft.current+=1;setCommentMedia(value)}} onRemove={()=>{commentDraft.current+=1;setCommentMedia(null)}}
@@ -2288,12 +2333,14 @@ export default function App(props:Props){
             <Copy size={21} weight={800}>{overlayTitle}</Copy>
           </View>
         </View>
+        <OverlayFade key={overlay?.kind} animate={lastOverlayKind.current!==null&&lastOverlayKind.current!==overlay?.kind} reduced={reduced}>
         {overlay?.kind==='comments'?<KeyboardAvoidingView behavior="padding" style={{flex:1,width:'100%',maxWidth:720,alignSelf:'center',paddingBottom:keyboardInset}}>
           {sheet}
         </KeyboardAvoidingView>:<ScrollView key={overlay?.kind} style={{flex:1}} keyboardShouldPersistTaps="handled"
           contentContainerStyle={{width:'100%',maxWidth:720,alignSelf:'center',padding:16,paddingBottom:30,gap:14}}>
           {sheet}
         </ScrollView>}
+        </OverlayFade>
         {toast&&overlay&&<Toast key={toast.id} item={toast} reduced={reduced} onDismiss={dismissToast} bottom={18}/>}
       </View>}
       </ModalViewport>

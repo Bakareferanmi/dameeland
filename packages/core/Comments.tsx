@@ -26,33 +26,53 @@ function CommentMedia({attachment,renderGif:Gif}:{attachment:CommentAttachment;r
 }
 function CommentEntry({item,onProfile,onReply,onLike,highlighted,renderGif}:{item:Note;onProfile:(person:Person)=>void;onReply:(note:Note)=>void;onLike:(note:Note)=>void;highlighted:boolean;renderGif?:GifRenderer}){
   const {reduced,theme}=useDesign()
-  const progress=useRef(new Animated.Value(reduced?1:0)).current
-  useEffect(()=>{if(reduced){progress.setValue(1);return}Animated.timing(progress,{toValue:1,duration:220,useNativeDriver:Platform.OS!=='web',isInteraction:false}).start()},[progress,reduced])
-  return <Animated.View style={{...row,alignItems:'flex-start',marginLeft:item.parentId?28:0,padding:highlighted?8:0,borderRadius:12,backgroundColor:highlighted?theme.chip:'transparent',opacity:progress,transform:[{translateY:progress.interpolate({inputRange:[0,1],outputRange:[8,0]})}]}}>
+  // Only a comment the person just wrote animates in. Loaded comments render in place so the list never pops.
+  const entering=Boolean(item.pending)&&!reduced
+  const progress=useRef(new Animated.Value(entering?0:1)).current
+  useEffect(()=>{if(!entering)return;Animated.timing(progress,{toValue:1,duration:160,useNativeDriver:Platform.OS!=='web',isInteraction:false}).start()},[])
+  return <Animated.View style={{...row,alignItems:'flex-start',marginLeft:item.parentId?28:0,padding:highlighted?8:0,borderRadius:12,backgroundColor:highlighted?theme.chip:'transparent',opacity:item.pending?Animated.multiply(progress,0.7):progress,transform:[{translateY:progress.interpolate({inputRange:[0,1],outputRange:[8,0]})}]}}>
     <Pressable accessibilityRole="button" accessibilityLabel={'Open '+displayHandle(item.author)+' profile'} onPress={()=>onProfile(item.author)} hitSlop={4} style={{minWidth:40,minHeight:40,justifyContent:'center',alignItems:'center'}}><Avatar person={item.author} size={36}/></Pressable>
     <View style={{flex:1,gap:5}}>
       <Pressable accessibilityRole="button" onPress={()=>onProfile(item.author)} style={{alignSelf:'flex-start',minHeight:24,justifyContent:'center'}}><PersonName person={item.author}/></Pressable>
       {item.replyTo&&<Copy size={12} color={theme.muted}>Replying to {item.replyTo}</Copy>}
       {!!item.body&&<LinkedText>{item.body}</LinkedText>}
       {item.attachment&&<CommentMedia attachment={item.attachment} renderGif={renderGif}/>}
-      <View style={row}><Button label={item.liked?'Unlike comment':'Like comment'} variant="plain" onPress={()=>onLike(item)}/>{!!item.likes&&<Copy size={12}>{item.likes}</Copy>}<Button label="Reply" variant="plain" onPress={()=>onReply(item)}/></View>
+      <View style={row}><Button label={item.liked?'Unlike comment':'Like comment'} variant="plain" disabled={item.pending} onPress={()=>onLike(item)}/>{!!item.likes&&<Copy size={12}>{item.likes}</Copy>}<Button label="Reply" variant="plain" disabled={item.pending} onPress={()=>onReply(item)}/></View>
     </View>
   </Animated.View>
 }
+function CommentSkeleton(){
+  const {theme,reduced}=useDesign()
+  const pulse=useRef(new Animated.Value(.55)).current
+  useEffect(()=>{
+    if(reduced)return
+    const loop=Animated.loop(Animated.sequence([Animated.timing(pulse,{toValue:1,duration:700,useNativeDriver:Platform.OS!=='web',isInteraction:false}),Animated.timing(pulse,{toValue:.55,duration:700,useNativeDriver:Platform.OS!=='web',isInteraction:false})]))
+    loop.start()
+    return ()=>loop.stop()
+  },[pulse,reduced])
+  return <Animated.View accessibilityLabel="Loading comments" style={{gap:18,opacity:pulse}}>
+    {[0,1,2].map(index=><View key={index} style={{...row,alignItems:'flex-start'}}>
+      <View style={{width:36,height:36,borderRadius:18,backgroundColor:theme.chip}}/>
+      <View style={{flex:1,gap:8}}><View style={{width:'38%',height:12,borderRadius:6,backgroundColor:theme.chip}}/><View style={{width:index===1?'92%':'74%',height:12,borderRadius:6,backgroundColor:theme.chip}}/></View>
+    </View>)}
+  </Animated.View>
+}
 
-export function Comments({list,body,onBody,attachment,onPreset,onPhoto,onRemove,onPost,onProfile,onReply,onCancelReply,onLike,replyTo,highlightId,busy,renderGif,base,token,demo}:{
+export function Comments({list,body,onBody,attachment,onPreset,onPhoto,onRemove,onPost,onProfile,onReply,onCancelReply,onLike,replyTo,highlightId,loading=false,failed=false,onRetry,renderGif,base,token,demo}:{
   list:Note[];body:string;onBody:(value:string)=>void;attachment?:CommentAttachment;onPreset:(value:Preset)=>void;
-  onPhoto?:()=>void;onRemove:()=>void;onPost:()=>void;onProfile:(person:Person)=>void;onReply:(note:Note)=>void;onCancelReply:()=>void;onLike:(note:Note)=>void;replyTo?:Note|null;highlightId?:string;busy:boolean;renderGif?:GifRenderer;base?:string;token?:string;demo?:boolean;
+  onPhoto?:()=>void;onRemove:()=>void;onPost:()=>void;onProfile:(person:Person)=>void;onReply:(note:Note)=>void;onCancelReply:()=>void;onLike:(note:Note)=>void;replyTo?:Note|null;highlightId?:string;loading?:boolean;failed?:boolean;onRetry?:()=>void;renderGif?:GifRenderer;base?:string;token?:string;demo?:boolean;
 }){
   const {theme}=useDesign()
   const [picker,setPicker]=useState<'gif'|'sticker'|null>(null)
   const listRef=useRef<React.ComponentRef<typeof ScrollView>>(null)
+  const last=list.at(-1)
+  useEffect(()=>{if(last?.pending)requestAnimationFrame(()=>listRef.current?.scrollToEnd({animated:true}))},[last?.id,last?.pending])
   const options:Preset[]=picker==='gif'
     ? (Object.keys(commentGifs) as (keyof typeof commentGifs)[]).map(id=>({kind:'gif',id}))
     : (Object.keys(commentStickers) as (keyof typeof commentStickers)[]).map(id=>({kind:'sticker',id}))
   return <View style={{flex:1,gap:12,padding:16}}>
     <ScrollView ref={listRef} style={{flex:1}} keyboardShouldPersistTaps="always" keyboardDismissMode="none" contentContainerStyle={{gap:14,paddingVertical:4}}>
-      {list.length?list.map(item=><View key={item.id} onLayout={event=>{if(item.id===highlightId)listRef.current?.scrollTo({y:Math.max(0,event.nativeEvent.layout.y-24),animated:true})}}><CommentEntry item={item} onProfile={onProfile} onReply={onReply} onLike={onLike} highlighted={item.id===highlightId} renderGif={renderGif}/></View>):<Copy color={theme.muted}>Be the first to leave a comment.</Copy>}
+      {list.length?list.map(item=><View key={item.clientId??item.id} onLayout={event=>{if(item.id===highlightId)listRef.current?.scrollTo({y:Math.max(0,event.nativeEvent.layout.y-24),animated:true})}}><CommentEntry item={item} onProfile={onProfile} onReply={onReply} onLike={onLike} highlighted={item.id===highlightId} renderGif={renderGif}/></View>):loading?<CommentSkeleton/>:failed?<View style={{gap:8,alignItems:'flex-start'}}><Copy color={theme.muted}>Couldn’t load comments.</Copy>{onRetry&&<Button label="Try again" variant="secondary" onPress={onRetry}/>}</View>:<Copy color={theme.muted}>Be the first to leave a comment.</Copy>}
     </ScrollView>
     <View style={{gap:8,borderTopWidth:1,borderColor:theme.border,paddingTop:12}}>
       {replyTo&&<View style={spread}><Copy size={12} color={theme.muted}>Replying to {displayHandle(replyTo.author)}</Copy><IconButton name="close" label="Cancel reply" onPress={onCancelReply}/></View>}
@@ -81,7 +101,7 @@ export function Comments({list,body,onBody,attachment,onPreset,onPhoto,onRemove,
             <Icon name="sticker" color={theme.ink} size={21}/>
           </Pressable>
         </View>
-        <Button label={busy?'Posting…':'Post comment'} disabled={busy||(!body.trim()&&!attachment)} onPress={()=>{setPicker(null);onPost()}}/>
+        <Button label="Post comment" disabled={!body.trim()&&!attachment} onPress={()=>{setPicker(null);onPost()}}/>
       </View>
     </View>
   </View>

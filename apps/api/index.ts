@@ -1194,10 +1194,13 @@ app.post('/api/posts/:id/comments',async c=>{
       return c.json({error:'Post unavailable.'},404)
     }
   }catch(error){if(media)await MEDIA.delete(media);throw error}
-  const postOwner=await DB.prepare('SELECT author FROM posts WHERE id=?').bind(post).first<{author:string}>()
-  if(parent)await createNotification(c.env,c.executionCtx,DB,parent.author,author.id,'comment','comment:'+post+':'+parentId,'replied to your comment')
-  if(postOwner?.author!==parent?.author&&postOwner)await createNotification(c.env,c.executionCtx,DB,postOwner.author,author.id,'comment','comment:'+post+':'+id,'commented on your post')
-  for(const other of await mentionedUsers(DB,body,[author.id,parent?.author,postOwner?.author]))await createNotification(c.env,c.executionCtx,DB,other,author.id,'comment','comment:'+post+':'+id,'mentioned you in a comment')
+  // The comment is saved, so reply now. Notifications fan out after the response instead of delaying it.
+  c.executionCtx.waitUntil((async()=>{
+    const postOwner=await DB.prepare('SELECT author FROM posts WHERE id=?').bind(post).first<{author:string}>()
+    if(parent)await createNotification(c.env,c.executionCtx,DB,parent.author,author.id,'comment','comment:'+post+':'+parentId,'replied to your comment')
+    if(postOwner?.author!==parent?.author&&postOwner)await createNotification(c.env,c.executionCtx,DB,postOwner.author,author.id,'comment','comment:'+post+':'+id,'commented on your post')
+    for(const other of await mentionedUsers(DB,body,[author.id,parent?.author,postOwner?.author]))await createNotification(c.env,c.executionCtx,DB,other,author.id,'comment','comment:'+post+':'+id,'mentioned you in a comment')
+  })().catch(error=>console.error('comment notifications failed',error)))
   return c.json({id,author:person(author,c.req.url),body,attachment:commentAttachment(attachment,c.req.url),parentId:parentId||undefined,replyTo:parent?.username??undefined,likes:0,liked:false},201)
 })
 app.get('/api/people',async c=>{
