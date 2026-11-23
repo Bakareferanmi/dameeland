@@ -3,6 +3,7 @@ import {Animated,Image,Pressable,ScrollView,View,Platform} from 'react-native'
 import {commentGifs,commentStickers,type CommentAttachment,type Note,type Person} from './index'
 import {gifImages} from './commentGifs'
 import {Avatar,Button,Copy,displayHandle,Field,Icon,IconButton,LinkedText,PersonName,row,spread,useDesign} from './ui'
+import {MentionField} from './Social'
 
 export type GifRenderer=React.ComponentType<{uri:string;label:string;animate:boolean}>
 type Preset=Exclude<CommentAttachment,{kind:'image'}>
@@ -39,9 +40,9 @@ function CommentEntry({item,onProfile,onReply,onLike,highlighted,renderGif}:{ite
   </Animated.View>
 }
 
-export function Comments({list,body,onBody,attachment,onPreset,onPhoto,onRemove,onPost,onProfile,onReply,onCancelReply,onLike,replyTo,highlightId,busy,renderGif}:{
+export function Comments({list,body,onBody,attachment,onPreset,onPhoto,onRemove,onPost,onProfile,onReply,onCancelReply,onLike,replyTo,highlightId,busy,renderGif,base,token,demo}:{
   list:Note[];body:string;onBody:(value:string)=>void;attachment?:CommentAttachment;onPreset:(value:Preset)=>void;
-  onPhoto?:()=>void;onRemove:()=>void;onPost:()=>void;onProfile:(person:Person)=>void;onReply:(note:Note)=>void;onCancelReply:()=>void;onLike:(note:Note)=>void;replyTo?:Note|null;highlightId?:string;busy:boolean;renderGif?:GifRenderer;
+  onPhoto?:()=>void;onRemove:()=>void;onPost:()=>void;onProfile:(person:Person)=>void;onReply:(note:Note)=>void;onCancelReply:()=>void;onLike:(note:Note)=>void;replyTo?:Note|null;highlightId?:string;busy:boolean;renderGif?:GifRenderer;base?:string;token?:string;demo?:boolean;
 }){
   const {theme}=useDesign()
   const [picker,setPicker]=useState<'gif'|'sticker'|null>(null)
@@ -55,7 +56,7 @@ export function Comments({list,body,onBody,attachment,onPreset,onPhoto,onRemove,
     </ScrollView>
     <View style={{gap:8,borderTopWidth:1,borderColor:theme.border,paddingTop:12}}>
       {replyTo&&<View style={spread}><Copy size={12} color={theme.muted}>Replying to {displayHandle(replyTo.author)}</Copy><IconButton name="close" label="Cancel reply" onPress={onCancelReply}/></View>}
-      <Field label="Add a comment" placeholder="Write a reply…" value={body} onChangeText={onBody} multiline maxLength={500} style={{maxHeight:110}}/>
+      <MentionField label="Add a comment" placeholder="Write a reply… tag people with @" value={body} onChange={onBody} base={base??''} token={token} demo={demo??true} maxLength={500} style={{maxHeight:110}}/>
       {attachment&&<View style={{...spread,alignItems:'flex-start'}}>
         <CommentMedia attachment={attachment} renderGif={renderGif}/><IconButton name="close" label="Remove attachment" onPress={onRemove}/>
       </View>}
