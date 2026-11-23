@@ -58,9 +58,9 @@ function CommentSkeleton(){
   </Animated.View>
 }
 
-export function Comments({list,body,onBody,attachment,onPreset,onPhoto,onRemove,onPost,onProfile,onReply,onCancelReply,onLike,replyTo,highlightId,loading=false,failed=false,onRetry,renderGif,base,token,demo}:{
+export function Comments({list,body,onBody,attachment,onPreset,onPhoto,onRemove,onPost,onProfile,onReply,onCancelReply,onLike,replyTo,highlightId,header,loading=false,failed=false,onRetry,renderGif,base,token,demo}:{
   list:Note[];body:string;onBody:(value:string)=>void;attachment?:CommentAttachment;onPreset:(value:Preset)=>void;
-  onPhoto?:()=>void;onRemove:()=>void;onPost:()=>void;onProfile:(person:Person)=>void;onReply:(note:Note)=>void;onCancelReply:()=>void;onLike:(note:Note)=>void;replyTo?:Note|null;highlightId?:string;loading?:boolean;failed?:boolean;onRetry?:()=>void;renderGif?:GifRenderer;base?:string;token?:string;demo?:boolean;
+  onPhoto?:()=>void;onRemove:()=>void;onPost:()=>void;onProfile:(person:Person)=>void;onReply:(note:Note)=>void;onCancelReply:()=>void;onLike:(note:Note)=>void;replyTo?:Note|null;highlightId?:string;header?:React.ReactNode;loading?:boolean;failed?:boolean;onRetry?:()=>void;renderGif?:GifRenderer;base?:string;token?:string;demo?:boolean;
 }){
   const {theme}=useDesign()
   const [picker,setPicker]=useState<'gif'|'sticker'|null>(null)
@@ -72,6 +72,7 @@ export function Comments({list,body,onBody,attachment,onPreset,onPhoto,onRemove,
     : (Object.keys(commentStickers) as (keyof typeof commentStickers)[]).map(id=>({kind:'sticker',id}))
   return <View style={{flex:1,gap:12,padding:16}}>
     <ScrollView ref={listRef} style={{flex:1}} keyboardShouldPersistTaps="always" keyboardDismissMode="none" contentContainerStyle={{gap:14,paddingVertical:4}}>
+      {header}
       {list.length?list.map(item=><View key={item.clientId??item.id} onLayout={event=>{if(item.id===highlightId)listRef.current?.scrollTo({y:Math.max(0,event.nativeEvent.layout.y-24),animated:true})}}><CommentEntry item={item} onProfile={onProfile} onReply={onReply} onLike={onLike} highlighted={item.id===highlightId} renderGif={renderGif}/></View>):loading?<CommentSkeleton/>:failed?<View style={{gap:8,alignItems:'flex-start'}}><Copy color={theme.muted}>Couldn’t load comments.</Copy>{onRetry&&<Button label="Try again" variant="secondary" onPress={onRetry}/>}</View>:<Copy color={theme.muted}>Be the first to leave a comment.</Copy>}
     </ScrollView>
     <View style={{gap:8,borderTopWidth:1,borderColor:theme.border,paddingTop:12}}>
