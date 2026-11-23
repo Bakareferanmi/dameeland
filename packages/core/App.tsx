@@ -340,7 +340,7 @@ function UploadedMedia({post}:{post:Post}){
 
 // First name for the shared-post header. Titles such as Mr or Dr are skipped so "Mr. Bello" reads as Bello.
 const firstName=(name:string)=>{const words=name.trim().split(/\s+/);return (words.length>1&&/^(mr|mrs|ms|miss|dr|prof|engr|sir|madam)\.?$/i.test(words[0])?words[1]:words[0])||name}
-function PostCard({post,onReact,onOverlay,onProfile,onArticle,onQuote,onInvite,detail=false}:{post:Post;detail?:boolean;onReact:(p:Post,k:'like'|'repost')=>void;onOverlay:(o:Overlay)=>void;onProfile:(p:Person)=>void;onArticle?:(id:string)=>void;onQuote?:(p:Post)=>void;onInvite?:(p:Post,accept:boolean)=>void}){
+const PostCard=React.memo(function PostCard({post,onReact,onOverlay,onProfile,onArticle,onQuote,onInvite,detail=false}:{post:Post;detail?:boolean;onReact:(p:Post,k:'like'|'repost')=>void;onOverlay:(o:Overlay)=>void;onProfile:(p:Person)=>void;onArticle?:(id:string)=>void;onQuote?:(p:Post)=>void;onInvite?:(p:Post,accept:boolean)=>void}){
   const {theme,font}=useDesign()
   const team=post.coAuthors??[]
   const authors=[{person:post.author,status:'accepted' as const},...team]
@@ -365,7 +365,7 @@ function PostCard({post,onReact,onOverlay,onProfile,onArticle,onQuote,onInvite,d
     {!post.article&&!!post.articleId&&!!onArticle&&<Button label="Read the full article" leading="type" onPress={()=>onArticle(post.articleId!)}/>}
     <View style={{...row,justifyContent:'space-between',gap:1,borderTopWidth:1,borderColor:theme.border,paddingTop:3}}><IconButton name={post.liked?'heartOn':'heart'} label={post.liked?'Unlike post':'Like post'} active={post.liked} count={post.likes} onPress={()=>onReact(post,'like')}/><IconButton name="cm" label="Comments" count={post.comments} onPress={()=>onOverlay({kind:'comments',post})}/><IconButton name="rp" label={post.reposted?'Undo repost':'Repost'} active={post.reposted} count={post.reposts} onPress={()=>onReact(post,'repost')}/>{onQuote&&!post.article&&<IconButton name="type" label="Quote post" onPress={()=>onQuote(post)}/>}<IconButton name="sh" label="Share post" onPress={()=>onOverlay({kind:'share',post})}/></View>
   </Card>
-}
+})
 function ConnectionList({base,token,profile,list,samples,onProfile}:{base:string;token:string;profile:Person;list:FollowListKind;samples?:Person[];onProfile:(person:Person)=>void}){
   const {theme}=useDesign()
   const [people,setPeople]=useState<Person[]>([])
@@ -470,6 +470,16 @@ export default function App(props:Props){
   const [overlay,setOverlay]=useState<Overlay|null>(null)
   // Posts, comments and lists slide in and out like a screen; the type is remembered so the exit matches the entrance.
   const modalSlides=useRef(false)
+  // Post cards get stable handlers so opening a post or typing elsewhere doesn't redraw the whole feed.
+  const latestActions=useRef<Record<string,(...args:any[])=>any>>({})
+  const feedActions=React.useMemo(()=>({
+    onReact:(post:Post,kind:'like'|'repost')=>latestActions.current.react(post,kind),
+    onOverlay:(value:Overlay)=>latestActions.current.selectOverlay(value),
+    onProfile:(person:Person)=>latestActions.current.showProfile(person),
+    onArticle:(id:string)=>latestActions.current.selectOverlay({kind:'article',articleId:id}),
+    onQuote:(post:Post)=>latestActions.current.startQuote(post),
+    onInvite:(item:Post,accept:boolean)=>void latestActions.current.answerInvite(item,accept),
+  }),[])
   const overlayHistory=useRef<Overlay[]>([])
   const pageScroll=useRef(0)
   const [toast,setToast]=useState<ToastMessage|null>(null)
@@ -1885,7 +1895,7 @@ export default function App(props:Props){
     </Card>}
     {!demo&&!!token&&!user.dob&&<Card>{section('Add your birthday')}<Copy color={theme.muted}>Friends can wish you a happy birthday. Only the day and month are shown to others.</Copy><BirthdayFields value={birthDraft} onChange={setBirthDraft}/><Button label="Save birthday" disabled={busy||!birthIso(birthDraft)} onPress={()=>void saveBirthday()}/></Card>}
     <Segmented options={['For you','Following']} selected={followingOnly?'Following':'For you'} onSelect={value=>setFollowingOnly(value==='Following')}/>
-    {feedError?failure:loading?<Loading/>:displayedPosts.length?displayedPosts.map(post=><PostCard key={post.id} post={post} onReact={react} onOverlay={selectOverlay} onProfile={showProfile} onArticle={id=>selectOverlay({kind:'article',articleId:id})} onQuote={startQuote} onInvite={(item,accept)=>void answerInvite(item,accept)}/>):<Empty title={followingOnly?'Your following feed is empty':'Start the conversation'} detail={followingOnly?'Follow classmates to see their posts here.':'Share the first post with your classmates.'} action={followingOnly?'Find people':'Create post'} onPress={followingOnly?()=>open('Explore'):compose}/>}
+    {feedError?failure:loading?<Loading/>:displayedPosts.length?displayedPosts.map(post=><PostCard key={post.id} post={post} {...feedActions}/>):<Empty title={followingOnly?'Your following feed is empty':'Start the conversation'} detail={followingOnly?'Follow classmates to see their posts here.':'Share the first post with your classmates.'} action={followingOnly?'Find people':'Create post'} onPress={followingOnly?()=>open('Explore'):compose}/>}
     {demo&&!followingOnly&&<View style={{...row,flexWrap:'wrap'}}>
       <Button label="Birthdays" leading="gift" variant="secondary" onPress={()=>open('Birthdays')}/>
       <Button label="Events" leading="grp" variant="secondary" onPress={()=>open('Events')}/>
@@ -1990,7 +2000,7 @@ export default function App(props:Props){
     {ownProfile&&inviteInfo&&<Card><Copy weight={800} size={18}>Invite friends to dameen</Copy><Copy color={theme.muted}>Share your personal link. New accounts created through it are added to your invite count.</Copy><Copy size={13} weight={700}>{inviteInfo.url}</Copy><Button label="Share my invite link" leading="sh" onPress={()=>void props.share?.(inviteInfo.url,{title:'Join me on dameen',message:'Join me on dameen to learn, build, play and connect.'}).catch(fail)}/></Card>}
     {profile.role==='tech'&&<Card><View style={row}><IconTile name="code"/><View style={{flex:1}}><Copy weight={800}>Tech creator</Copy></View></View></Card>}
     {section('Posts')}
-    {posts.filter(p=>isPostBy(p,profile.id)).map(post=><PostCard key={post.id} post={post} onReact={react} onOverlay={selectOverlay} onProfile={showProfile} onArticle={id=>selectOverlay({kind:'article',articleId:id})} onQuote={startQuote} onInvite={(item,accept)=>void answerInvite(item,accept)}/>)}
+    {posts.filter(p=>isPostBy(p,profile.id)).map(post=><PostCard key={post.id} post={post} {...feedActions}/>)}
     {!posts.some(p=>isPostBy(p,profile.id))&&<Empty title="No posts to show" detail="Posts from this profile will appear here."/>}
   </>
   const settings=<>
@@ -2035,7 +2045,7 @@ export default function App(props:Props){
   }else if(overlay?.kind==='post'){
     const post=posts.find(item=>item.id===overlay.post.id)??overlay.post
     const ownVerified=verifiedBenefits&&post.author.id===user.id
-    sheet=<><PostCard detail post={post} onReact={react} onOverlay={selectOverlay} onProfile={showProfile} onArticle={id=>selectOverlay({kind:'article',articleId:id})} onQuote={startQuote} onInvite={(item,accept)=>void answerInvite(item,accept)}/><Button label="Read comments" variant="secondary" onPress={()=>selectOverlay({kind:'comments',post})}/>{ownVerified&&<View style={{...row,flexWrap:'wrap'}}>{(demo||withinEditWindow(post.time))&&<Button label="Edit post" variant="secondary" onPress={()=>{setComment(post.body);selectOverlay({kind:'editPost',post})}}/>}<Button label="Delete post" variant="danger" onPress={()=>void deletePost(post)}/></View>}</>
+    sheet=<><PostCard detail post={post} {...feedActions}/><Button label="Read comments" variant="secondary" onPress={()=>selectOverlay({kind:'comments',post})}/>{ownVerified&&<View style={{...row,flexWrap:'wrap'}}>{(demo||withinEditWindow(post.time))&&<Button label="Edit post" variant="secondary" onPress={()=>{setComment(post.body);selectOverlay({kind:'editPost',post})}}/>}<Button label="Delete post" variant="danger" onPress={()=>void deletePost(post)}/></View>}</>
   }else if(overlay?.kind==='article'){
     sheet=<Suspense fallback={<Loading/>}><ArticleReader key={overlay.articleId} base={base} token={token} demo={demo} id={overlay.articleId}/></Suspense>
   }else if(overlay?.kind==='editPost'){
@@ -2125,6 +2135,7 @@ export default function App(props:Props){
     const call=overlay
     sheet=<Card><PersonName person={call.person}/><Copy>Simulated voice call</Copy><Button label={call.incoming?'Accept preview call':'Connect preview call'} onPress={()=>setOverlay({...call,ringing:false})}/><Button label={call.incoming?'Decline call':'Cancel call'} variant="secondary" onPress={modalClose}/></Card>
   }else if(overlay?.kind==='call')sheet=<CallPreview video={overlay.video} person={overlay.person} onClose={modalClose}/>
+  latestActions.current={react,selectOverlay,showProfile,startQuote,answerInvite}
   if(overlay)modalSlides.current=['post','comments','article','connections'].includes(overlay.kind)
   const ModalViewport=props.modalViewport??DefaultModalViewport
   const overlayTitle=overlay?.kind==='connections'?(overlay.list==='followers'?'Followers':'Following')
