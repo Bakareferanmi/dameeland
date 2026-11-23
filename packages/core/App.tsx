@@ -468,6 +468,8 @@ export default function App(props:Props){
   const [posts,setPosts]=useState<Post[]>(demo?initialPosts:[])
   const [loading,setLoading]=useState(false),[feedError,setFeedError]=useState(''),[followingOnly,setFollowingOnly]=useState(false)
   const [overlay,setOverlay]=useState<Overlay|null>(null)
+  // Posts, comments and lists slide in and out like a screen; the type is remembered so the exit matches the entrance.
+  const modalSlides=useRef(false)
   const overlayHistory=useRef<Overlay[]>([])
   const pageScroll=useRef(0)
   const [toast,setToast]=useState<ToastMessage|null>(null)
@@ -2123,6 +2125,7 @@ export default function App(props:Props){
     const call=overlay
     sheet=<Card><PersonName person={call.person}/><Copy>Simulated voice call</Copy><Button label={call.incoming?'Accept preview call':'Connect preview call'} onPress={()=>setOverlay({...call,ringing:false})}/><Button label={call.incoming?'Decline call':'Cancel call'} variant="secondary" onPress={modalClose}/></Card>
   }else if(overlay?.kind==='call')sheet=<CallPreview video={overlay.video} person={overlay.person} onClose={modalClose}/>
+  if(overlay)modalSlides.current=['post','comments','article','connections'].includes(overlay.kind)
   const ModalViewport=props.modalViewport??DefaultModalViewport
   const overlayTitle=overlay?.kind==='connections'?(overlay.list==='followers'?'Followers':'Following')
     :overlay?.kind==='call'?(overlay.ringing?'Ringing':overlay.video?'Video call':'Voice call')
@@ -2245,7 +2248,7 @@ export default function App(props:Props){
         </ScrollView>}
       </View>}
     {toast&&!overlay&&<Toast key={toast.id} item={toast} reduced={reduced} onDismiss={dismissToast} bottom={desktop?24:page==='Chat'?146:76}/>}
-    <Modal presentationStyle="fullScreen" visible={overlay!==null} animationType={reduced?'none':'fade'} onRequestClose={modalClose}>
+    <Modal presentationStyle="fullScreen" visible={overlay!==null} animationType={reduced?'none':modalSlides.current?'slide':'fade'} onRequestClose={modalClose}>
       <ModalViewport color={story?(personalStory?.background??(personalStory?.image?'#120D1F':'#4F25D6')):theme.bg}>
       {overlay?.kind==='call'&&!overlay.ringing?<CallPreview video={overlay.video} person={overlay.person} onClose={modalClose}/>:story?<View accessibilityViewIsModal style={{flex:1,backgroundColor:personalStory?.background??(personalStory?.image?'#120D1F':'#4F25D6'),padding:18}}>
         <View style={{width:'100%',maxWidth:640,alignSelf:'center',flex:1,gap:14}}>
