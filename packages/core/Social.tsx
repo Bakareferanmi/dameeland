@@ -135,6 +135,9 @@ export function SwipeToReply({children,own,onReply,onLongPress,disabled=false}:{
   reply.current=onReply
   const armed=useRef(false)
   const native=Platform.OS!=='web'
+  // On touch screens in a browser, let horizontal drags reach the swipe and stop them selecting text. Mouse users keep text selection.
+  const touchWeb=Platform.OS==='web'&&typeof window!=='undefined'&&!!window.matchMedia?.('(pointer: coarse)').matches
+  const touchStyle=touchWeb?({userSelect:'none',touchAction:'pan-y'} as object):undefined
   const settle=()=>Animated.spring(x,{toValue:0,useNativeDriver:native,bounciness:0}).start()
   const pan=useRef(PanResponder.create({
     onMoveShouldSetPanResponder:(_,gesture)=>gesture.dx*direction>10&&Math.abs(gesture.dx)>Math.abs(gesture.dy)*1.6,
@@ -149,7 +152,7 @@ export function SwipeToReply({children,own,onReply,onLongPress,disabled=false}:{
     <Animated.View pointerEvents="none" style={{position:'absolute',top:0,bottom:0,[own?'right':'left']:8,justifyContent:'center',opacity:reveal,transform:[{scale:reveal}]}}>
       <View style={{width:30,height:30,borderRadius:15,backgroundColor:theme.chip,alignItems:'center',justifyContent:'center'}}><Icon name="back" color={theme.purple} size={17}/></View>
     </Animated.View>
-    <Animated.View {...pan.panHandlers} style={{transform:[{translateX:x}]}}>
+    <Animated.View {...pan.panHandlers} style={[{transform:[{translateX:x}]},touchStyle]}>
       <Pressable accessibilityHint="Swipe sideways to reply. Press and hold for reactions." onLongPress={onLongPress} delayLongPress={320}>{children}</Pressable>
     </Animated.View>
   </View>

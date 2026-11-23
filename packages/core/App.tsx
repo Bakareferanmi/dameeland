@@ -332,6 +332,8 @@ function UploadedMedia({post}:{post:Post}){
   return <LazyImage uri={post.media} alt="Post attachment" style={{width:'100%',height:195,borderRadius:14,backgroundColor:theme.chip,objectFit:'cover'}}/>
 }
 
+// First name for the shared-post header. Titles such as Mr or Dr are skipped so "Mr. Bello" reads as Bello.
+const firstName=(name:string)=>{const words=name.trim().split(/\s+/);return (words.length>1&&/^(mr|mrs|ms|miss|dr|prof|engr|sir|madam)\.?$/i.test(words[0])?words[1]:words[0])||name}
 function PostCard({post,onReact,onOverlay,onProfile,onArticle,onQuote,onInvite,detail=false}:{post:Post;detail?:boolean;onReact:(p:Post,k:'like'|'repost')=>void;onOverlay:(o:Overlay)=>void;onProfile:(p:Person)=>void;onArticle?:(id:string)=>void;onQuote?:(p:Post)=>void;onInvite?:(p:Post,accept:boolean)=>void}){
   const {theme,font}=useDesign()
   const team=post.coAuthors??[]
@@ -341,7 +343,7 @@ function PostCard({post,onReact,onOverlay,onProfile,onArticle,onQuote,onInvite,d
     {team.length?<View accessibilityLabel={'Shared post by '+authors.map(entry=>displayHandle(entry.person)).join(', ')} style={{...row,gap:10}}>
       <View style={{flexDirection:'row'}}>{authors.map((entry,index)=><Pressable key={entry.person.id} accessibilityRole="button" accessibilityLabel={'Open '+displayHandle(entry.person)+' profile'+(entry.status==='pending'?', invited':'')} onPress={()=>onProfile(entry.person)} style={{marginLeft:index?-10:0,zIndex:authors.length-index,borderRadius:20,borderWidth:2,borderColor:theme.card,opacity:entry.status==='pending'?.5:1}}><Avatar person={entry.person} size={32}/></Pressable>)}</View>
       <View style={{flex:1,minWidth:0}}>
-        <Text numberOfLines={1} style={[{color:theme.text,fontSize:14},font(800)]}>{authors.map((entry,index)=>(index===0?'':index===authors.length-1?' & ':', ')+entry.person.name.split(' ')[0]+(entry.status==='pending'?' (invited)':'')).join('')}</Text>
+        <Text numberOfLines={1} style={[{color:theme.text,fontSize:14},font(800)]}>{authors.map((entry,index)=>(index===0?'':index===authors.length-1?' & ':', ')+firstName(entry.person.name)+(entry.status==='pending'?' (invited)':'')).join('')}</Text>
         <Copy color={theme.muted} size={12}>{shortTime(post.time)}{post.editedAt?' · Edited':''}</Copy>
       </View>
     </View>:<Pressable accessibilityRole="button" accessibilityLabel={'Open '+displayHandle(post.author)+' profile'} onPress={()=>onProfile(post.author)} style={row}><Avatar person={post.author} size={40}/><View style={{flex:1}}><PersonName person={post.author}/><Copy color={theme.muted} size={12}>{shortTime(post.time)}{post.editedAt?' · Edited':''}</Copy>{team.length>0&&<Text numberOfLines={2} style={{color:theme.muted,fontSize:12,lineHeight:17}}>with {team.map((entry,index)=>(index?', ':'')+'@'+displayHandle(entry.person)+(entry.status==='pending'?' (invited)':'')).join('')}</Text>}</View></Pressable>}
