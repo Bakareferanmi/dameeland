@@ -63,6 +63,8 @@ npx wrangler secret put OWNER_EMAIL --config apps/api/wrangler.jsonc
 
 Apply migration 0041 before deploying the Worker, because the new code reads `users.email_verified`.
 
+Security headers for dameen.app are set in `apps/web/functions/_middleware.ts`. The Content-Security-Policy ships in report-only mode, so it logs problems in the browser console without blocking anything. After deploying, use the app with DevTools open (sign in, Google sign-in, chat, calls, uploads, stories, games) and look for "Content Security Policy" messages. When there are none, set `CSP_MODE=enforce` in **Workers & Pages → dameeland → Settings → Variables and secrets** and redeploy. If the API ever moves to its own domain, set `PUBLIC_API_ORIGIN` there too, or the app's requests will be blocked once the policy is enforced.
+
 In Cloudflare, open **Workers & Pages → dameeland → Custom domains** and add `dameen.app`. Wait for the domain to show **Active**. This attaches the site to the existing Pages project. The Worker accepts both the custom domain and the existing Pages URL for API requests and chat. Google sign-in continues to use the registered Worker callback. Browser sessions are tied to the site's origin, so users coming from the Pages URL sign in again on `dameen.app`.
 
 Rebuild and install the native app to see the new display name. The Android package and iOS bundle identifier are preserved so updates keep the existing app identity.
