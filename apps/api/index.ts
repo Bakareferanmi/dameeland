@@ -9,9 +9,9 @@ import {DurableObject} from 'cloudflare:workers'
 import * as webpush from 'web-push'
 import {lessons,commentGifs,validBirthDate,type BirthdayEntry,storyLimit,storyLifetime,verifiedStoryLimit,verifiedStoryLifetime,storyVideoLimit,verifiedStoryVideoLimit,type Story,type StoryGroup,commentStickers,capitalizeName,initials,normalizeUsername,usernameHint,validUsername,type AdminAccount,type AdminActivity,type AdminDay,type AdminOverview,type CommentAttachment,type FollowPage,type FollowStats,type Person,type Role,extractMentions,maxPostAuthors,messageReactionEmojis,type MessageReply} from '@dameeland/core'
 
-interface Env {DB:D1Database;MEDIA:R2Bucket;STORIES:KVNamespace;ROOMS:DurableObjectNamespace<ChatRoom>;ALLOWED_ORIGIN:string;DISABLE_AUTH_LIMITS?:string;VAPID_PUBLIC_KEY?:string;VAPID_PRIVATE_KEY?:string;VAPID_SUBJECT?:string;GOOGLE_CLIENT_ID?:string;GOOGLE_CLIENT_SECRET?:string;GOOGLE_REDIRECT_URI?:string;ADMIN_USER_IDS?:string;RESEND_API_KEY?:string;RECOVERY_FROM?:string}
-type Account={id:string;email:string;name:string;role:Role;salt:string;password_hash:string;username?:string|null;verified?:number;teacher?:number;dob?:string|null}
-type PublicAccount=Pick<Account,'id'|'name'|'role'|'username'|'verified'|'teacher'|'dob'> & {email?:string;avatar_media?:string|null;cover_media?:string|null;bio?:string|null;username_changed_at?:number|null;search_public?:number}
+interface Env {DB:D1Database;MEDIA:R2Bucket;STORIES:KVNamespace;ROOMS:DurableObjectNamespace<ChatRoom>;ALLOWED_ORIGIN:string;DISABLE_AUTH_LIMITS?:string;VAPID_PUBLIC_KEY?:string;VAPID_PRIVATE_KEY?:string;VAPID_SUBJECT?:string;GOOGLE_CLIENT_ID?:string;GOOGLE_CLIENT_SECRET?:string;GOOGLE_REDIRECT_URI?:string;ADMIN_USER_IDS?:string;RESEND_API_KEY?:string;RECOVERY_FROM?:string;OWNER_EMAIL?:string}
+type Account={id:string;email:string;name:string;role:Role;salt:string;password_hash:string;username?:string|null;verified?:number;teacher?:number;dob?:string|null;email_verified?:number}
+type PublicAccount=Pick<Account,'id'|'name'|'role'|'username'|'verified'|'teacher'|'dob'> & {email?:string;email_verified?:number;avatar_media?:string|null;cover_media?:string|null;bio?:string|null;username_changed_at?:number|null;search_public?:number}
 type App={Bindings:Env;Variables:{user:PublicAccount;tokenHash:string}}
 const app=new Hono<App>()
 const encoder=new TextEncoder()
@@ -33,9 +33,10 @@ const sessionLifetime=30*86400000
 const sessionRefreshWindow=7*86400000
 const touchPresence=(db:D1Database,userId:string,online:boolean)=>db.prepare('INSERT INTO presence (user_id,online,last_seen) VALUES (?,?,?) ON CONFLICT(user_id) DO UPDATE SET online=excluded.online,last_seen=excluded.last_seen').bind(userId,online?1:0,now()).run()
 const base64Url=(bytes:ArrayBuffer)=>btoa(String.fromCharCode(...new Uint8Array(bytes))).replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,'')
-const ownerEmail='bakareferanmi96@gmail.com'
-const isOwner=(account:Pick<PublicAccount,'email'>)=>account.email?.toLowerCase()===ownerEmail
-const isAdmin=(env:Env,account:Pick<PublicAccount,'id'|'email'>)=>isOwner(account)||(env.ADMIN_USER_IDS?.split(',').some(value=>value.trim()===account.id)??false)
+// The owner is named by the OWNER_EMAIL secret, never in source, and only counts once that address is verified.
+const ownerEmail=(env:Env)=>(env.OWNER_EMAIL??'').trim().toLowerCase()
+const isOwner=(env:Env,account:Pick<PublicAccount,'email'|'email_verified'>)=>{const owner=ownerEmail(env);return !!owner&&!!account.email_verified&&account.email?.toLowerCase()===owner}
+const isAdmin=(env:Env,account:Pick<PublicAccount,'id'|'email'|'email_verified'>)=>isOwner(env,account)||(env.ADMIN_USER_IDS?.split(',').some(value=>value.trim()===account.id)??false)
 const hasVerifiedBenefits=(account:Pick<PublicAccount,'role'|'verified'|'teacher'>)=>account.role==='tech'||Boolean(account.verified)||Boolean(account.teacher)
 const viewer=(env:Env,account:PublicAccount,url:string)=>({...person(account,url),dob:account.dob??undefined,usernameNextChangeAt:account.username_changed_at?time(account.username_changed_at+3*86400000):undefined,isAdmin:isAdmin(env,account),searchPublic:Boolean(account.search_public)})
 type NotificationKind='message'|'follow'|'comment'|'reaction'|'call'|'birthday'|'announcement'
@@ -129,7 +130,7 @@ function queueWelcomeEmail(env:Env,ctx:WaitContext,userId:string){
   })().catch(()=>console.error('Welcome email delivery failed')))
 }
 async function session(env:Env,ctx:WaitContext,account:PublicAccount,url:string){
-  if(isOwner(account)&&(account.role!=='tech'||!account.verified||!account.teacher)){
+  if(isOwner(env,account)&&(account.role!=='tech'||!account.verified||!account.teacher)){
     await env.DB.prepare("UPDATE users SET role='tech',verified=1,teacher=1 WHERE id=?").bind(account.id).run()
     account={...account,role:'tech',verified:1,teacher:1}
   }
@@ -266,7 +267,8 @@ app.post('/api/auth/recovery/reset',async c=>{
   const validAt=now()
   const accountQuery='SELECT r.user_id FROM password_resets r JOIN users u ON u.id=r.user_id WHERE r.code_hash=? AND r.expires>? AND u.email=?'
   const [updated]=await db.batch([
-    db.prepare('UPDATE users SET salt=?,password_hash=? WHERE id IN ('+accountQuery+')').bind(salt,digest,codeHash,validAt,email),
+    // The code was emailed to this address, so using it also proves the owner controls the mailbox.
+    db.prepare('UPDATE users SET salt=?,password_hash=?,email_verified=1 WHERE id IN ('+accountQuery+')').bind(salt,digest,codeHash,validAt,email),
     db.prepare('DELETE FROM sessions WHERE user_id IN ('+accountQuery+')').bind(codeHash,validAt,email),
     db.prepare('DELETE FROM password_resets WHERE user_id IN ('+accountQuery+')').bind(codeHash,validAt,email),
   ])
@@ -300,7 +302,7 @@ app.post('/api/auth/:action',async c=>{
     if(account) return c.json({error:'An account already uses this email.'},409)
     const salt=random(16)
     const role='student' as const
-    account={id:crypto.randomUUID(),email,name,role,salt,username,dob:dob as string,password_hash:await passwordHash(password,salt)}
+    account={id:crypto.randomUUID(),email,name,role,salt,username,dob:dob as string,password_hash:await passwordHash(password,salt),email_verified:0}
     const referralCode=clean(body?.referralCode,32)
     const inviter=referralCode?await db.prepare('SELECT id FROM users WHERE invite_code=?').bind(referralCode).first<{id:string}>():null
     const write=await db.prepare('INSERT INTO users(id,email,name,role,salt,password_hash,first_name,last_name,username,dob,created,invited_by) VALUES (?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT DO NOTHING').bind(account.id,email,name,role,salt,account.password_hash,firstName,lastName,username,dob as string,now(),inviter?.id??null).run()
@@ -346,24 +348,16 @@ app.get('/api/google/callback',async c=>{
   c.header('Cache-Control','no-store')
   c.header('Referrer-Policy','no-referrer')
   const state=c.req.query('state')??''
-  const complete=(ok:boolean,token?:string,client:'web'|'mobile'='web')=>c.html(ok
+  // The callback never hands out a session. It only marks the attempt complete. The browser that started the sign-in holds the
+  // exchange secret and collects its own session from /google/exchange, so a callback link opened by someone else logs nobody in.
+  const complete=(ok:boolean,client:'web'|'mobile'='web')=>c.html(ok
     ?client==='mobile'
       ?`<title>dameen</title><meta name="viewport" content="width=device-width"><p>Google sign-in completed. Returning to the dameen app…</p><script>location.replace('dameen://google')</script>`
-      :`<title>dameen</title><meta name="viewport" content="width=device-width"><p>Google sign-in completed. Returning to dameen…</p><script>try{localStorage.setItem('dameeland-session',${JSON.stringify(token??'')});localStorage.removeItem('dameeland-google-attempt');localStorage.removeItem('dameeland-referral')}catch{}location.replace('https://dameen.app/?google=complete')</script>`
+      :`<title>dameen</title><meta name="viewport" content="width=device-width"><p>Google sign-in completed. Returning to dameen…</p><script>try{window.close()}catch(e){}setTimeout(function(){location.replace('https://dameen.app/?google=complete')},250)</script>`
     :'<title>dameen</title><p>Google sign-in did not complete. Return to dameen for details.</p>',ok?200:400)
   if(!/^[a-f0-9]{48}$/.test(state)||!GOOGLE_CLIENT_ID||!GOOGLE_CLIENT_SECRET||!GOOGLE_REDIRECT_URI)return complete(false)
   const attempt=await DB.prepare("UPDATE google_attempts SET status='processing' WHERE state=? AND status='pending' AND expires>? RETURNING verifier,username,dob,referral_code,mode,client").bind(state,now()).first<GoogleAttempt>()
-  if(!attempt){
-    const previous=await DB.prepare("SELECT status,user_id,client FROM google_attempts WHERE state=? AND expires>?").bind(state,now()).first<{status:string;user_id:string|null;client:'web'|'mobile'}>()
-    if(previous?.status==='complete'&&previous.user_id){
-      const signedAccount=await DB.prepare('SELECT id,email,name,role,username,verified,teacher,dob,avatar_media,cover_media,bio,username_changed_at,search_public FROM users WHERE id=?').bind(previous.user_id).first<PublicAccount>()
-      if(signedAccount){
-        const signed=await session(c.env,c.executionCtx,signedAccount,c.req.url)
-        return complete(true,signed.token,previous.client)
-      }
-    }
-    return complete(false)
-  }
+  if(!attempt)return complete(false)
   const fail=async(error:string)=>{
     await DB.prepare("UPDATE google_attempts SET status='error',error=? WHERE state=?").bind(error,state).run()
     return complete(false)
@@ -383,10 +377,20 @@ app.get('/api/google/callback',async c=>{
     if(!response.ok||!sub||!email||info.email_verified!==true)return fail('Google did not provide a verified email.')
     let account=await DB.prepare('SELECT id FROM users WHERE google_sub=?').bind(sub).first<{id:string}>()
     if(!account){
-      const emailAccount=await DB.prepare('SELECT id,google_sub FROM users WHERE email=?').bind(email).first<{id:string;google_sub:string|null}>()
+      const emailAccount=await DB.prepare('SELECT id,google_sub,email_verified FROM users WHERE email=?').bind(email).first<{id:string;google_sub:string|null;email_verified:number}>()
       if(emailAccount){
         if(emailAccount.google_sub&&emailAccount.google_sub!==sub)return fail('This email is already linked to another Google account.')
-        const linked=await DB.prepare('UPDATE users SET google_sub=? WHERE id=? AND (google_sub IS NULL OR google_sub=?) RETURNING id').bind(sub,emailAccount.id,sub).first<{id:string}>()
+        // A password sign-up never proved it owns the address, but Google just did. Linking it as-is would let whoever chose that
+        // password (a squatter who registered someone else's email first) keep access to the real owner's account. So an unverified
+        // account loses its password and sessions in the same batch that links Google. The owner can set a new password by email.
+        const takeover=emailAccount.email_verified?[]:[
+          DB.prepare('UPDATE users SET salt=?,password_hash=? WHERE id=? AND google_sub IS NULL').bind(random(16),random(32),emailAccount.id),
+          DB.prepare('DELETE FROM sessions WHERE user_id=?').bind(emailAccount.id),
+          DB.prepare('DELETE FROM password_resets WHERE user_id=?').bind(emailAccount.id),
+        ]
+        const link=DB.prepare('UPDATE users SET google_sub=?,email_verified=1 WHERE id=? AND (google_sub IS NULL OR google_sub=?) RETURNING id').bind(sub,emailAccount.id,sub)
+        const done=await DB.batch<{id:string}>([...takeover,link])
+        const linked=done[done.length-1].results[0]
         account=linked??await DB.prepare('SELECT id FROM users WHERE google_sub=?').bind(sub).first<{id:string}>()
         if(!account)return fail('This account could not be linked to Google. Try again.')
       }else{
@@ -394,7 +398,7 @@ app.get('/api/google/callback',async c=>{
         const first=capitalizeName(clean(info.given_name,60)),last=capitalizeName(clean(info.family_name,60))
         if(!first||!last)return fail('Add a first and last name to your Google profile or sign up with email.')
         const inviter=attempt.referral_code?await DB.prepare('SELECT id FROM users WHERE invite_code=?').bind(attempt.referral_code).first<{id:string}>():null
-        await DB.prepare('INSERT INTO users(id,email,name,role,salt,password_hash,first_name,last_name,google_sub,username,dob,created,invited_by) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT DO NOTHING')
+        await DB.prepare('INSERT INTO users(id,email,name,role,salt,password_hash,first_name,last_name,google_sub,username,dob,created,invited_by,email_verified) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,1) ON CONFLICT DO NOTHING')
           .bind(crypto.randomUUID(),email,first+' '+last,'student',random(16),random(32),first,last,sub,attempt.username,attempt.dob,now(),inviter?.id??null).run()
         account=await DB.prepare('SELECT id FROM users WHERE google_sub=?').bind(sub).first<{id:string}>()
         if(!account){
@@ -404,10 +408,7 @@ app.get('/api/google/callback',async c=>{
       }
     }
     await DB.prepare("UPDATE google_attempts SET status='complete',user_id=? WHERE state=?").bind(account.id,state).run()
-    const signedAccount=await DB.prepare('SELECT id,email,name,role,username,verified,teacher,dob,avatar_media,cover_media,bio,username_changed_at,search_public FROM users WHERE id=?').bind(account.id).first<PublicAccount>()
-    if(!signedAccount)return fail('Account unavailable after Google sign-in.')
-    const signed=await session(c.env,c.executionCtx,signedAccount,c.req.url)
-    return complete(true,signed.token,attempt.client)
+    return complete(true,attempt.client)
   }catch{return fail('Google sign-in could not be completed. Please try again.')}
 })
 app.post('/api/google/exchange',async c=>{
@@ -423,7 +424,7 @@ app.post('/api/google/exchange',async c=>{
   if(attempt.status!=='complete')return c.json({pending:true},202)
   const claimed=await DB.prepare("DELETE FROM google_attempts WHERE state=? AND exchange_hash=? AND status='complete' AND expires>? RETURNING user_id").bind(state,key,now()).first<{user_id:string}>()
   if(!claimed)return c.json({error:'Google sign-in expired. Please try again.'},410)
-  const account=await DB.prepare('SELECT id,email,name,role,username,verified,teacher,dob,avatar_media,cover_media,bio,username_changed_at,search_public FROM users WHERE id=?').bind(claimed.user_id).first<PublicAccount>()
+  const account=await DB.prepare('SELECT id,email,email_verified,name,role,username,verified,teacher,dob,avatar_media,cover_media,bio,username_changed_at,search_public FROM users WHERE id=?').bind(claimed.user_id).first<PublicAccount>()
   if(!account)return c.json({error:'Account unavailable.'},404)
   return c.json(await session(c.env,c.executionCtx,account,c.req.url))
 })
@@ -497,10 +498,10 @@ app.use('/api/*',async(c,next)=>{
   const token=header?.match(/^Bearer ([a-f0-9]{64})$/)?.[1]??ticket
   if(!token||!/^[a-f0-9]{64}$/.test(token)) return c.json({error:'Log in to continue.'},401)
   const tokenHash=await hash(token)
-  let user=await c.env.DB.prepare('SELECT u.id,u.email,u.name,u.role,u.username,u.verified,u.teacher,u.dob,u.avatar_media,u.cover_media,u.bio,u.username_changed_at,u.search_public FROM users u JOIN sessions s ON s.user_id=u.id WHERE s.token_hash=? AND s.expires>?').bind(tokenHash,now()).first<PublicAccount>()
+  let user=await c.env.DB.prepare('SELECT u.id,u.email,u.email_verified,u.name,u.role,u.username,u.verified,u.teacher,u.dob,u.avatar_media,u.cover_media,u.bio,u.username_changed_at,u.search_public FROM users u JOIN sessions s ON s.user_id=u.id WHERE s.token_hash=? AND s.expires>?').bind(tokenHash,now()).first<PublicAccount>()
   if(!user) return c.json({error:'Your session has expired. Log in again.'},401)
   await c.env.DB.prepare('UPDATE sessions SET expires=? WHERE token_hash=? AND expires<?').bind(now()+sessionLifetime,tokenHash,now()+sessionRefreshWindow).run()
-  if(isOwner(user)&&(user.role!=='tech'||!user.verified||!user.teacher)){
+  if(isOwner(c.env,user)&&(user.role!=='tech'||!user.verified||!user.teacher)){
     await c.env.DB.prepare("UPDATE users SET role='tech',verified=1,teacher=1 WHERE id=?").bind(user.id).run()
     user={...user,role:'tech',verified:1,teacher:1}
   }
@@ -797,7 +798,7 @@ app.put('/api/admin/accounts/:id',async c=>{
       verified=CASE WHEN lower(email)=? THEN 1 ELSE ? END,
       teacher=CASE WHEN lower(email)=? THEN 1 ELSE COALESCE(?,teacher) END WHERE id=?
     RETURNING id,name,email,role,username,verified,teacher,dob,avatar_media,cover_media,bio,created
-  `).bind(ownerEmail,payload.role,ownerEmail,Number(payload.verified),ownerEmail,payload.teacher===undefined?null:Number(payload.teacher),c.req.param('id')).first<Omit<AdminUserRow,'invite_count'>>()
+  `).bind(ownerEmail(c.env),payload.role,ownerEmail(c.env),Number(payload.verified),ownerEmail(c.env),payload.teacher===undefined?null:Number(payload.teacher),c.req.param('id')).first<Omit<AdminUserRow,'invite_count'>>()
   if(!account)return c.json({error:'Account unavailable.'},404)
   const invites=await c.env.DB.prepare('SELECT COUNT(*) count FROM users WHERE invited_by=?').bind(account.id).first<{count:number}>()
   return c.json(adminAccount({...account,invite_count:invites?.count??0},c.req.url))

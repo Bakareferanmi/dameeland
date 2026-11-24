@@ -55,6 +55,14 @@ npx wrangler deploy --config apps/api/wrangler.jsonc
 npm run deploy:web
 ```
 
+The owner account is named by a Worker secret, not by source code. Set it once before deploying, using the exact email the owner signs in with, otherwise the owner loses automatic admin and verified status. The address only counts after it is verified, which happens through Google sign-in or a password reset code.
+
+```bash
+npx wrangler secret put OWNER_EMAIL --config apps/api/wrangler.jsonc
+```
+
+Apply migration 0041 before deploying the Worker, because the new code reads `users.email_verified`.
+
 In Cloudflare, open **Workers & Pages → dameeland → Custom domains** and add `dameen.app`. Wait for the domain to show **Active**. This attaches the site to the existing Pages project. The Worker accepts both the custom domain and the existing Pages URL for API requests and chat. Google sign-in continues to use the registered Worker callback. Browser sessions are tied to the site's origin, so users coming from the Pages URL sign in again on `dameen.app`.
 
 Rebuild and install the native app to see the new display name. The Android package and iOS bundle identifier are preserved so updates keep the existing app identity.
