@@ -1,6 +1,6 @@
 import React,{useMemo,useState} from 'react'
 import {Pressable,View} from 'react-native'
-import {dailyLesson,lessons,lessonsFor,passMark,practiceSession,practiceSessionSize,subjects,type PracticeTopic,type Question,type Subject} from './learningCatalog'
+import {dailyLesson,lessons,lessonsFor,passMark,practiceSession,practiceSessionSize,shuffled,subjects,type PracticeTopic,type Question,type Subject} from './learningCatalog'
 import {Button,Card,Copy,Icon,IconTile,row,spread,stack,useDesign} from './ui'
 
 type Lesson=typeof lessons[number]
@@ -8,6 +8,8 @@ type RunnerQuestion=Question&{lessonTitle?:string}
 export type PracticeStat={subject:string;correct:number;total:number;sessions:number}
 export type PracticeAnswer={id:string;answer:number}
 
+/** A fresh display order for a question's options. Answers are still reported by their original index. */
+const optionOrder=(question:Question)=>shuffled(question.options.map((_,position)=>position))
 const percent=(part:number,whole:number)=>whole?Math.round(part/whole*100):0
 
 function Bar({value,label}:{value:number;label:string}){
@@ -22,6 +24,7 @@ function Bar({value,label}:{value:number;label:string}){
 function Runner({questions,onFinish,onRestart,results}:{questions:RunnerQuestion[];onFinish?:(answers:number[])=>void;onRestart?:()=>void;results?:React.ReactNode}){
   const {theme}=useDesign()
   const [list,setList]=useState(questions)
+  const [orders,setOrders]=useState(()=>questions.map(optionOrder))
   const [full,setFull]=useState(true)
   const [index,setIndex]=useState(0)
   const [picked,setPicked]=useState<number|null>(null)
@@ -29,7 +32,7 @@ function Runner({questions,onFinish,onRestart,results}:{questions:RunnerQuestion
   const [streak,setStreak]=useState(0)
   const [finished,setFinished]=useState(false)
   const question=list[index]
-  const begin=(next:RunnerQuestion[],complete:boolean)=>{setList(next);setFull(complete);setIndex(0);setPicked(null);setAnswers([]);setStreak(0);setFinished(false)}
+  const begin=(next:RunnerQuestion[],complete:boolean)=>{setList(next);setOrders(next.map(optionOrder));setFull(complete);setIndex(0);setPicked(null);setAnswers([]);setStreak(0);setFinished(false)}
   const choose=(choice:number)=>{
     if(picked!==null)return
     setPicked(choice);setAnswers(current=>[...current,choice]);setStreak(current=>choice===question.answer?current+1:0)
@@ -73,7 +76,7 @@ function Runner({questions,onFinish,onRestart,results}:{questions:RunnerQuestion
     </View>
     <Bar value={((index+(answered?1:0))/list.length)*100} label="Questions answered"/>
     <Copy size={18} weight={800}>{question.prompt}</Copy>
-    {question.options.map((option,position)=><Button key={option} label={option}
+    {orders[index].map(position=><Button key={question.options[position]} label={question.options[position]}
       variant={answered?(position===question.answer?'fun':position===picked?'danger':'secondary'):'secondary'}
       onPress={()=>choose(position)}/>)}
     {answered&&<View accessibilityLiveRegion="polite" style={{gap:8}}>
