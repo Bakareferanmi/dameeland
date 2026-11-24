@@ -52,16 +52,38 @@ test('profile edits, lesson progress, and shared post lookup use saved account d
   assert.equal((await request('/people/'+account.user.id,{token:visitor.token})).bio,bio)
   const lesson='/me/lessons/quadratics'
   await request(lesson,{token,method:'PUT',body:{answer:1},status:400})
+  await request(lesson,{token,method:'PUT',body:{answers:[1,1,0,0,0]},status:400})
+  await request(lesson,{token,method:'PUT',body:{answers:[0,0,1]},status:400})
   assert.deepEqual(await request('/me/lessons',{token}),[])
-  for(let attempt=0;attempt<2;attempt++)await request(lesson,{token,method:'PUT',body:{answer:0}})
+  // Four of five correct is enough to pass; saving twice is harmless.
+  for(let attempt=0;attempt<2;attempt++)await request(lesson,{token,method:'PUT',body:{answers:[0,0,1,2,0]}})
   assert.deepEqual(await request('/me/lessons',{token}),['quadratics'])
   assert.deepEqual(await request('/me/lessons',{token:visitor.token}),[])
+  // Earlier app versions send a single answer to the first question.
+  await request('/me/lessons/percentages',{token:visitor.token,method:'PUT',body:{answer:1}})
+  assert.deepEqual(await request('/me/lessons',{token:visitor.token}),['percentages'])
   const form=new FormData()
   form.append('body','A post opened from a shared link')
   const post=await request('/posts',{token,method:'POST',form,status:201})
   const path='/posts/'+post.id
   await request(path,{status:401})
   assert.equal((await request(path,{token:visitor.token})).id,post.id)
+})
+test('graded practice sessions are saved per subject and cannot be forged',async()=>{
+  const account=await create('Practice Taker')
+  const token=account.token
+  await request('/me/practice',{status:401})
+  assert.deepEqual(await request('/me/practice',{token}),[])
+  const post=body=>request('/me/practice',{token,method:'POST',body,status:400})
+  await post({topic:'Nonsense',answers:[{id:'quadratics:0',answer:0}]})
+  await post({topic:'Physics',answers:[{id:'quadratics:0',answer:0}]})
+  await post({topic:'Mathematics',answers:[{id:'quadratics:0',answer:0},{id:'quadratics:0',answer:0}]})
+  await post({topic:'Mathematics',answers:[{id:'missing:0',answer:0}]})
+  await post({topic:'Mathematics',answers:[]})
+  const mixed=await request('/me/practice',{token,method:'POST',body:{topic:'Mixed',answers:[{id:'quadratics:0',answer:0},{id:'speed:0',answer:2},{id:'speed:1',answer:2}]}})
+  assert.deepEqual(mixed,{correct:2,total:3})
+  const stats=(await request('/me/practice',{token})).sort((a,b)=>a.subject.localeCompare(b.subject))
+  assert.deepEqual(stats,[{subject:'Mathematics',correct:1,total:1,sessions:1},{subject:'Physics',correct:1,total:2,sessions:1}])
 })
 test('username cooldown, public preview, presence, and personal analytics',async()=>{
   const account=await create('Profile Owner')

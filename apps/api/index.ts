@@ -7,7 +7,7 @@ import {bodyLimit} from 'hono/body-limit'
 import {HTTPException} from 'hono/http-exception'
 import {DurableObject} from 'cloudflare:workers'
 import * as webpush from 'web-push'
-import {lessons,commentGifs,validBirthDate,type BirthdayEntry,storyLimit,storyLifetime,verifiedStoryLimit,verifiedStoryLifetime,storyVideoLimit,verifiedStoryVideoLimit,type Story,type StoryGroup,commentStickers,capitalizeName,initials,normalizeUsername,usernameHint,validUsername,type AdminAccount,type AdminActivity,type AdminDay,type AdminOverview,type CommentAttachment,type FollowPage,type FollowStats,type Person,type Role,extractMentions,maxPostAuthors,messageReactionEmojis,type MessageReply} from '@dameeland/core'
+import {lessons,passMark,practiceQuestion,practiceTopics,commentGifs,validBirthDate,type BirthdayEntry,storyLimit,storyLifetime,verifiedStoryLimit,verifiedStoryLifetime,storyVideoLimit,verifiedStoryVideoLimit,type Story,type StoryGroup,commentStickers,capitalizeName,initials,normalizeUsername,usernameHint,validUsername,type AdminAccount,type AdminActivity,type AdminDay,type AdminOverview,type CommentAttachment,type FollowPage,type FollowStats,type Person,type Role,extractMentions,maxPostAuthors,messageReactionEmojis,type MessageReply} from '@dameeland/core'
 
 interface Env {DB:D1Database;MEDIA:R2Bucket;STORIES:KVNamespace;ROOMS:DurableObjectNamespace<ChatRoom>;ALLOWED_ORIGIN:string;DISABLE_AUTH_LIMITS?:string;VAPID_PUBLIC_KEY?:string;VAPID_PRIVATE_KEY?:string;VAPID_SUBJECT?:string;GOOGLE_CLIENT_ID?:string;GOOGLE_CLIENT_SECRET?:string;GOOGLE_REDIRECT_URI?:string;ADMIN_USER_IDS?:string;RESEND_API_KEY?:string;RECOVERY_FROM?:string}
 type Account={id:string;email:string;name:string;role:Role;salt:string;password_hash:string;username?:string|null;verified?:number;teacher?:number;dob?:string|null}
@@ -662,10 +662,44 @@ app.put('/api/me/lessons/:id',async c=>{
   const lesson=lessons.find(item=>item.id===c.req.param('id'))
   if(!lesson)return c.json({error:'Lesson unavailable.'},404)
   const input=await readBody(c.req.raw)
-  if(input?.answer!==lesson.answer)return c.json({error:'Try the practice question again.'},400)
+  const answers=input?.answers
+  if(Array.isArray(answers)){
+    const score=answers.length===lesson.questions.length?lesson.questions.filter((question,index)=>answers[index]===question.answer).length:0
+    if(score<passMark(lesson.questions.length))return c.json({error:'Score at least '+passMark(lesson.questions.length)+' out of '+lesson.questions.length+' to complete this lesson.'},400)
+  }else if(input?.answer!==lesson.questions[0].answer){
+    // Earlier app versions send a single answer to the first question.
+    return c.json({error:'Try the practice question again.'},400)
+  }
   await c.env.DB.prepare('INSERT INTO lesson_progress (user_id,lesson_id,completed_at) VALUES (?,?,?) ON CONFLICT DO NOTHING')
     .bind(c.get('user').id,lesson.id,now()).run()
   return c.json({ok:true})
+})
+app.get('/api/me/practice',async c=>{
+  c.header('Cache-Control','no-store')
+  const {results}=await c.env.DB.prepare('SELECT subject,SUM(correct) correct,SUM(total) total,COUNT(*) sessions FROM practice_results WHERE user_id=? GROUP BY subject')
+    .bind(c.get('user').id).all<{subject:string;correct:number;total:number;sessions:number}>()
+  return c.json(results)
+})
+app.post('/api/me/practice',async c=>{
+  const input=await readBody(c.req.raw)
+  const topic=input?.topic,answers=input?.answers
+  if(typeof topic!=='string'||!(practiceTopics as readonly string[]).includes(topic)||!Array.isArray(answers)||!answers.length||answers.length>20)return c.json({error:'Choose a subject and answer between 1 and 20 questions.'},400)
+  const seen=new Set<string>(),totals=new Map<string,{correct:number;total:number}>()
+  for(const entry of answers){
+    const id=(entry as {id?:unknown})?.id,choice=(entry as {answer?:unknown})?.answer
+    const question=typeof id==='string'?practiceQuestion(id):undefined
+    if(!question||seen.has(question.id)||typeof choice!=='number'||(topic!=='Mixed'&&question.subject!==topic))return c.json({error:'Those answers do not match the practice questions.'},400)
+    seen.add(question.id)
+    const bucket=totals.get(question.subject)??{correct:0,total:0}
+    bucket.total++
+    if(choice===question.answer)bucket.correct++
+    totals.set(question.subject,bucket)
+  }
+  const at=now(),user=c.get('user').id
+  await c.env.DB.batch([...totals].map(([subject,value])=>c.env.DB.prepare('INSERT INTO practice_results (id,user_id,subject,correct,total,created_at) VALUES (?,?,?,?,?,?)')
+    .bind(crypto.randomUUID(),user,subject,value.correct,value.total,at)))
+  const sum=[...totals.values()].reduce((all,value)=>({correct:all.correct+value.correct,total:all.total+value.total}),{correct:0,total:0})
+  return c.json(sum)
 })
 app.put('/api/me/birthday',async c=>{
   const dob=(await readBody(c.req.raw))?.dob
