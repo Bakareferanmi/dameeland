@@ -726,7 +726,9 @@ export default function App(props:Props){
     if(demo||!token||page!=='Home')return
     let alive=true
     setLoading(true);setFeedError('')
-    api<Post[]>(base,'/feed?limit='+feedPageSize+(followingOnly?'&following=1':''),{},token)
+    // The feed response is cached for a few seconds. A deliberate refetch (after posting, or Try again) reloads it and replaces the cached copy,
+    // otherwise the new post is missing from this and the next load until the cache expires.
+    api<Post[]>(base,'/feed?limit='+feedPageSize+(followingOnly?'&following=1':''),retry>0?{cache:'reload'}:{},token)
       .then(data=>{if(alive){setPosts(arrangeFeed(data));setFeedHasMore(data.length>=feedPageSize)}})
       .catch(reason=>{if(alive)setFeedError(errorMessage(reason))})
       .finally(()=>{if(alive)setLoading(false)})
@@ -1565,7 +1567,7 @@ export default function App(props:Props){
     const key='comment-like:'+item.id
     if(item.pending||pending.current.has(key))return
     pending.current.add(key)
-    const patch=(change:Partial<Note>)=>setNotes(previous=>({...previous,[postId]:(previous[postId]??[]).map(note=>note.id===item.id?{...note,...change}:note)}))
+    const patch=(change:Partial<Note>)=>setNotes(previous=>({...previous,[postId]:(previous[postId]??(demo&&postId==='quadratics'?initialComments:[])).map(note=>note.id===item.id?{...note,...change}:note)}))
     const next=!item.liked
     patch({liked:next,likes:Math.max(0,(item.likes??0)+(next?1:-1))})
     try{
