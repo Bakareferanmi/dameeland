@@ -30,9 +30,10 @@ const oneMessage=socket=>new Promise((resolve,reject)=>{
   const timer=setTimeout(()=>reject(new Error('Timed out waiting for Durable Object broadcast')),5000)
   socket.addEventListener('message',event=>{clearTimeout(timer);resolve(JSON.parse(event.data))},{once:true})
 })
-const openSocket=(path,token,origin)=>new Promise((resolve,reject)=>{
+const socketTicket=async(path,token)=>(await request(path+'-ticket',{token,method:'POST'})).ticket
+const openSocket=(path,token,origin,ticket)=>new Promise(async(resolve,reject)=>{
   const socket=new WebSocket(base.replace(/^http/,'ws')+'/api'+path,{
-    protocols:['dameeland','ticket.'+token],
+    protocols:['dameeland','ticket.'+(ticket??await socketTicket(path,token))],
     headers:origin?{Origin:origin}:{},
   })
   const timer=setTimeout(()=>{socket.close();reject(new Error('WebSocket handshake timed out'))},5000)
@@ -161,6 +162,16 @@ test('chat WebSockets allow both production sites and native clients',async()=>{
     const socket=await openSocket(path,tobi.token,origin)
     socket.close()
   }
+  // Tickets are single use, bound to one room, and the session token itself is not accepted in their place.
+  const used=await socketTicket(path,tobi.token)
+  ;(await openSocket(path,tobi.token,undefined,used)).close()
+  await assert.rejects(openSocket(path,tobi.token,undefined,used),/handshake failed/)
+  await assert.rejects(openSocket(path,tobi.token,undefined,tobi.token),/handshake failed/)
+  const otherRoom=await request('/rooms',{token:tobi.token,method:'POST',body:{target:(await create('Third Qa')).user.id}})
+  await assert.rejects(openSocket(path,tobi.token,undefined,await socketTicket('/rooms/'+otherRoom.id+'/socket',tobi.token)),/handshake failed/)
+  const outsider=await create('Out Sider')
+  await request(path+'-ticket',{token:outsider.token,method:'POST',status:404})
+  await request(path+'-ticket',{method:'POST',status:401})
 })
 test('message read receipts and call invitations work outside an open chat',async()=>{
   const caller=await create('Call Sender')

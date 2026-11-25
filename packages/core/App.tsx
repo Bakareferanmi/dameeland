@@ -887,9 +887,15 @@ export default function App(props:Props){
       .catch(reason=>{if(active)setFeedError(errorMessage(reason))})
       .finally(()=>{syncing=false})
     }
-    const socket=new WebSocket(url,['dameeland','ticket.'+token])
-    socket.onopen=()=>{if(active)void refresh()}
-    socket.onmessage=event=>{
+    let socket:WebSocket|undefined
+    const connect=async()=>{
+      let ticket:string
+      try{ticket=(await api<{ticket:string}>(base,'/rooms/'+roomId+'/socket-ticket',{method:'POST'},token)).ticket}catch{return}
+      if(!active)return
+      const next=new WebSocket(url,['dameeland','ticket.'+ticket])
+      socket=next
+      next.onopen=()=>{if(active)void refresh()}
+      next.onmessage=event=>{
       if(!active)return
       let data
       try{data=JSON.parse(String(event.data))}catch{return}
@@ -924,13 +930,15 @@ export default function App(props:Props){
         if(!foreground())void props.notifyDevice?.(item.author.name,'New message: '+item.body)
       }
     }
+    }
+    void connect()
     void refresh()
-    const poll=setInterval(()=>{if(foreground()&&(socket.readyState!==WebSocket.OPEN||Date.now()-lastSync>15000))void refresh()},3500)
-    const heartbeat=setInterval(()=>{if(socket.readyState===WebSocket.OPEN)socket.send(JSON.stringify({type:'presence'}))},30000)
+    const poll=setInterval(()=>{if(foreground()&&(socket?.readyState!==WebSocket.OPEN||Date.now()-lastSync>15000))void refresh()},3500)
+    const heartbeat=setInterval(()=>{if(socket?.readyState===WebSocket.OPEN)socket.send(JSON.stringify({type:'presence'}))},30000)
     const resumed=AppState.addEventListener('change',state=>{if(state==='active')void refresh()})
     const visible=()=>{if(foreground())void refresh()}
     if(Platform.OS==='web')document.addEventListener('visibilitychange',visible)
-    return ()=>{active=false;clearInterval(poll);clearInterval(heartbeat);resumed.remove();if(Platform.OS==='web')document.removeEventListener('visibilitychange',visible);socket.close()}
+    return ()=>{active=false;clearInterval(poll);clearInterval(heartbeat);resumed.remove();if(Platform.OS==='web')document.removeEventListener('visibilitychange',visible);socket?.close()}
   },[base,demo,token,page,roomId])
   useEffect(()=>{
     if(demo||!token||page!=='Chat'||!roomId||room?.person.group){setStreak(null);return}

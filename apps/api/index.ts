@@ -521,10 +521,21 @@ app.get('/api/story-media/:user/:id',async c=>{
 app.get('/api/notification-public-key',c=>c.env.VAPID_PUBLIC_KEY?c.json({publicKey:c.env.VAPID_PUBLIC_KEY}):c.json({error:'Push notifications are not configured.'},503))
 app.use('/api/*',async(c,next)=>{
   const header=c.req.header('Authorization')
-  const ticket=c.req.path.endsWith('/socket')?c.req.header('Sec-WebSocket-Protocol')?.split(',').map(s=>s.trim()).find(s=>s.startsWith('ticket.'))?.slice(7):undefined
+  // Browsers cannot send an Authorization header on a WebSocket, so the chat socket carries a one-time ticket in its subprotocol instead.
+  // A ticket is bound to one user and one room, lives 30 seconds and is deleted the moment it is used. The session token never goes in the URL or subprotocol.
+  const socketRoom=c.req.path.match(/^\/api\/rooms\/([^/]+)\/socket$/)?.[1]
+  const ticket=socketRoom?c.req.header('Sec-WebSocket-Protocol')?.split(',').map(s=>s.trim()).find(s=>s.startsWith('ticket.'))?.slice(7):undefined
   const token=header?.match(/^Bearer ([a-f0-9]{64})$/)?.[1]??ticket
   if(!token||!/^[a-f0-9]{64}$/.test(token)) return c.json({error:'Log in to continue.'},401)
   const tokenHash=await hash(token)
+  if(socketRoom&&!header&&ticket){
+    const used=await c.env.DB.prepare('DELETE FROM socket_tickets WHERE token_hash=? AND room_id=? AND expires>? RETURNING user_id').bind(tokenHash,socketRoom,now()).first<{user_id:string}>()
+    if(!used)return c.json({error:'Your session has expired. Log in again.'},401)
+    const holder=await c.env.DB.prepare('SELECT u.id,u.email,u.email_verified,u.name,u.role,u.username,u.verified,u.teacher,u.dob,u.avatar_media,u.cover_media,u.bio,u.username_changed_at,u.search_public FROM users u WHERE u.id=?').bind(used.user_id).first<PublicAccount>()
+    if(!holder)return c.json({error:'Your session has expired. Log in again.'},401)
+    c.set('user',holder);c.set('tokenHash','')
+    return next()
+  }
   let user=await c.env.DB.prepare('SELECT u.id,u.email,u.email_verified,u.name,u.role,u.username,u.verified,u.teacher,u.dob,u.avatar_media,u.cover_media,u.bio,u.username_changed_at,u.search_public FROM users u JOIN sessions s ON s.user_id=u.id WHERE s.token_hash=? AND s.expires>?').bind(tokenHash,now()).first<PublicAccount>()
   if(!user) return c.json({error:'Your session has expired. Log in again.'},401)
   await c.env.DB.prepare('UPDATE sessions SET expires=? WHERE token_hash=? AND expires<?').bind(now()+sessionLifetime,tokenHash,now()+sessionRefreshWindow).run()
@@ -1770,6 +1781,18 @@ app.put('/api/calls/:id/end',async c=>{
   const result=await c.env.DB.prepare('UPDATE calls SET state=?,ended_at=? WHERE id=? AND state NOT IN (\'ended\',\'declined\')').bind(user===row.callee&&row.state!=='answered'?'declined':'ended',now(),id).run()
   if(result.meta.changes)c.executionCtx.waitUntil(c.env.ROOMS.getByName(row.room).fetch('https://room.internal/notify',{method:'POST',body:JSON.stringify({type:'call-history',id})}))
   return c.json({ok:true})
+})
+app.post('/api/rooms/:id/socket-ticket',async c=>{
+  const room=c.req.param('id')
+  const user=c.get('user').id
+  if(!await member(c.env.DB,room,user))return c.json({error:'Conversation unavailable.'},404)
+  const bytes=crypto.getRandomValues(new Uint8Array(32))
+  const ticket=Array.from(bytes,byte=>byte.toString(16).padStart(2,'0')).join('')
+  await c.env.DB.batch([
+    c.env.DB.prepare('DELETE FROM socket_tickets WHERE expires<?').bind(now()),
+    c.env.DB.prepare('INSERT INTO socket_tickets(token_hash,user_id,room_id,expires) VALUES (?,?,?,?)').bind(await hash(ticket),user,room,now()+30000),
+  ])
+  return c.json({ticket})
 })
 app.get('/api/rooms/:id/socket',async c=>{
   const room=c.req.param('id')
