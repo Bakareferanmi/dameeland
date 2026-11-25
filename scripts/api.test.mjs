@@ -465,6 +465,16 @@ test('local Worker persists accounts, social activity, media, and private realti
   assert.equal((await fetch(stretched)).status,404)
   const listedImage=(await request(roomPath+'/messages',{token:tobi.token})).find(item=>item.id===sentImage.id)
   assert.equal((await fetch(listedImage.chatMedia.url)).status,200)
+  // Video and audio are checked by their first bytes, not by the type the client declares.
+  const avForm=(field,bytes,type,name)=>{const form=new FormData();form.append(field,new Blob([bytes],{type}),name);return form}
+  const mp4=Buffer.concat([Buffer.from([0,0,0,24]),Buffer.from('ftypmp42'),Buffer.alloc(16)])
+  await request(roomPath+'/messages',{token:ada.token,method:'POST',form:avForm('video',Buffer.from('<script>alert(1)</script>'),'video/mp4','x.mp4'),status:400})
+  await request(roomPath+'/messages',{token:ada.token,method:'POST',form:avForm('audio',Buffer.from('<html></html>'),'audio/webm','x.webm'),status:400})
+  await request(roomPath+'/messages',{token:ada.token,method:'POST',form:avForm('video',Buffer.from('ID3'+'x'.repeat(30)),'video/mp4','x.mp4'),status:400})
+  const sentVideo=await request(roomPath+'/messages',{token:ada.token,method:'POST',form:avForm('video',mp4,'video/x-made-up','clip.mp4'),status:201})
+  assert.equal((await fetch(sentVideo.chatMedia.url)).headers.get('Content-Type'),'video/mp4')
+  const sentVoice=await request(roomPath+'/messages',{token:ada.token,method:'POST',form:avForm('audio',Buffer.from([0x1a,0x45,0xdf,0xa3,...Buffer.alloc(24)]),'audio/webm;codecs=opus','voice.webm'),status:201})
+  assert.equal((await fetch(sentVoice.chatMedia.url)).headers.get('Content-Type'),'audio/webm')
   const caller=await openSocket(roomPath+'/socket',ada.token)
   const callee=await openSocket(roomPath+'/socket',tobi.token)
   try{

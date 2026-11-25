@@ -830,6 +830,22 @@ app.put('/api/admin/accounts/:id',async c=>{
   const invites=await c.env.DB.prepare('SELECT COUNT(*) count FROM users WHERE invited_by=?').bind(account.id).first<{count:number}>()
   return c.json(adminAccount({...account,invite_count:invites?.count??0},c.req.url))
 })
+// Video and audio uploads are identified by their first bytes, never by the type the browser claims, and are stored under a fixed type.
+// Without this a client could store any file under a video/* or audio/* label and have it served back with that label.
+async function avType(file:File,kind:'video'|'audio'){
+  if(!file.size||file.size>25*1024*1024)return null
+  const head=new Uint8Array(await file.slice(0,16).arrayBuffer())
+  const text=(from:number,to:number)=>String.fromCharCode(...head.slice(from,to))
+  if(text(4,8)==='ftyp')return text(8,12)==='qt  '&&kind==='video'?'video/quicktime':kind+'/mp4'
+  if(head[0]===0x1a&&head[1]===0x45&&head[2]===0xdf&&head[3]===0xa3)return kind+'/webm'
+  if(text(0,4)==='OggS')return kind+'/ogg'
+  if(kind==='audio'){
+    if(text(0,3)==='ID3'||(head[0]===0xff&&(head[1]&0xe6)===0xe2))return 'audio/mpeg'
+    if(head[0]===0xff&&(head[1]&0xf6)===0xf0)return 'audio/aac'
+    if(text(0,4)==='RIFF'&&text(8,12)==='WAVE')return 'audio/wav'
+  }
+  return null
+}
 async function imageType(file:File,allowGif=false){
   if(!file.size||file.size>5*1024*1024)return null
   const head=new Uint8Array(await file.slice(0,12).arrayBuffer())
@@ -914,7 +930,7 @@ app.post('/api/stories',async c=>{
       const duration=Number(form?.get('duration')??0)
       const videoLimit=verified?verifiedStoryVideoLimit:storyVideoLimit
       if(isVideo&&(!Number.isFinite(duration)||duration<=0||duration>videoLimit+.25))return c.json({error:'Story videos can be up to '+videoLimit+' seconds.'},400)
-      contentType=isVideo&&upload.size<=25*1024*1024?upload.type:await imageType(upload)
+      contentType=isVideo?await avType(upload,'video'):await imageType(upload)
       if(!contentType||(!isVideo&&upload.size>5*1024*1024))return c.json({error:'Choose an image under 5 MB or a video under 25 MB.'},400)
       kind=isVideo?'video':'image'
       file=upload
@@ -1058,7 +1074,7 @@ app.post('/api/posts',async c=>{
       const duration=Number(form?.get('duration')??0)
       const videoLimit=hasVerifiedBenefits(user)?verifiedStoryVideoLimit:storyVideoLimit
       if(isVideo&&(!Number.isFinite(duration)||duration<=0||duration>videoLimit+.25))return c.json({error:'Videos can be up to '+videoLimit+' seconds.'},400)
-      const contentType=isVideo&&file.size<=25*1024*1024?file.type:await imageType(file)
+      const contentType=isVideo?await avType(file,'video'):await imageType(file)
       if(!contentType||(!isVideo&&file.size>5*1024*1024))return c.json({error:'Choose a valid image or video.'},400)
       mediaKind=isVideo?'video':'image'
       media=id
@@ -1597,7 +1613,7 @@ app.post('/api/rooms/:id/messages',async c=>{
     if(viewOnce&&mediaKind==='audio')return c.json({error:'Voice notes are sent as normal chat media.'},400)
     const duration=Number(form?.get('duration')??0)
     if(viewOnce&&mediaKind==='video'&&(!Number.isFinite(duration)||duration<=0||duration>10.25))return c.json({error:'View-once videos can be up to 10 seconds.'},400)
-    contentType=mediaKind!=='image'&&upload.size<=25*1024*1024?upload.type:await imageType(upload)
+    contentType=mediaKind==='image'?await imageType(upload):await avType(upload,mediaKind)
     const limit=mediaKind==='image'?5:25
     if(upload.size>limit*1024*1024)return c.json({error:'This file is still too large after compression.'},400)
     if(!contentType)return c.json({error:'This file type isn’t supported. Use a JPEG, PNG or WebP photo, or an MP4 video.'},400)
