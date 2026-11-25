@@ -976,8 +976,8 @@ app.post('/api/logout',async c=>{
   await c.env.DB.prepare('DELETE FROM sessions WHERE token_hash=?').bind(c.get('tokenHash')).run()
   return c.json({ok:true})
 })
-type PostRow=PublicAccount&{post_id:string;body:string;created:number;edited_at:number|null;media:string|null;media_kind:'image'|'video'|null;likes:number;liked:number;comments:number;reposts:number;reposted:number;rank_score:number;search_public:number;article_id:string|null;article_title:string|null;article_summary:string|null;article_excerpt:string|null;article_size:number|null;quote_of:string|null}
-const postProjection=`
+type PostRow=PublicAccount&{post_id:string;body:string;created:number;edited_at:number|null;media:string|null;media_kind:'image'|'video'|null;likes:number;liked:number;comments:number;reposts:number;reposted:number;search_public:number;article_id:string|null;article_title:string|null;article_summary:string|null;article_excerpt:string|null;article_size:number|null;quote_of:string|null}
+const postColumns=`
     SELECT u.id,u.name,u.role,u.username,u.verified,u.teacher,u.dob,u.avatar_media,u.cover_media,u.bio,p.id post_id,p.body,p.created,p.edited_at,p.media,p.media_kind,p.search_public,p.article_id,p.quote_of,
     (SELECT title FROM articles WHERE id=p.article_id) article_title,
     (SELECT summary FROM articles WHERE id=p.article_id) article_summary,
@@ -987,15 +987,10 @@ const postProjection=`
     EXISTS(SELECT 1 FROM reactions r WHERE r.post_id=p.id AND r.user_id=? AND kind='like') liked,
     (SELECT COUNT(*) FROM comments x WHERE x.post_id=p.id) comments,
     (SELECT COUNT(*) FROM reactions r WHERE r.post_id=p.id AND kind='repost') reposts,
-    EXISTS(SELECT 1 FROM reactions r WHERE r.post_id=p.id AND r.user_id=? AND kind='repost') reposted,
-    ((
-      (SELECT COUNT(*) FROM reactions r WHERE r.post_id=p.id AND kind='like') * 3 +
-      (SELECT COUNT(*) FROM comments x WHERE x.post_id=p.id) * 5 +
-      (SELECT COUNT(*) FROM reactions r WHERE r.post_id=p.id AND kind='repost') * 7 +
-      CASE WHEN u.role='tech' OR u.verified=1 OR u.teacher=1 THEN 4 ELSE 0 END
-    ) * CASE WHEN u.role='tech' OR u.verified=1 OR u.teacher=1 THEN 1.2 ELSE 1 END)
-      / (1 + ((strftime('%s','now') * 1000 - p.created) / 3600000.0) / 12.0) rank_score
-    FROM posts p JOIN users u ON u.id=p.author
+    EXISTS(SELECT 1 FROM reactions r WHERE r.post_id=p.id AND r.user_id=? AND kind='repost') reposted
+`
+const postSource='FROM posts p JOIN users u ON u.id=p.author'
+const postProjection=`${postColumns} ${postSource}
 `
 const articleExcerpt=(text:string)=>{const plain=text.replace(/^\s*(#{1,6}|>|[-*])\s+/gm,'').replace(/\*\*/g,'').replace(/\s+/g,' ').trim();return plain.length>220?plain.slice(0,220).replace(/\s+\S*$/,'')+'…':plain}
 const postView=(r:PostRow,url:string)=>({id:r.post_id,author:person(r,url),body:r.body,time:time(r.created),createdAt:r.created,editedAt:r.edited_at?time(r.edited_at):undefined,likes:r.likes,liked:Boolean(r.liked),comments:r.comments,reposts:r.reposts,reposted:Boolean(r.reposted),searchPublic:Boolean(r.search_public),articleId:r.article_id??undefined,article:r.article_id&&r.article_title!=null?{id:r.article_id,title:r.article_title,summary:r.article_summary??'',excerpt:articleExcerpt(r.article_excerpt??''),minutes:Math.max(1,Math.ceil((r.article_size??0)/1200))}:undefined,kind:r.media_kind??undefined,media:r.media?new URL('/api/media/'+r.media,url).href:undefined})
@@ -1031,11 +1026,19 @@ async function postsView(db:D1Database,rows:PostRow[],viewer:string,url:string){
 app.get('/api/feed',async c=>{
   const id=c.get('user').id
   const following=c.req.query('following')==='1'
-  const {results}=await c.env.DB.prepare(`${postProjection}
-    WHERE ?=0 OR p.author=? OR EXISTS(SELECT 1 FROM follows WHERE follower=? AND target=p.author)
-      OR EXISTS(SELECT 1 FROM post_authors a WHERE a.post_id=p.id AND a.status='accepted' AND (a.user_id=? OR a.user_id IN (SELECT target FROM follows WHERE follower=?)))
-    ORDER BY p.created DESC LIMIT 60
-  `).bind(id,id,Number(following),id,id,id,id).all<PostRow>()
+  // `before` is the createdAt of the last post already shown, so older posts can be requested page by page.
+  const before=Number(c.req.query('before'))
+  const cursor=Number.isFinite(before)&&before>0?before:Number.MAX_SAFE_INTEGER
+  const limit=Math.min(60,Math.max(1,Math.floor(Number(c.req.query('limit')))||60))
+  const {results}=await c.env.DB.prepare(`${postColumns}
+    FROM (
+      SELECT * FROM posts q
+      WHERE q.created<? AND (?=0 OR q.author=? OR EXISTS(SELECT 1 FROM follows WHERE follower=? AND target=q.author)
+        OR EXISTS(SELECT 1 FROM post_authors a WHERE a.post_id=q.id AND a.status='accepted' AND (a.user_id=? OR a.user_id IN (SELECT target FROM follows WHERE follower=?))))
+      ORDER BY q.created DESC LIMIT ?
+    ) p JOIN users u ON u.id=p.author
+    ORDER BY p.created DESC
+  `).bind(id,id,cursor,Number(following),id,id,id,id,limit).all<PostRow>()
   c.header('Cache-Control',c.req.query('refresh')?'no-store':'private, max-age=15, stale-while-revalidate=30')
   return c.json(await postsView(c.env.DB,results,id,c.req.url))
 })
@@ -1262,14 +1265,23 @@ app.post('/api/posts/:id/comments',async c=>{
 app.get('/api/people',async c=>{
   const user=c.get('user').id
   const q=clean(c.req.query('q'),60).toLowerCase()
+  // Mutual follows come from one pass over the viewer's own follows. The post count, which is only a tie-breaker, is worked out for the 100 best matches rather than for every account.
   const {results}=await c.env.DB.prepare(`
-    SELECT id,name,role,username,verified,teacher,dob,avatar_media,cover_media,bio,
-      EXISTS(SELECT 1 FROM follows WHERE follower=? AND target=u.id) following,
-      EXISTS(SELECT 1 FROM follows WHERE follower=u.id AND target=?) follows_viewer,
-      (SELECT COUNT(*) FROM follows f1 JOIN follows f2 ON f1.target=f2.target WHERE f1.follower=? AND f2.follower=u.id) mutuals,
-      ((SELECT COUNT(*) FROM posts p WHERE p.author=u.id)+(SELECT COUNT(*) FROM post_authors a WHERE a.user_id=u.id AND a.status='accepted')) post_count
-    FROM users u
-    WHERE id!=? AND (instr(lower(name),?)>0 OR instr(username,?)>0)
+    WITH mutual AS (
+      SELECT f2.follower id,COUNT(*) n FROM follows f1 JOIN follows f2 ON f2.target=f1.target WHERE f1.follower=? GROUP BY f2.follower
+    ), shortlist AS (
+      SELECT u.id,u.name,u.role,u.username,u.verified,u.teacher,u.dob,u.avatar_media,u.cover_media,u.bio,
+        EXISTS(SELECT 1 FROM follows WHERE follower=? AND target=u.id) following,
+        EXISTS(SELECT 1 FROM follows WHERE follower=u.id AND target=?) follows_viewer,
+        COALESCE(m.n,0) mutuals
+      FROM users u LEFT JOIN mutual m ON m.id=u.id
+      WHERE u.id!=? AND (instr(lower(u.name),?)>0 OR instr(u.username,?)>0)
+      ORDER BY following ASC, mutuals DESC, u.name ASC
+      LIMIT 100
+    )
+    SELECT shortlist.*,
+      ((SELECT COUNT(*) FROM posts p WHERE p.author=shortlist.id)+(SELECT COUNT(*) FROM post_authors a WHERE a.user_id=shortlist.id AND a.status='accepted')) post_count
+    FROM shortlist
     ORDER BY following ASC, mutuals DESC, post_count DESC, name ASC
     LIMIT 30
   `).bind(user,user,user,user,q,q.replace(/^@/,'')||q).all<PublicAccount&{following:number;follows_viewer:number;mutuals:number;post_count:number}>()

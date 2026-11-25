@@ -525,3 +525,21 @@ test('local Worker persists accounts, social activity, media, and private realti
   const wishMessages=await request('/rooms/'+wish.room+'/messages',{token:ada.token})
   assert.match(wishMessages.at(-1).body,/^Happy birthday, Ada/)
 })
+
+test('feed pages with a before cursor and people search ranks shortlisted accounts',async()=>{
+  const author=await create('Pager Author')
+  const reader=await create('Pager Reader')
+  const ids=[]
+  for(const text of ['one','two','three']){
+    ids.push((await request('/posts',{token:author.token,method:'POST',body:{body:text},status:201})).id)
+    await new Promise(done=>setTimeout(done,5))
+  }
+  const first=await request('/feed?limit=2',{token:reader.token})
+  assert.equal(first.length,2)
+  const older=await request('/feed?limit=2&before='+first.at(-1).createdAt,{token:reader.token})
+  assert.ok(older.every(post=>post.createdAt<first.at(-1).createdAt))
+  assert.ok(!older.some(post=>first.some(seen=>seen.id===post.id)))
+  const found=await request('/people?q='+encodeURIComponent(author.username),{token:reader.token})
+  assert.ok(found.some(person=>person.id===author.user.id))
+  assert.ok(!found.some(person=>person.id===reader.user.id))
+})
