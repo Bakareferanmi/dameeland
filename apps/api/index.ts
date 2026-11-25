@@ -536,9 +536,10 @@ app.use('/api/*',async(c,next)=>{
     c.set('user',holder);c.set('tokenHash','')
     return next()
   }
-  let user=await c.env.DB.prepare('SELECT u.id,u.email,u.email_verified,u.name,u.role,u.username,u.verified,u.teacher,u.dob,u.avatar_media,u.cover_media,u.bio,u.username_changed_at,u.search_public FROM users u JOIN sessions s ON s.user_id=u.id WHERE s.token_hash=? AND s.expires>?').bind(tokenHash,now()).first<PublicAccount>()
+  let user=await c.env.DB.prepare('SELECT u.id,u.email,u.email_verified,u.name,u.role,u.username,u.verified,u.teacher,u.dob,u.avatar_media,u.cover_media,u.bio,u.username_changed_at,u.search_public,s.expires session_expires FROM users u JOIN sessions s ON s.user_id=u.id WHERE s.token_hash=? AND s.expires>?').bind(tokenHash,now()).first<PublicAccount&{session_expires:number}>()
   if(!user) return c.json({error:'Your session has expired. Log in again.'},401)
-  await c.env.DB.prepare('UPDATE sessions SET expires=? WHERE token_hash=? AND expires<?').bind(now()+sessionLifetime,tokenHash,now()+sessionRefreshWindow).run()
+  // Renew the session only when it is close to expiring, so most requests make a single read instead of a read and a write.
+  if(user.session_expires<now()+sessionRefreshWindow)await c.env.DB.prepare('UPDATE sessions SET expires=? WHERE token_hash=? AND expires<?').bind(now()+sessionLifetime,tokenHash,now()+sessionRefreshWindow).run()
   if(isOwner(c.env,user)&&(user.role!=='tech'||!user.verified||!user.teacher)){
     await c.env.DB.prepare("UPDATE users SET role='tech',verified=1,teacher=1 WHERE id=?").bind(user.id).run()
     user={...user,role:'tech',verified:1,teacher:1}
