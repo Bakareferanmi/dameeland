@@ -9,7 +9,7 @@ import {DurableObject} from 'cloudflare:workers'
 import * as webpush from 'web-push'
 import {lessons,commentGifs,validBirthDate,type BirthdayEntry,storyLimit,storyLifetime,verifiedStoryLimit,verifiedStoryLifetime,storyVideoLimit,verifiedStoryVideoLimit,type Story,type StoryGroup,commentStickers,capitalizeName,initials,normalizeUsername,usernameHint,validUsername,type AdminAccount,type AdminActivity,type AdminDay,type AdminOverview,type CommentAttachment,type FollowPage,type FollowStats,type Person,type Role,extractMentions,maxPostAuthors,messageReactionEmojis,type MessageReply} from '@dameeland/core'
 
-interface Env {DB:D1Database;MEDIA:R2Bucket;STORIES:KVNamespace;ROOMS:DurableObjectNamespace<ChatRoom>;ALLOWED_ORIGIN:string;DISABLE_AUTH_LIMITS?:string;VAPID_PUBLIC_KEY?:string;VAPID_PRIVATE_KEY?:string;VAPID_SUBJECT?:string;GOOGLE_CLIENT_ID?:string;GOOGLE_CLIENT_SECRET?:string;GOOGLE_REDIRECT_URI?:string;ADMIN_USER_IDS?:string;RESEND_API_KEY?:string;RECOVERY_FROM?:string;OWNER_EMAIL?:string}
+interface Env {DB:D1Database;MEDIA:R2Bucket;STORIES:KVNamespace;ROOMS:DurableObjectNamespace<ChatRoom>;ALLOWED_ORIGIN:string;DISABLE_AUTH_LIMITS?:string;VAPID_PUBLIC_KEY?:string;VAPID_PRIVATE_KEY?:string;VAPID_SUBJECT?:string;GOOGLE_CLIENT_ID?:string;GOOGLE_CLIENT_SECRET?:string;GOOGLE_REDIRECT_URI?:string;ADMIN_USER_IDS?:string;RESEND_API_KEY?:string;RECOVERY_FROM?:string;OWNER_EMAIL?:string;MEDIA_SIGNING_KEY?:string}
 type Account={id:string;email:string;name:string;role:Role;salt:string;password_hash:string;username?:string|null;verified?:number;teacher?:number;dob?:string|null;email_verified?:number}
 type PublicAccount=Pick<Account,'id'|'name'|'role'|'username'|'verified'|'teacher'|'dob'> & {email?:string;email_verified?:number;avatar_media?:string|null;cover_media?:string|null;bio?:string|null;username_changed_at?:number|null;search_public?:number}
 type App={Bindings:Env;Variables:{user:PublicAccount;tokenHash:string}}
@@ -23,6 +23,26 @@ const randomResetCode=()=>Array.from(crypto.getRandomValues(new Uint8Array(5)),b
 const validResetCode=(code:string)=>/^(?:[2-9a-hj-np-z]{5}|[a-f0-9]{12})$/.test(code)
 const clean=(value:unknown,max:number)=>typeof value==='string'?value.trim().slice(0,max):''
 const mediaUrl=(key:string,url:string)=>new URL('/api/media/'+key,url).href
+// Chat media and group photos are private. They are served only through links the server signed for that exact file, which expire,
+// and which shared caches may not store. Avatars, covers, posts and comments keep the plain public link above. An <img> tag cannot
+// send an Authorization header, so a signed link is how the app can show private media without changing the clients.
+// The expiry is rounded to a 12 hour window so repeat requests get the same URL and the browser can cache the file.
+const privateMediaWindow=12*3600000
+async function mediaSignature(env:Env,key:string,expires:number){
+  const secret=env.MEDIA_SIGNING_KEY||env.GOOGLE_CLIENT_SECRET
+  if(!secret)return null
+  const signer=await crypto.subtle.importKey('raw',new TextEncoder().encode(secret),{name:'HMAC',hash:'SHA-256'},false,['sign'])
+  const mac=new Uint8Array(await crypto.subtle.sign('HMAC',signer,new TextEncoder().encode('media.'+key+'.'+expires)))
+  return Array.from(mac.slice(0,16),byte=>byte.toString(16).padStart(2,'0')).join('')
+}
+async function privateMediaUrl(env:Env,key:string,url:string){
+  const link=new URL('/api/media/'+key,url)
+  const expires=(Math.floor(Date.now()/privateMediaWindow)+2)*privateMediaWindow
+  const signature=await mediaSignature(env,key,expires)
+  // With no signing secret configured the link stays unsigned and the route refuses it, so private media fails closed.
+  if(signature){link.searchParams.set('exp',String(expires));link.searchParams.set('sig',signature)}
+  return link.href
+}
 const person=(user:PublicAccount,url:string):Person=>({id:user.id,name:user.name,username:user.username??undefined,bio:user.bio??undefined,initials:initials(user.name),role:user.role,color:user.role==='tech'?'#CFE8FF':'#FFD9B8',detail:user.teacher?'Teacher':user.role==='tech'?'Tech creator':'Student',teacher:Boolean(user.teacher),birthday:user.dob?user.dob.slice(5):undefined,verified:user.role==='tech'||Boolean(user.verified),avatar:user.avatar_media?mediaUrl(user.avatar_media,url):undefined,cover:user.cover_media?mediaUrl(user.cover_media,url):undefined})
 const readBody=async(request:Request)=>request.json<Record<string,unknown>>().catch(()=>null)
 const time=(date:number)=>new Date(date).toISOString()
@@ -450,8 +470,15 @@ async function storedMedia(bucket:R2Bucket,id:string,cacheControl:string,request
   return new Response(object.body,{headers})
 }
 app.get('/api/media/:id',async c=>{
-  const id=c.req.param('id')
-  const attachment=await c.env.DB.prepare('SELECT id FROM users WHERE avatar_media=? OR cover_media=? UNION ALL SELECT id FROM posts WHERE media=? UNION ALL SELECT id FROM comments WHERE media=? UNION ALL SELECT id FROM messages WHERE media=? AND view_once=0 UNION ALL SELECT id FROM chat_groups WHERE photo_media=? LIMIT 1').bind(id,id,id,id,id,id).first()
+  const id=c.req.param('id'),exp=c.req.query('exp'),sig=c.req.query('sig')
+  if(exp!==undefined||sig!==undefined){
+    const expires=Number(exp)
+    if(!uuidPattern.test(id)||!sig||!Number.isFinite(expires)||expires<Date.now())return c.json({error:'Media unavailable.'},404)
+    const expected=await mediaSignature(c.env,id,expires)
+    if(!expected||!equal(expected,sig))return c.json({error:'Media unavailable.'},404)
+    return storedMedia(c.env.MEDIA,id,'private, max-age=3600',c.req.raw)
+  }
+  const attachment=await c.env.DB.prepare('SELECT id FROM users WHERE avatar_media=? OR cover_media=? UNION ALL SELECT id FROM posts WHERE media=? UNION ALL SELECT id FROM comments WHERE media=? LIMIT 1').bind(id,id,id,id).first()
   if(!attachment) return c.json({error:'Image unavailable.'},404)
   return storedMedia(c.env.MEDIA,id,'public, max-age=3600',c.req.raw)
 })
@@ -1328,7 +1355,7 @@ app.get('/api/rooms',async c=>{
     const callActivity=r.call_connected_at?`${r.call_video?'Video call':'Voice call'} · ${Math.floor(duration/60)}m ${String(duration%60).padStart(2,'0')}s`:r.call_state==='declined'?r.call_caller===user?'Call declined':'Declined '+label:r.call_caller===user?'No answer':'Missed '+label
     return {id:r.room,person:person(r,c.req.url),lastActivity:latestCall?callActivity:r.last_body??undefined,lastActivityAt:r.call_at&&latestCall?time(r.call_at):r.message_at?time(r.message_at):undefined,streak:r.streak_expires?{count:r.streak_count??0,status:r.streak_count?'active':'pending',expiresAt:time(r.streak_expires)}:undefined,unreadCount:r.unread_count}
   })
-  const groupRooms=groupResults.map(r=>({id:r.room,person:{id:r.room,name:r.name,initials:initials(r.name),role:'tech' as const,color:'#C8F53F',detail:'Group · '+r.members+' members',group:true,avatar:r.photo_media?mediaUrl(r.photo_media,c.req.url):undefined},lastActivity:r.last_body??'Group created',lastActivityAt:time(r.message_at??r.created),unreadCount:r.unread_count}))
+  const groupRooms=await Promise.all(groupResults.map(async r=>({id:r.room,person:{id:r.room,name:r.name,initials:initials(r.name),role:'tech' as const,color:'#C8F53F',detail:'Group · '+r.members+' members',group:true,avatar:r.photo_media?await privateMediaUrl(c.env,r.photo_media,c.req.url):undefined},lastActivity:r.last_body??'Group created',lastActivityAt:time(r.message_at??r.created),unreadCount:r.unread_count})))
   const merged=[...directRooms,...groupRooms].sort((a,b)=>Date.parse(b.lastActivityAt??'')-Date.parse(a.lastActivityAt??''))
   const rooms=merged.slice(paged?cursor:0,(paged?cursor:0)+(paged?20:60))
   c.header('Cache-Control','no-store')
@@ -1384,7 +1411,7 @@ app.get('/api/groups/:id',async c=>{
   if(!group)return c.json({error:'Group unavailable.'},404)
   const {results}=await db.prepare(`SELECT u.id,u.name,u.role,u.username,u.verified,u.teacher,u.dob,u.avatar_media,u.cover_media,u.bio,gm.role member_role
     FROM group_members gm JOIN users u ON u.id=gm.user_id WHERE gm.group_id=? ORDER BY gm.role DESC,u.name`).bind(id).all<PublicAccount&{member_role:'admin'|'member'}>()
-  return c.json({id:group.id,name:group.name,photo:group.photo_media?mediaUrl(group.photo_media,c.req.url):undefined,isAdmin:results.some(item=>item.id===viewer&&item.member_role==='admin'),inviteCode:group.invite_code??undefined,members:results.map(item=>({person:person(item,c.req.url),role:item.member_role,owner:item.id===group.owner}))})
+  return c.json({id:group.id,name:group.name,photo:group.photo_media?await privateMediaUrl(c.env,group.photo_media,c.req.url):undefined,isAdmin:results.some(item=>item.id===viewer&&item.member_role==='admin'),inviteCode:group.invite_code??undefined,members:results.map(item=>({person:person(item,c.req.url),role:item.member_role,owner:item.id===group.owner}))})
 })
 app.post('/api/groups/:id/members',async c=>{
   const id=c.req.param('id'),viewer=c.get('user').id,db=c.env.DB
@@ -1420,7 +1447,7 @@ app.post('/api/groups/join/:code',async c=>{
   if(!group)return c.json({error:'This group invite is invalid or expired.'},404)
   await db.prepare("INSERT INTO group_members(group_id,user_id,joined,role) VALUES (?,?,?,'member') ON CONFLICT DO NOTHING").bind(group.id,user,now()).run()
   const count=await db.prepare('SELECT COUNT(*) count FROM group_members WHERE group_id=?').bind(group.id).first<{count:number}>()
-  return c.json({id:group.id,person:{id:group.id,name:group.name,initials:initials(group.name),role:'tech',color:'#C8F53F',detail:'Group · '+(count?.count??1)+' members',group:true,avatar:group.photo_media?mediaUrl(group.photo_media,c.req.url):undefined}})
+  return c.json({id:group.id,person:{id:group.id,name:group.name,initials:initials(group.name),role:'tech',color:'#C8F53F',detail:'Group · '+(count?.count??1)+' members',group:true,avatar:group.photo_media?await privateMediaUrl(c.env,group.photo_media,c.req.url):undefined}})
 })
 app.put('/api/groups/:id/photo',async c=>{
   const id=c.req.param('id'),viewer=c.get('user').id,db=c.env.DB
@@ -1433,7 +1460,7 @@ app.put('/api/groups/:id/photo',async c=>{
   await c.env.MEDIA.put(media,await upload.arrayBuffer(),{httpMetadata:{contentType}})
   await db.prepare('UPDATE chat_groups SET photo_media=? WHERE id=?').bind(media,id).run()
   if(previous?.photo_media)c.executionCtx.waitUntil(c.env.MEDIA.delete(previous.photo_media))
-  return c.json({url:mediaUrl(media,c.req.url)})
+  return c.json({url:await privateMediaUrl(c.env,media,c.req.url)})
 })
 type WhotRow={id:string;invited_by:string;accepted:number;version:number;state:string}
 function whotView(row:WhotRow,user:string){
@@ -1525,7 +1552,7 @@ app.get('/api/rooms/:id/messages',async c=>{
   for(const entry of reactionRows.results)reactionsByMessage.set(entry.message_id,[...(reactionsByMessage.get(entry.message_id)??[]),{userId:entry.user_id,emoji:entry.emoji}])
   const viewer=c.get('user').id
   const items=[
-    ...messages.results.map(r=>{const kind=r.media_type??r.media_kind;return {...note(r,c.req.url),readAt:r.read_at?time(r.read_at):undefined,createdAt:time(r.created),reply:replyView(r),reactions:reactionsByMessage.get(r.note_id),chatMedia:r.media&&!r.view_once&&kind?{kind,url:mediaUrl(r.media,c.req.url)}:undefined,viewOnce:r.view_once&&kind&&kind!=='audio'?{kind,opened:Boolean(r.viewed_at),canOpen:r.id!==viewer&&!r.viewed_at}:undefined}}),
+    ...await Promise.all(messages.results.map(async r=>{const kind=r.media_type??r.media_kind;return {...note(r,c.req.url),readAt:r.read_at?time(r.read_at):undefined,createdAt:time(r.created),reply:replyView(r),reactions:reactionsByMessage.get(r.note_id),chatMedia:r.media&&!r.view_once&&kind?{kind,url:await privateMediaUrl(c.env,r.media,c.req.url)}:undefined,viewOnce:r.view_once&&kind&&kind!=='audio'?{kind,opened:Boolean(r.viewed_at),canOpen:r.id!==viewer&&!r.viewed_at}:undefined}})),
     ...calls.results.map(r=>{
       const connected=!!r.connected_at
       const label=r.video?'Video call':'Voice call'
@@ -1598,7 +1625,7 @@ app.post('/api/rooms/:id/messages',async c=>{
       await Promise.all(results.map(item=>createNotification(c.env,c.executionCtx,c.env.DB,item.user_id,author.id,'message',room,'sent a message in '+group.name,'room:'+room)))
     }
   }
-  const response={...message,chatMedia:message.chatMedia&&media?{...message.chatMedia,url:mediaUrl(media,c.req.url)}:undefined}
+  const response={...message,chatMedia:message.chatMedia&&media?{...message.chatMedia,url:await privateMediaUrl(c.env,media,c.req.url)}:undefined}
   c.executionCtx.waitUntil(c.env.ROOMS.getByName(room).fetch('https://room.internal/notify',{method:'POST',body:JSON.stringify(response)}))
   return c.json(response,201)
 })

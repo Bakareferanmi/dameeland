@@ -450,6 +450,21 @@ test('local Worker persists accounts, social activity, media, and private realti
     assert.equal((await event).id,message.id)
     assert.equal((await request(roomPath+'/messages',{token:tobi.token}))[0].body,'Ready for the quiz?')
   }finally{socket.close()}
+  // Chat media is private: only the signed link the server hands to room members works, and it cannot be edited or reused for another file.
+  const chatForm=()=>{const form=new FormData();form.append('image',new Blob([Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jA5sAAAAASUVORK5CYII=','base64')],{type:'image/png'}),'chat.png');return form}
+  const sentImage=await request(roomPath+'/messages',{token:ada.token,method:'POST',form:chatForm(),status:201})
+  const signed=new URL(sentImage.chatMedia.url)
+  assert.ok(signed.searchParams.get('sig')&&signed.searchParams.get('exp'),'chat media link is signed')
+  assert.equal((await fetch(signed)).status,200)
+  assert.match((await fetch(signed)).headers.get('Cache-Control'),/private/)
+  const bare=new URL(signed);bare.search=''
+  assert.equal((await fetch(bare)).status,404)
+  const forged=new URL(signed);forged.searchParams.set('sig','0'.repeat(32))
+  assert.equal((await fetch(forged)).status,404)
+  const stretched=new URL(signed);stretched.searchParams.set('exp',String(Number(signed.searchParams.get('exp'))+86400000))
+  assert.equal((await fetch(stretched)).status,404)
+  const listedImage=(await request(roomPath+'/messages',{token:tobi.token})).find(item=>item.id===sentImage.id)
+  assert.equal((await fetch(listedImage.chatMedia.url)).status,200)
   const caller=await openSocket(roomPath+'/socket',ada.token)
   const callee=await openSocket(roomPath+'/socket',tobi.token)
   try{

@@ -61,6 +61,12 @@ The owner account is named by a Worker secret, not by source code. Set it once b
 npx wrangler secret put OWNER_EMAIL --config apps/api/wrangler.jsonc
 ```
 
+Private chat media and group photos are served through expiring signed links. Set a signing key before deploying, any long random string. If it is missing the Worker falls back to `GOOGLE_CLIENT_SECRET`, and if neither exists private media is refused rather than exposed.
+
+```bash
+npx wrangler secret put MEDIA_SIGNING_KEY --config apps/api/wrangler.jsonc
+```
+
 Apply migration 0041 before deploying the Worker, because the new code reads `users.email_verified`.
 
 Security headers for dameen.app are set in `apps/web/functions/_middleware.ts`. The Content-Security-Policy ships in report-only mode, so it logs problems in the browser console without blocking anything. After deploying, use the app with DevTools open (sign in, Google sign-in, chat, calls, uploads, stories, games) and look for "Content Security Policy" messages. When there are none, set `CSP_MODE=enforce` in **Workers & Pages → dameeland → Settings → Variables and secrets** and redeploy. If the API ever moves to its own domain, set `PUBLIC_API_ORIGIN` there too, or the app's requests will be blocked once the policy is enforced.
