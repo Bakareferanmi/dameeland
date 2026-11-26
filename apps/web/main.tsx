@@ -2,6 +2,7 @@ import React from 'react'
 import {HugeiconsIcon} from '@hugeicons/react'
 import {createRoot} from 'react-dom/client'
 import App from '@dameeland/core/app'
+import {vapidBytes} from '@dameeland/core'
 import '@fontsource-variable/plus-jakarta-sans'
 import './shell.css'
 import './interactions.css'
@@ -136,7 +137,6 @@ const requestNotifications=async()=>{
   if(Notification.permission==='granted')return true
   return (await Notification.requestPermission())==='granted'
 }
-const vapidBytes=(value:string)=>Uint8Array.from(atob(value.replace(/-/g,'+').replace(/_/g,'/')+'='.repeat((4-value.length%4)%4)),char=>char.charCodeAt(0))
 const sameBytes=(first:Uint8Array,second:Uint8Array)=>first.length===second.length&&first.every((value,index)=>value===second[index])
 const getNotificationDevice=async()=>{
   if(!('Notification' in window)||Notification.permission!=='granted'||!('serviceWorker' in navigator)||!('PushManager' in window))return null
