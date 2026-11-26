@@ -1441,7 +1441,10 @@ app.get('/api/rooms',async c=>{
     return {id:r.room,person:person(r,c.req.url),lastActivity:latestCall?callActivity:r.last_body??undefined,lastActivityAt:r.call_at&&latestCall?time(r.call_at):r.message_at?time(r.message_at):undefined,streak:r.streak_expires?{count:r.streak_count??0,status:r.streak_count?'active':'pending',expiresAt:time(r.streak_expires)}:undefined,unreadCount:r.unread_count}
   })
   const groupRooms=await Promise.all(groupResults.map(async r=>({id:r.room,person:{id:r.room,name:r.name,initials:initials(r.name),role:'tech' as const,color:'#C8F53F',detail:'Group · '+r.members+' members',group:true,avatar:r.photo_media?await privateMediaUrl(c.env,r.photo_media,c.req.url):undefined},lastActivity:r.last_body??'Group created',lastActivityAt:time(r.message_at??r.created),unreadCount:r.unread_count})))
-  const merged=[...directRooms,...groupRooms].sort((a,b)=>Date.parse(b.lastActivityAt??'')-Date.parse(a.lastActivityAt??''))
+  // A chat with no message or call yet has no activity time. Date.parse('') is NaN, which makes the comparator inconsistent and scrambles the whole order,
+  // so people with several unused chats had their groups pushed past the first page. Treat no activity as the oldest.
+  const activity=(item:{lastActivityAt?:string})=>Date.parse(item.lastActivityAt??'')||0
+  const merged=[...directRooms,...groupRooms].sort((a,b)=>activity(b)-activity(a))
   const rooms=merged.slice(paged?cursor:0,(paged?cursor:0)+(paged?20:60))
   c.header('Cache-Control','no-store')
   return c.json(paged?{items:rooms,nextCursor:merged.length>cursor+20?String(cursor+20):null}:rooms)
