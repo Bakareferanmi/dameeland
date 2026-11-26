@@ -70,6 +70,23 @@ test('profile edits, lesson progress, and shared post lookup use saved account d
   await request(path,{status:401})
   assert.equal((await request(path,{token:visitor.token})).id,post.id)
 })
+test('a group with recent messages stays at the top of the chat list even with many unused direct chats',async()=>{
+  const owner=await create('Group Owner'),friend=await create('Group Friend')
+  const group=await request('/groups',{token:owner.token,method:'POST',body:{name:'Study Group',members:[friend.user.id]},status:201})
+  await request('/rooms/'+group.id+'/messages',{token:friend.token,method:'POST',body:{body:'latest group message'},status:201})
+  // Opening a chat from someone's profile creates a room even if nothing is ever sent in it.
+  for(let index=0;index<25;index++){
+    const other=await create('Empty Chat '+index)
+    await request('/rooms',{token:owner.token,method:'POST',body:{target:other.user.id}})
+  }
+  const first=await request('/rooms?paged=1',{token:owner.token})
+  assert.equal(first.items[0].id,group.id,'the group with the newest message is first')
+  assert.equal(first.items.length,20)
+  const all=await request('/rooms',{token:owner.token})
+  assert.equal(all.findIndex(room=>room.id===group.id),0)
+  const messages=await request('/rooms/'+group.id+'/messages?paged=1',{token:owner.token})
+  assert.equal(messages.items.length,1)
+})
 test('graded practice sessions are saved per subject and cannot be forged',async()=>{
   const account=await create('Practice Taker')
   const token=account.token
