@@ -55,6 +55,22 @@ npx wrangler deploy --config apps/api/wrangler.jsonc
 npm run deploy:web
 ```
 
+The owner account is named by a Worker secret, not by source code. Set it once before deploying, using the exact email the owner signs in with, otherwise the owner loses automatic admin and verified status. The address only counts after it is verified, which happens through Google sign-in or a password reset code.
+
+```bash
+npx wrangler secret put OWNER_EMAIL --config apps/api/wrangler.jsonc
+```
+
+Private chat media and group photos are served through expiring signed links. Set a signing key before deploying, any long random string. If it is missing the Worker falls back to `GOOGLE_CLIENT_SECRET`, and if neither exists private media is refused rather than exposed.
+
+```bash
+npx wrangler secret put MEDIA_SIGNING_KEY --config apps/api/wrangler.jsonc
+```
+
+Apply migration 0041 before deploying the Worker, because the new code reads `users.email_verified`. Apply migration 0042 before deploying the Worker too, because chat sockets now use one-time tickets stored in `socket_tickets`.
+
+Security headers for dameen.app are set in `apps/web/functions/_middleware.ts`. The Content-Security-Policy ships in report-only mode, so it logs problems in the browser console without blocking anything. After deploying, use the app with DevTools open (sign in, Google sign-in, chat, calls, uploads, stories, games) and look for "Content Security Policy" messages. When there are none, set `CSP_MODE=enforce` in **Workers & Pages → dameeland → Settings → Variables and secrets** and redeploy. If the API ever moves to its own domain, set `PUBLIC_API_ORIGIN` there too, or the app's requests will be blocked once the policy is enforced.
+
 In Cloudflare, open **Workers & Pages → dameeland → Custom domains** and add `dameen.app`. Wait for the domain to show **Active**. This attaches the site to the existing Pages project. The Worker accepts both the custom domain and the existing Pages URL for API requests and chat. Google sign-in continues to use the registered Worker callback. Browser sessions are tied to the site's origin, so users coming from the Pages URL sign in again on `dameen.app`.
 
 Rebuild and install the native app to see the new display name. The Android package and iOS bundle identifier are preserved so updates keep the existing app identity.

@@ -4,7 +4,7 @@ import {browserCallMedia,RoomCall,useRoomCall,type CallMedia} from './calls'
 import {readCallSignal,type CallSignal} from './callSignal'
 import React,{lazy,Suspense,useCallback,useEffect,useLayoutEffect,useRef,useState} from 'react'
 import {AccessibilityInfo,ActivityIndicator,Animated,AppState,BackHandler,Easing,Image,Keyboard,KeyboardAvoidingView,Modal,PanResponder,Platform,Pressable,RefreshControl,ScrollView,Switch,Text,TextInput,View,useWindowDimensions,type ViewStyle} from 'react-native'
-import {api,ApiError,birthdayToday,validBirthDate,storyLifetime,verifiedStoryLifetime,storyVideoLimit,verifiedStoryVideoLimit,verifiedStoryLimit,capitalizeName,normalizeUsername,usernameHint,validUsername,initialChats,initialComments,initialPosts,initials,lime,me,people,questions,slides,themes,type FollowListKind,type FollowPage,type FollowStats,type Note,type Person,type Post,type BirthdayEntry,type Role,type Story,type StoryGroup,type Theme} from './index'
+import {api,vapidBytes,ApiError,birthdayToday,validBirthDate,storyLifetime,verifiedStoryLifetime,storyVideoLimit,verifiedStoryVideoLimit,verifiedStoryLimit,capitalizeName,normalizeUsername,usernameHint,validUsername,initialChats,initialComments,initialPosts,initials,lime,me,people,questions,slides,themes,type FollowListKind,type FollowPage,type FollowStats,type Note,type Person,type Post,type BirthdayEntry,type Role,type Story,type StoryGroup,type Theme} from './index'
 import {Avatar,Button,Card,Copy,Design,displayHandle,Field,Icon,IconButton,IconTile,LinkedText,Logo,PersonName,ScreenLinks,Segmented,VerifiedBadge,row,spread,stack,useDesign,type Glyph,type IconRendererProps} from './ui'
 import type {ExtraPage} from './FeatureScreens'
 import {LoadingScreen} from './LoadingScreen'
@@ -107,6 +107,7 @@ type PageEntry={page:Page;profile:Person;room:Room|null;overlays:Overlay[];scrol
 const tabs:[Page,Glyph][]=[['Home','home'],['Learn','book'],['Explore','search'],['Play','game']]
 const localRooms=people.filter(p=>p.id in initialChats).map(person=>({id:person.id,person}))
 const storyPeople=[people[0],people[3],people[4],people[2],people[1]]
+const feedPageSize=20
 const arrangeFeed=(items:Post[],mixOlder=false)=>{
   const ordered=[...items].sort((a,b)=>(b.createdAt??0)-(a.createdAt??0))
   if(!mixOlder||ordered.length<=6||Math.random()>=.45)return ordered
@@ -125,7 +126,6 @@ const storyLeft=(ms:number)=>{const minutes=Math.max(1,Math.ceil(ms/60000));retu
 const uid=()=>Date.now().toString(36)+Math.random().toString(36).slice(2)
 const json=(body:unknown,method='POST')=>({method,body:JSON.stringify(body)})
 const foreground=()=>Platform.OS==='web'?document.visibilityState==='visible':AppState.currentState==='active'
-const vapidBytes=(value:string)=>Uint8Array.from(atob(value.replace(/-/g,'+').replace(/_/g,'/')+'='.repeat((4-value.length%4)%4)),char=>char.charCodeAt(0))
 const errorMessage=(error:unknown)=>error instanceof Error?error.message:'Something went wrong. Try again.'
 const demoUsernameTaken=(username:string)=>people.some(person=>person.id===username)||[...welcomeAccounts.values()].some(account=>account.user.username===username)
 const welcomeAccounts=new Map<string,{user:Person;password:string}>()
@@ -466,7 +466,7 @@ export default function App(props:Props){
     try{attempt?window.localStorage.setItem(googleStorageKey,JSON.stringify(attempt)):window.localStorage.removeItem(googleStorageKey)}catch{}
   }
   const [posts,setPosts]=useState<Post[]>(demo?initialPosts:[])
-  const [loading,setLoading]=useState(false),[feedError,setFeedError]=useState(''),[followingOnly,setFollowingOnly]=useState(false)
+  const [loading,setLoading]=useState(false),[feedError,setFeedError]=useState(''),[followingOnly,setFollowingOnly]=useState(false),[feedHasMore,setFeedHasMore]=useState(false),[feedLoadingMore,setFeedLoadingMore]=useState(false)
   const [overlay,setOverlay]=useState<Overlay|null>(null)
   // Posts, comments and lists slide in and out like a screen; the type is remembered so the exit matches the entrance.
   const modalSlides=useRef(false)
@@ -726,8 +726,8 @@ export default function App(props:Props){
     if(demo||!token||page!=='Home')return
     let alive=true
     setLoading(true);setFeedError('')
-    api<Post[]>(base,'/feed'+(followingOnly?'?following=1':''),{},token)
-      .then(data=>{if(alive)setPosts(arrangeFeed(data))})
+    api<Post[]>(base,'/feed?limit='+feedPageSize+(followingOnly?'&following=1':''),{},token)
+      .then(data=>{if(alive){setPosts(arrangeFeed(data));setFeedHasMore(data.length>=feedPageSize)}})
       .catch(reason=>{if(alive)setFeedError(errorMessage(reason))})
       .finally(()=>{if(alive)setLoading(false)})
     return ()=>{alive=false}
@@ -787,16 +787,19 @@ export default function App(props:Props){
     api<{unread:number;messageUnread:number;items:NotificationItem[];nextCursor:string|null}>(base,'/notifications'+(notificationCursor?'?cursor='+encodeURIComponent(notificationCursor):''),{},token).then(data=>{if(alive){setNotificationItems(data.items);setNotificationNextCursor(data.nextCursor);setUnread(data.unread>0);setMessageUnread(data.messageUnread)}}).catch(reason=>{if(alive)notify(errorMessage(reason),'error')}).finally(()=>{if(alive)setNotificationsLoading(false)})
     return ()=>{alive=false}
   },[base,demo,token,page,retry,notificationCursor])
+  // The badge poll reads the current page and cursor through a ref, so it keeps one timer instead of restarting on every page change.
+  const notificationView=useRef({page,cursor:notificationCursor})
+  notificationView.current={page,cursor:notificationCursor}
   useEffect(()=>{
     if(demo||!token||stage!=='app')return
     let active=true
     const refresh=()=>api<{unread:number;messageUnread:number;items:NotificationItem[];nextCursor:string|null}>(base,'/notifications',{},token).then(data=>{
-      if(active){if(page!=='Notifications'||!notificationCursor){setNotificationItems(data.items);setNotificationNextCursor(data.nextCursor)}setUnread(data.unread>0);setMessageUnread(data.messageUnread)}
+      if(active){if(notificationView.current.page!=='Notifications'||!notificationView.current.cursor){setNotificationItems(data.items);setNotificationNextCursor(data.nextCursor)}setUnread(data.unread>0);setMessageUnread(data.messageUnread)}
     }).catch(()=>{})
     void refresh()
     const interval=setInterval(()=>{if(AppState.currentState==='active')void refresh()},30000)
     return ()=>{active=false;clearInterval(interval)}
-  },[base,demo,stage,token,page,notificationCursor])
+  },[base,demo,stage,token])
   const roomId=room?.id
   const messageLoading=!demo&&!!roomId&&chats[roomId]===undefined&&!feedError
   const [pendingIncoming,setPendingIncoming]=useState<IncomingCall|null>(null)
@@ -889,9 +892,20 @@ export default function App(props:Props){
       .catch(reason=>{if(active)setFeedError(errorMessage(reason))})
       .finally(()=>{syncing=false})
     }
-    const socket=new WebSocket(url,['dameeland','ticket.'+token])
-    socket.onopen=()=>{if(active)void refresh()}
-    socket.onmessage=event=>{
+    let socket:WebSocket|undefined
+    let attempts=0
+    let retryTimer:ReturnType<typeof setTimeout>|undefined
+    // A dropped connection is retried with a growing delay (1s, 2s, 4s ... up to 30s). A ticket works once, so each try asks for a new one.
+    const retry=()=>{if(active)retryTimer=setTimeout(()=>void connect(),Math.min(30000,1000*2**attempts++))}
+    const connect=async()=>{
+      let ticket:string
+      try{ticket=(await api<{ticket:string}>(base,'/rooms/'+roomId+'/socket-ticket',{method:'POST'},token)).ticket}catch{retry();return}
+      if(!active)return
+      const next=new WebSocket(url,['dameeland','ticket.'+ticket])
+      socket=next
+      next.onclose=()=>{if(socket===next)retry()}
+      next.onopen=()=>{attempts=0;if(active)void refresh()}
+      next.onmessage=event=>{
       if(!active)return
       let data
       try{data=JSON.parse(String(event.data))}catch{return}
@@ -926,13 +940,15 @@ export default function App(props:Props){
         if(!foreground())void props.notifyDevice?.(item.author.name,'New message: '+item.body)
       }
     }
+    }
+    void connect()
     void refresh()
-    const poll=setInterval(()=>{if(foreground()&&(socket.readyState!==WebSocket.OPEN||Date.now()-lastSync>15000))void refresh()},3500)
-    const heartbeat=setInterval(()=>{if(socket.readyState===WebSocket.OPEN)socket.send(JSON.stringify({type:'presence'}))},30000)
+    const poll=setInterval(()=>{if(foreground()&&(socket?.readyState!==WebSocket.OPEN||Date.now()-lastSync>15000))void refresh()},3500)
+    const heartbeat=setInterval(()=>{if(socket?.readyState===WebSocket.OPEN)socket.send(JSON.stringify({type:'presence'}))},30000)
     const resumed=AppState.addEventListener('change',state=>{if(state==='active')void refresh()})
     const visible=()=>{if(foreground())void refresh()}
     if(Platform.OS==='web')document.addEventListener('visibilitychange',visible)
-    return ()=>{active=false;clearInterval(poll);clearInterval(heartbeat);resumed.remove();if(Platform.OS==='web')document.removeEventListener('visibilitychange',visible);socket.close()}
+    return ()=>{active=false;clearInterval(poll);clearInterval(heartbeat);resumed.remove();if(Platform.OS==='web')document.removeEventListener('visibilitychange',visible);if(retryTimer)clearTimeout(retryTimer);socket?.close()}
   },[base,demo,token,page,roomId])
   useEffect(()=>{
     if(demo||!token||page!=='Chat'||!roomId||room?.person.group){setStreak(null);return}
@@ -1781,6 +1797,17 @@ export default function App(props:Props){
     const media=await call<{kind:'image'|'video';url:string}>('/rooms/'+openedOnce.room+'/messages/'+openedOnce.id+'/open-once',json({retry:ticket}))
     setOpenedOnce({...media,id:openedOnce.id,room:openedOnce.room})
   }
+  async function loadOlderPosts(){
+    if(demo||!token||feedLoadingMore)return
+    const oldest=posts.reduce((least,item)=>Math.min(least,item.createdAt??Infinity),Infinity)
+    if(!Number.isFinite(oldest))return
+    setFeedLoadingMore(true)
+    try{
+      const older=await api<Post[]>(base,'/feed?limit='+feedPageSize+'&before='+oldest+(followingOnly?'&following=1':''),{},token)
+      setPosts(previous=>arrangeFeed([...previous,...older.filter(item=>!previous.some(saved=>saved.id===item.id))]))
+      setFeedHasMore(older.length>=feedPageSize)
+    }catch(reason){fail(reason)}finally{setFeedLoadingMore(false)}
+  }
   async function loadMoreRooms(){
     if(demo||!token||!roomsNextCursor||roomsLoadingMore)return
     setRoomsLoadingMore(true)
@@ -1811,11 +1838,11 @@ export default function App(props:Props){
       if(!demo&&token){
         if(page==='Home'){
           const [feed,stories,birthdays]=await Promise.all([
-            api<Post[]>(base,'/feed?refresh='+Date.now()+(followingOnly?'&following=1':''),{cache:'no-store'},token),
+            api<Post[]>(base,'/feed?limit='+feedPageSize+'&refresh='+Date.now()+(followingOnly?'&following=1':''),{cache:'no-store'},token),
             api<StoryGroup[]>(base,'/stories',{},token),
             api<BirthdayEntry[]>(base,'/birthdays',{},token),
           ])
-          if(session===demoSession.current){setPosts(arrangeFeed(feed,true));setLiveStories(stories);setBirthdays(birthdays);setFeedError('')}
+          if(session===demoSession.current){setPosts(arrangeFeed(feed,true));setFeedHasMore(feed.length>=feedPageSize);setLiveStories(stories);setBirthdays(birthdays);setFeedError('')}
         }else if(page==='Explore'){
           const people=await api<(Person&{following:boolean})[]>(base,'/people?q='+encodeURIComponent(query),{},token)
           if(session===demoSession.current){setResults(people);setFollows(previous=>({...previous,...Object.fromEntries(people.map(person=>[person.id,person.following]))}));setSearchError('')}
@@ -1950,6 +1977,7 @@ export default function App(props:Props){
     {!demo&&!!token&&!user.dob&&<Card>{section('Add your birthday')}<Copy color={theme.muted}>Friends can wish you a happy birthday. Only the day and month are shown to others.</Copy><BirthdayFields value={birthDraft} onChange={setBirthDraft}/><Button label="Save birthday" disabled={busy||!birthIso(birthDraft)} onPress={()=>void saveBirthday()}/></Card>}
     <Segmented options={['For you','Following']} selected={followingOnly?'Following':'For you'} onSelect={value=>setFollowingOnly(value==='Following')}/>
     {feedError?failure:loading?<Loading/>:displayedPosts.length?displayedPosts.map(post=><PostCard key={post.id} post={post} onReact={react} onOverlay={selectOverlay} onProfile={showProfile} onArticle={id=>selectOverlay({kind:'article',articleId:id})} onQuote={startQuote} onInvite={(item,accept)=>void answerInvite(item,accept)}/>):<Empty title={followingOnly?'Your following feed is empty':'Start the conversation'} detail={followingOnly?'Follow classmates to see their posts here.':'Share the first post with your classmates.'} action={followingOnly?'Find people':'Create post'} onPress={followingOnly?()=>open('Explore'):compose}/>}
+    {!demo&&!feedError&&!loading&&feedHasMore&&<Button label={feedLoadingMore?'Loading posts…':'Load older posts'} variant="secondary" disabled={feedLoadingMore} onPress={()=>void loadOlderPosts()}/>}
     {demo&&!followingOnly&&<View style={{...row,flexWrap:'wrap'}}>
       <Button label="Birthdays" leading="gift" variant="secondary" onPress={()=>open('Birthdays')}/>
       <Button label="Events" leading="grp" variant="secondary" onPress={()=>open('Events')}/>

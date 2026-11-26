@@ -14,6 +14,8 @@ export const mentionPattern = /(^|[^\w@])@([a-zA-Z0-9_]{3,24})(?![\w@])/g
 export const extractMentions = (body:string) => [...new Set([...body.matchAll(mentionPattern)].map(match=>match[2].toLowerCase()))].slice(0,10)
 export const maxPostAuthors = 3
 /** True when the person wrote the post or has accepted an invite to co-author it. */
+// Converts a base64url VAPID public key into the bytes the browser's push subscription needs.
+export const vapidBytes=(value:string)=>Uint8Array.from(atob(value.replace(/-/g,'+').replace(/_/g,'/')+'='.repeat((4-value.length%4)%4)),char=>char.charCodeAt(0))
 export const isPostBy = (post:Post,personId:string) => post.author.id===personId || !!post.coAuthors?.some(entry=>entry.status==='accepted'&&entry.person.id===personId)
 export const messageReactionEmojis = ['❤️','😂','😮','😢','👍','🔥'] as const
 export const capitalizeName = (value:string) => value.replace(/^(\s*)(\p{L})/u,(_,space:string,letter:string)=>space+letter.toUpperCase())

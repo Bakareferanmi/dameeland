@@ -2,7 +2,7 @@ import {publicApi, unavailable, type SearchFunction} from '../publicSearch'
 
 export async function onRequestGet(context: SearchFunction) {
   const section = new URL(context.request.url).searchParams.get('section')
-  const result = await publicApi(context, 'sitemap' + (section === null ? '' : '?section=' + encodeURIComponent(section)))
+  const result = await publicApi(context, 'sitemap' + (section === null ? '' : '?section=' + encodeURIComponent(section)), 1800)
   if (!result.ok) return unavailable('Sitemap unavailable.', result.status === 404 ? 404 : 503)
-  return new Response(result.body, {headers: {'Content-Type': 'application/xml; charset=utf-8', 'Cache-Control': 'no-store'}})
+  return new Response(result.body, {headers: {'Content-Type': 'application/xml; charset=utf-8', 'Cache-Control': 'public, max-age=1800'}})
 }

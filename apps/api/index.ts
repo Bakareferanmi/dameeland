@@ -9,9 +9,9 @@ import {DurableObject} from 'cloudflare:workers'
 import * as webpush from 'web-push'
 import {lessons,passMark,practiceQuestion,practiceTopics,commentGifs,validBirthDate,type BirthdayEntry,storyLimit,storyLifetime,verifiedStoryLimit,verifiedStoryLifetime,storyVideoLimit,verifiedStoryVideoLimit,type Story,type StoryGroup,commentStickers,capitalizeName,initials,normalizeUsername,usernameHint,validUsername,type AdminAccount,type AdminActivity,type AdminDay,type AdminOverview,type CommentAttachment,type FollowPage,type FollowStats,type Person,type Role,extractMentions,maxPostAuthors,messageReactionEmojis,type MessageReply} from '@dameeland/core'
 
-interface Env {DB:D1Database;MEDIA:R2Bucket;STORIES:KVNamespace;ROOMS:DurableObjectNamespace<ChatRoom>;ALLOWED_ORIGIN:string;DISABLE_AUTH_LIMITS?:string;VAPID_PUBLIC_KEY?:string;VAPID_PRIVATE_KEY?:string;VAPID_SUBJECT?:string;GOOGLE_CLIENT_ID?:string;GOOGLE_CLIENT_SECRET?:string;GOOGLE_REDIRECT_URI?:string;ADMIN_USER_IDS?:string;RESEND_API_KEY?:string;RECOVERY_FROM?:string}
-type Account={id:string;email:string;name:string;role:Role;salt:string;password_hash:string;username?:string|null;verified?:number;teacher?:number;dob?:string|null}
-type PublicAccount=Pick<Account,'id'|'name'|'role'|'username'|'verified'|'teacher'|'dob'> & {email?:string;avatar_media?:string|null;cover_media?:string|null;bio?:string|null;username_changed_at?:number|null;search_public?:number}
+interface Env {DB:D1Database;MEDIA:R2Bucket;STORIES:KVNamespace;ROOMS:DurableObjectNamespace<ChatRoom>;ALLOWED_ORIGIN:string;DISABLE_AUTH_LIMITS?:string;VAPID_PUBLIC_KEY?:string;VAPID_PRIVATE_KEY?:string;VAPID_SUBJECT?:string;GOOGLE_CLIENT_ID?:string;GOOGLE_CLIENT_SECRET?:string;GOOGLE_REDIRECT_URI?:string;ADMIN_USER_IDS?:string;RESEND_API_KEY?:string;RECOVERY_FROM?:string;OWNER_EMAIL?:string;MEDIA_SIGNING_KEY?:string}
+type Account={id:string;email:string;name:string;role:Role;salt:string;password_hash:string;username?:string|null;verified?:number;teacher?:number;dob?:string|null;email_verified?:number}
+type PublicAccount=Pick<Account,'id'|'name'|'role'|'username'|'verified'|'teacher'|'dob'> & {email?:string;email_verified?:number;avatar_media?:string|null;cover_media?:string|null;bio?:string|null;username_changed_at?:number|null;search_public?:number}
 type App={Bindings:Env;Variables:{user:PublicAccount;tokenHash:string}}
 const app=new Hono<App>()
 const encoder=new TextEncoder()
@@ -23,6 +23,26 @@ const randomResetCode=()=>Array.from(crypto.getRandomValues(new Uint8Array(5)),b
 const validResetCode=(code:string)=>/^(?:[2-9a-hj-np-z]{5}|[a-f0-9]{12})$/.test(code)
 const clean=(value:unknown,max:number)=>typeof value==='string'?value.trim().slice(0,max):''
 const mediaUrl=(key:string,url:string)=>new URL('/api/media/'+key,url).href
+// Chat media and group photos are private. They are served only through links the server signed for that exact file, which expire,
+// and which shared caches may not store. Avatars, covers, posts and comments keep the plain public link above. An <img> tag cannot
+// send an Authorization header, so a signed link is how the app can show private media without changing the clients.
+// The expiry is rounded to a 12 hour window so repeat requests get the same URL and the browser can cache the file.
+const privateMediaWindow=12*3600000
+async function mediaSignature(env:Env,key:string,expires:number){
+  const secret=env.MEDIA_SIGNING_KEY||env.GOOGLE_CLIENT_SECRET
+  if(!secret)return null
+  const signer=await crypto.subtle.importKey('raw',new TextEncoder().encode(secret),{name:'HMAC',hash:'SHA-256'},false,['sign'])
+  const mac=new Uint8Array(await crypto.subtle.sign('HMAC',signer,new TextEncoder().encode('media.'+key+'.'+expires)))
+  return Array.from(mac.slice(0,16),byte=>byte.toString(16).padStart(2,'0')).join('')
+}
+async function privateMediaUrl(env:Env,key:string,url:string){
+  const link=new URL('/api/media/'+key,url)
+  const expires=(Math.floor(Date.now()/privateMediaWindow)+2)*privateMediaWindow
+  const signature=await mediaSignature(env,key,expires)
+  // With no signing secret configured the link stays unsigned and the route refuses it, so private media fails closed.
+  if(signature){link.searchParams.set('exp',String(expires));link.searchParams.set('sig',signature)}
+  return link.href
+}
 const person=(user:PublicAccount,url:string):Person=>({id:user.id,name:user.name,username:user.username??undefined,bio:user.bio??undefined,initials:initials(user.name),role:user.role,color:user.role==='tech'?'#CFE8FF':'#FFD9B8',detail:user.teacher?'Teacher':user.role==='tech'?'Tech creator':'Student',teacher:Boolean(user.teacher),birthday:user.dob?user.dob.slice(5):undefined,verified:user.role==='tech'||Boolean(user.verified),avatar:user.avatar_media?mediaUrl(user.avatar_media,url):undefined,cover:user.cover_media?mediaUrl(user.cover_media,url):undefined})
 const readBody=async(request:Request)=>request.json<Record<string,unknown>>().catch(()=>null)
 const time=(date:number)=>new Date(date).toISOString()
@@ -33,9 +53,10 @@ const sessionLifetime=30*86400000
 const sessionRefreshWindow=7*86400000
 const touchPresence=(db:D1Database,userId:string,online:boolean)=>db.prepare('INSERT INTO presence (user_id,online,last_seen) VALUES (?,?,?) ON CONFLICT(user_id) DO UPDATE SET online=excluded.online,last_seen=excluded.last_seen').bind(userId,online?1:0,now()).run()
 const base64Url=(bytes:ArrayBuffer)=>btoa(String.fromCharCode(...new Uint8Array(bytes))).replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,'')
-const ownerEmail='bakareferanmi96@gmail.com'
-const isOwner=(account:Pick<PublicAccount,'email'>)=>account.email?.toLowerCase()===ownerEmail
-const isAdmin=(env:Env,account:Pick<PublicAccount,'id'|'email'>)=>isOwner(account)||(env.ADMIN_USER_IDS?.split(',').some(value=>value.trim()===account.id)??false)
+// The owner is named by the OWNER_EMAIL secret, never in source, and only counts once that address is verified.
+const ownerEmail=(env:Env)=>(env.OWNER_EMAIL??'').trim().toLowerCase()
+const isOwner=(env:Env,account:Pick<PublicAccount,'email'|'email_verified'>)=>{const owner=ownerEmail(env);return !!owner&&!!account.email_verified&&account.email?.toLowerCase()===owner}
+const isAdmin=(env:Env,account:Pick<PublicAccount,'id'|'email'|'email_verified'>)=>isOwner(env,account)||(env.ADMIN_USER_IDS?.split(',').some(value=>value.trim()===account.id)??false)
 const hasVerifiedBenefits=(account:Pick<PublicAccount,'role'|'verified'|'teacher'>)=>account.role==='tech'||Boolean(account.verified)||Boolean(account.teacher)
 const viewer=(env:Env,account:PublicAccount,url:string)=>({...person(account,url),dob:account.dob??undefined,usernameNextChangeAt:account.username_changed_at?time(account.username_changed_at+3*86400000):undefined,isAdmin:isAdmin(env,account),searchPublic:Boolean(account.search_public)})
 type NotificationKind='message'|'follow'|'comment'|'reaction'|'call'|'birthday'|'announcement'
@@ -129,7 +150,7 @@ function queueWelcomeEmail(env:Env,ctx:WaitContext,userId:string){
   })().catch(()=>console.error('Welcome email delivery failed')))
 }
 async function session(env:Env,ctx:WaitContext,account:PublicAccount,url:string){
-  if(isOwner(account)&&(account.role!=='tech'||!account.verified||!account.teacher)){
+  if(isOwner(env,account)&&(account.role!=='tech'||!account.verified||!account.teacher)){
     await env.DB.prepare("UPDATE users SET role='tech',verified=1,teacher=1 WHERE id=?").bind(account.id).run()
     account={...account,role:'tech',verified:1,teacher:1}
   }
@@ -266,7 +287,8 @@ app.post('/api/auth/recovery/reset',async c=>{
   const validAt=now()
   const accountQuery='SELECT r.user_id FROM password_resets r JOIN users u ON u.id=r.user_id WHERE r.code_hash=? AND r.expires>? AND u.email=?'
   const [updated]=await db.batch([
-    db.prepare('UPDATE users SET salt=?,password_hash=? WHERE id IN ('+accountQuery+')').bind(salt,digest,codeHash,validAt,email),
+    // The code was emailed to this address, so using it also proves the owner controls the mailbox.
+    db.prepare('UPDATE users SET salt=?,password_hash=?,email_verified=1 WHERE id IN ('+accountQuery+')').bind(salt,digest,codeHash,validAt,email),
     db.prepare('DELETE FROM sessions WHERE user_id IN ('+accountQuery+')').bind(codeHash,validAt,email),
     db.prepare('DELETE FROM password_resets WHERE user_id IN ('+accountQuery+')').bind(codeHash,validAt,email),
   ])
@@ -300,7 +322,7 @@ app.post('/api/auth/:action',async c=>{
     if(account) return c.json({error:'An account already uses this email.'},409)
     const salt=random(16)
     const role='student' as const
-    account={id:crypto.randomUUID(),email,name,role,salt,username,dob:dob as string,password_hash:await passwordHash(password,salt)}
+    account={id:crypto.randomUUID(),email,name,role,salt,username,dob:dob as string,password_hash:await passwordHash(password,salt),email_verified:0}
     const referralCode=clean(body?.referralCode,32)
     const inviter=referralCode?await db.prepare('SELECT id FROM users WHERE invite_code=?').bind(referralCode).first<{id:string}>():null
     const write=await db.prepare('INSERT INTO users(id,email,name,role,salt,password_hash,first_name,last_name,username,dob,created,invited_by) VALUES (?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT DO NOTHING').bind(account.id,email,name,role,salt,account.password_hash,firstName,lastName,username,dob as string,now(),inviter?.id??null).run()
@@ -346,24 +368,16 @@ app.get('/api/google/callback',async c=>{
   c.header('Cache-Control','no-store')
   c.header('Referrer-Policy','no-referrer')
   const state=c.req.query('state')??''
-  const complete=(ok:boolean,token?:string,client:'web'|'mobile'='web')=>c.html(ok
+  // The callback never hands out a session. It only marks the attempt complete. The browser that started the sign-in holds the
+  // exchange secret and collects its own session from /google/exchange, so a callback link opened by someone else logs nobody in.
+  const complete=(ok:boolean,client:'web'|'mobile'='web')=>c.html(ok
     ?client==='mobile'
       ?`<title>dameen</title><meta name="viewport" content="width=device-width"><p>Google sign-in completed. Returning to the dameen app…</p><script>location.replace('dameen://google')</script>`
-      :`<title>dameen</title><meta name="viewport" content="width=device-width"><p>Google sign-in completed. Returning to dameen…</p><script>try{localStorage.setItem('dameeland-session',${JSON.stringify(token??'')});localStorage.removeItem('dameeland-google-attempt');localStorage.removeItem('dameeland-referral')}catch{}location.replace('https://dameen.app/?google=complete')</script>`
+      :`<title>dameen</title><meta name="viewport" content="width=device-width"><p>Google sign-in completed. Returning to dameen…</p><script>try{window.close()}catch(e){}setTimeout(function(){location.replace('https://dameen.app/?google=complete')},250)</script>`
     :'<title>dameen</title><p>Google sign-in did not complete. Return to dameen for details.</p>',ok?200:400)
   if(!/^[a-f0-9]{48}$/.test(state)||!GOOGLE_CLIENT_ID||!GOOGLE_CLIENT_SECRET||!GOOGLE_REDIRECT_URI)return complete(false)
   const attempt=await DB.prepare("UPDATE google_attempts SET status='processing' WHERE state=? AND status='pending' AND expires>? RETURNING verifier,username,dob,referral_code,mode,client").bind(state,now()).first<GoogleAttempt>()
-  if(!attempt){
-    const previous=await DB.prepare("SELECT status,user_id,client FROM google_attempts WHERE state=? AND expires>?").bind(state,now()).first<{status:string;user_id:string|null;client:'web'|'mobile'}>()
-    if(previous?.status==='complete'&&previous.user_id){
-      const signedAccount=await DB.prepare('SELECT id,email,name,role,username,verified,teacher,dob,avatar_media,cover_media,bio,username_changed_at,search_public FROM users WHERE id=?').bind(previous.user_id).first<PublicAccount>()
-      if(signedAccount){
-        const signed=await session(c.env,c.executionCtx,signedAccount,c.req.url)
-        return complete(true,signed.token,previous.client)
-      }
-    }
-    return complete(false)
-  }
+  if(!attempt)return complete(false)
   const fail=async(error:string)=>{
     await DB.prepare("UPDATE google_attempts SET status='error',error=? WHERE state=?").bind(error,state).run()
     return complete(false)
@@ -383,10 +397,20 @@ app.get('/api/google/callback',async c=>{
     if(!response.ok||!sub||!email||info.email_verified!==true)return fail('Google did not provide a verified email.')
     let account=await DB.prepare('SELECT id FROM users WHERE google_sub=?').bind(sub).first<{id:string}>()
     if(!account){
-      const emailAccount=await DB.prepare('SELECT id,google_sub FROM users WHERE email=?').bind(email).first<{id:string;google_sub:string|null}>()
+      const emailAccount=await DB.prepare('SELECT id,google_sub,email_verified FROM users WHERE email=?').bind(email).first<{id:string;google_sub:string|null;email_verified:number}>()
       if(emailAccount){
         if(emailAccount.google_sub&&emailAccount.google_sub!==sub)return fail('This email is already linked to another Google account.')
-        const linked=await DB.prepare('UPDATE users SET google_sub=? WHERE id=? AND (google_sub IS NULL OR google_sub=?) RETURNING id').bind(sub,emailAccount.id,sub).first<{id:string}>()
+        // A password sign-up never proved it owns the address, but Google just did. Linking it as-is would let whoever chose that
+        // password (a squatter who registered someone else's email first) keep access to the real owner's account. So an unverified
+        // account loses its password and sessions in the same batch that links Google. The owner can set a new password by email.
+        const takeover=emailAccount.email_verified?[]:[
+          DB.prepare('UPDATE users SET salt=?,password_hash=? WHERE id=? AND google_sub IS NULL').bind(random(16),random(32),emailAccount.id),
+          DB.prepare('DELETE FROM sessions WHERE user_id=?').bind(emailAccount.id),
+          DB.prepare('DELETE FROM password_resets WHERE user_id=?').bind(emailAccount.id),
+        ]
+        const link=DB.prepare('UPDATE users SET google_sub=?,email_verified=1 WHERE id=? AND (google_sub IS NULL OR google_sub=?) RETURNING id').bind(sub,emailAccount.id,sub)
+        const done=await DB.batch<{id:string}>([...takeover,link])
+        const linked=done[done.length-1].results[0]
         account=linked??await DB.prepare('SELECT id FROM users WHERE google_sub=?').bind(sub).first<{id:string}>()
         if(!account)return fail('This account could not be linked to Google. Try again.')
       }else{
@@ -394,7 +418,7 @@ app.get('/api/google/callback',async c=>{
         const first=capitalizeName(clean(info.given_name,60)),last=capitalizeName(clean(info.family_name,60))
         if(!first||!last)return fail('Add a first and last name to your Google profile or sign up with email.')
         const inviter=attempt.referral_code?await DB.prepare('SELECT id FROM users WHERE invite_code=?').bind(attempt.referral_code).first<{id:string}>():null
-        await DB.prepare('INSERT INTO users(id,email,name,role,salt,password_hash,first_name,last_name,google_sub,username,dob,created,invited_by) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT DO NOTHING')
+        await DB.prepare('INSERT INTO users(id,email,name,role,salt,password_hash,first_name,last_name,google_sub,username,dob,created,invited_by,email_verified) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,1) ON CONFLICT DO NOTHING')
           .bind(crypto.randomUUID(),email,first+' '+last,'student',random(16),random(32),first,last,sub,attempt.username,attempt.dob,now(),inviter?.id??null).run()
         account=await DB.prepare('SELECT id FROM users WHERE google_sub=?').bind(sub).first<{id:string}>()
         if(!account){
@@ -404,10 +428,7 @@ app.get('/api/google/callback',async c=>{
       }
     }
     await DB.prepare("UPDATE google_attempts SET status='complete',user_id=? WHERE state=?").bind(account.id,state).run()
-    const signedAccount=await DB.prepare('SELECT id,email,name,role,username,verified,teacher,dob,avatar_media,cover_media,bio,username_changed_at,search_public FROM users WHERE id=?').bind(account.id).first<PublicAccount>()
-    if(!signedAccount)return fail('Account unavailable after Google sign-in.')
-    const signed=await session(c.env,c.executionCtx,signedAccount,c.req.url)
-    return complete(true,signed.token,attempt.client)
+    return complete(true,attempt.client)
   }catch{return fail('Google sign-in could not be completed. Please try again.')}
 })
 app.post('/api/google/exchange',async c=>{
@@ -423,7 +444,7 @@ app.post('/api/google/exchange',async c=>{
   if(attempt.status!=='complete')return c.json({pending:true},202)
   const claimed=await DB.prepare("DELETE FROM google_attempts WHERE state=? AND exchange_hash=? AND status='complete' AND expires>? RETURNING user_id").bind(state,key,now()).first<{user_id:string}>()
   if(!claimed)return c.json({error:'Google sign-in expired. Please try again.'},410)
-  const account=await DB.prepare('SELECT id,email,name,role,username,verified,teacher,dob,avatar_media,cover_media,bio,username_changed_at,search_public FROM users WHERE id=?').bind(claimed.user_id).first<PublicAccount>()
+  const account=await DB.prepare('SELECT id,email,email_verified,name,role,username,verified,teacher,dob,avatar_media,cover_media,bio,username_changed_at,search_public FROM users WHERE id=?').bind(claimed.user_id).first<PublicAccount>()
   if(!account)return c.json({error:'Account unavailable.'},404)
   return c.json(await session(c.env,c.executionCtx,account,c.req.url))
 })
@@ -449,8 +470,15 @@ async function storedMedia(bucket:R2Bucket,id:string,cacheControl:string,request
   return new Response(object.body,{headers})
 }
 app.get('/api/media/:id',async c=>{
-  const id=c.req.param('id')
-  const attachment=await c.env.DB.prepare('SELECT id FROM users WHERE avatar_media=? OR cover_media=? UNION ALL SELECT id FROM posts WHERE media=? UNION ALL SELECT id FROM comments WHERE media=? UNION ALL SELECT id FROM messages WHERE media=? AND view_once=0 UNION ALL SELECT id FROM chat_groups WHERE photo_media=? LIMIT 1').bind(id,id,id,id,id,id).first()
+  const id=c.req.param('id'),exp=c.req.query('exp'),sig=c.req.query('sig')
+  if(exp!==undefined||sig!==undefined){
+    const expires=Number(exp)
+    if(!uuidPattern.test(id)||!sig||!Number.isFinite(expires)||expires<Date.now())return c.json({error:'Media unavailable.'},404)
+    const expected=await mediaSignature(c.env,id,expires)
+    if(!expected||!equal(expected,sig))return c.json({error:'Media unavailable.'},404)
+    return storedMedia(c.env.MEDIA,id,'private, max-age=3600',c.req.raw)
+  }
+  const attachment=await c.env.DB.prepare('SELECT id FROM users WHERE avatar_media=? OR cover_media=? UNION ALL SELECT id FROM posts WHERE media=? UNION ALL SELECT id FROM comments WHERE media=? LIMIT 1').bind(id,id,id,id).first()
   if(!attachment) return c.json({error:'Image unavailable.'},404)
   return storedMedia(c.env.MEDIA,id,'public, max-age=3600',c.req.raw)
 })
@@ -467,6 +495,16 @@ const storyExpiry=(story:StoryRecord)=>story.expires??story.created+storyLifetim
 async function readStories(env:Env,user:string){
   const list=await env.STORIES.get<StoryRecord[]>(storyKey(user),'json')
   return Array.isArray(list)?list:[]
+}
+// Reads many authors' stories in one KV operation per 100 keys instead of one operation per author, which keeps the stories tray well under the per-request subrequest limit.
+async function readManyStories(env:Env,users:string[]){
+  const stories=new Map<string,StoryRecord[]>()
+  for(let start=0;start<users.length;start+=100){
+    const chunk=users.slice(start,start+100)
+    const found=await env.STORIES.get<StoryRecord[]>(chunk.map(storyKey),'json')
+    chunk.forEach(user=>{const list=found.get(storyKey(user));stories.set(user,Array.isArray(list)?list:[])})
+  }
+  return stories
 }
 // Stories live only in KV (one key per author) and R2, never in D1. The key expires on its own and
 // every read also filters by timestamp, so a story is never served after its account-specific lifetime even if cleanup lags.
@@ -493,14 +531,26 @@ app.get('/api/story-media/:user/:id',async c=>{
 app.get('/api/notification-public-key',c=>c.env.VAPID_PUBLIC_KEY?c.json({publicKey:c.env.VAPID_PUBLIC_KEY}):c.json({error:'Push notifications are not configured.'},503))
 app.use('/api/*',async(c,next)=>{
   const header=c.req.header('Authorization')
-  const ticket=c.req.path.endsWith('/socket')?c.req.header('Sec-WebSocket-Protocol')?.split(',').map(s=>s.trim()).find(s=>s.startsWith('ticket.'))?.slice(7):undefined
+  // Browsers cannot send an Authorization header on a WebSocket, so the chat socket carries a one-time ticket in its subprotocol instead.
+  // A ticket is bound to one user and one room, lives 30 seconds and is deleted the moment it is used. The session token never goes in the URL or subprotocol.
+  const socketRoom=c.req.path.match(/^\/api\/rooms\/([^/]+)\/socket$/)?.[1]
+  const ticket=socketRoom?c.req.header('Sec-WebSocket-Protocol')?.split(',').map(s=>s.trim()).find(s=>s.startsWith('ticket.'))?.slice(7):undefined
   const token=header?.match(/^Bearer ([a-f0-9]{64})$/)?.[1]??ticket
   if(!token||!/^[a-f0-9]{64}$/.test(token)) return c.json({error:'Log in to continue.'},401)
   const tokenHash=await hash(token)
-  let user=await c.env.DB.prepare('SELECT u.id,u.email,u.name,u.role,u.username,u.verified,u.teacher,u.dob,u.avatar_media,u.cover_media,u.bio,u.username_changed_at,u.search_public FROM users u JOIN sessions s ON s.user_id=u.id WHERE s.token_hash=? AND s.expires>?').bind(tokenHash,now()).first<PublicAccount>()
+  if(socketRoom&&!header&&ticket){
+    const used=await c.env.DB.prepare('DELETE FROM socket_tickets WHERE token_hash=? AND room_id=? AND expires>? RETURNING user_id').bind(tokenHash,socketRoom,now()).first<{user_id:string}>()
+    if(!used)return c.json({error:'Your session has expired. Log in again.'},401)
+    const holder=await c.env.DB.prepare('SELECT u.id,u.email,u.email_verified,u.name,u.role,u.username,u.verified,u.teacher,u.dob,u.avatar_media,u.cover_media,u.bio,u.username_changed_at,u.search_public FROM users u WHERE u.id=?').bind(used.user_id).first<PublicAccount>()
+    if(!holder)return c.json({error:'Your session has expired. Log in again.'},401)
+    c.set('user',holder);c.set('tokenHash','')
+    return next()
+  }
+  let user=await c.env.DB.prepare('SELECT u.id,u.email,u.email_verified,u.name,u.role,u.username,u.verified,u.teacher,u.dob,u.avatar_media,u.cover_media,u.bio,u.username_changed_at,u.search_public,s.expires session_expires FROM users u JOIN sessions s ON s.user_id=u.id WHERE s.token_hash=? AND s.expires>?').bind(tokenHash,now()).first<PublicAccount&{session_expires:number}>()
   if(!user) return c.json({error:'Your session has expired. Log in again.'},401)
-  await c.env.DB.prepare('UPDATE sessions SET expires=? WHERE token_hash=? AND expires<?').bind(now()+sessionLifetime,tokenHash,now()+sessionRefreshWindow).run()
-  if(isOwner(user)&&(user.role!=='tech'||!user.verified||!user.teacher)){
+  // Renew the session only when it is close to expiring, so most requests make a single read instead of a read and a write.
+  if(user.session_expires<now()+sessionRefreshWindow)await c.env.DB.prepare('UPDATE sessions SET expires=? WHERE token_hash=? AND expires<?').bind(now()+sessionLifetime,tokenHash,now()+sessionRefreshWindow).run()
+  if(isOwner(c.env,user)&&(user.role!=='tech'||!user.verified||!user.teacher)){
     await c.env.DB.prepare("UPDATE users SET role='tech',verified=1,teacher=1 WHERE id=?").bind(user.id).run()
     user={...user,role:'tech',verified:1,teacher:1}
   }
@@ -831,11 +881,27 @@ app.put('/api/admin/accounts/:id',async c=>{
       verified=CASE WHEN lower(email)=? THEN 1 ELSE ? END,
       teacher=CASE WHEN lower(email)=? THEN 1 ELSE COALESCE(?,teacher) END WHERE id=?
     RETURNING id,name,email,role,username,verified,teacher,dob,avatar_media,cover_media,bio,created
-  `).bind(ownerEmail,payload.role,ownerEmail,Number(payload.verified),ownerEmail,payload.teacher===undefined?null:Number(payload.teacher),c.req.param('id')).first<Omit<AdminUserRow,'invite_count'>>()
+  `).bind(ownerEmail(c.env),payload.role,ownerEmail(c.env),Number(payload.verified),ownerEmail(c.env),payload.teacher===undefined?null:Number(payload.teacher),c.req.param('id')).first<Omit<AdminUserRow,'invite_count'>>()
   if(!account)return c.json({error:'Account unavailable.'},404)
   const invites=await c.env.DB.prepare('SELECT COUNT(*) count FROM users WHERE invited_by=?').bind(account.id).first<{count:number}>()
   return c.json(adminAccount({...account,invite_count:invites?.count??0},c.req.url))
 })
+// Video and audio uploads are identified by their first bytes, never by the type the browser claims, and are stored under a fixed type.
+// Without this a client could store any file under a video/* or audio/* label and have it served back with that label.
+async function avType(file:File,kind:'video'|'audio'){
+  if(!file.size||file.size>25*1024*1024)return null
+  const head=new Uint8Array(await file.slice(0,16).arrayBuffer())
+  const text=(from:number,to:number)=>String.fromCharCode(...head.slice(from,to))
+  if(text(4,8)==='ftyp')return text(8,12)==='qt  '&&kind==='video'?'video/quicktime':kind+'/mp4'
+  if(head[0]===0x1a&&head[1]===0x45&&head[2]===0xdf&&head[3]===0xa3)return kind+'/webm'
+  if(text(0,4)==='OggS')return kind+'/ogg'
+  if(kind==='audio'){
+    if(text(0,3)==='ID3'||(head[0]===0xff&&(head[1]&0xe6)===0xe2))return 'audio/mpeg'
+    if(head[0]===0xff&&(head[1]&0xf6)===0xf0)return 'audio/aac'
+    if(text(0,4)==='RIFF'&&text(8,12)==='WAVE')return 'audio/wav'
+  }
+  return null
+}
 async function imageType(file:File,allowGif=false){
   if(!file.size||file.size>5*1024*1024)return null
   const head=new Uint8Array(await file.slice(0,12).arrayBuffer())
@@ -875,7 +941,8 @@ app.get('/api/stories',async c=>{
     WHERE id=?1 OR id IN (SELECT target FROM follows WHERE follower=?1 LIMIT 40)
   `).bind(me.id).all<PublicAccount>()
   const at=now()
-  const groups=await Promise.all(results.map(async author=>({author,stories:(await readStories(c.env,author.id)).filter(story=>storyExpiry(story)>at)})))
+  const lists=await readManyStories(c.env,results.map(author=>author.id))
+  const groups=results.map(author=>({author,stories:(lists.get(author.id)??[]).filter(story=>storyExpiry(story)>at)}))
   const authors=groups.filter(group=>group.stories.length).map(group=>group.author.id)
   const likes=authors.length?(await c.env.DB.prepare(`SELECT story_id,COUNT(*) likes,MAX(user_id=?) liked FROM story_likes WHERE author_id IN (${authors.map(()=>'?').join(',')}) GROUP BY story_id`).bind(me.id,...authors).all<{story_id:string;likes:number;liked:number}>()).results:[]
   const byStory=new Map(likes.map(item=>[item.story_id,item]))
@@ -920,7 +987,7 @@ app.post('/api/stories',async c=>{
       const duration=Number(form?.get('duration')??0)
       const videoLimit=verified?verifiedStoryVideoLimit:storyVideoLimit
       if(isVideo&&(!Number.isFinite(duration)||duration<=0||duration>videoLimit+.25))return c.json({error:'Story videos can be up to '+videoLimit+' seconds.'},400)
-      contentType=isVideo&&upload.size<=25*1024*1024?upload.type:await imageType(upload)
+      contentType=isVideo?await avType(upload,'video'):await imageType(upload)
       if(!contentType||(!isVideo&&upload.size>5*1024*1024))return c.json({error:'Choose an image under 5 MB or a video under 25 MB.'},400)
       kind=isVideo?'video':'image'
       file=upload
@@ -954,8 +1021,8 @@ app.post('/api/logout',async c=>{
   await c.env.DB.prepare('DELETE FROM sessions WHERE token_hash=?').bind(c.get('tokenHash')).run()
   return c.json({ok:true})
 })
-type PostRow=PublicAccount&{post_id:string;body:string;created:number;edited_at:number|null;media:string|null;media_kind:'image'|'video'|null;likes:number;liked:number;comments:number;reposts:number;reposted:number;rank_score:number;search_public:number;article_id:string|null;article_title:string|null;article_summary:string|null;article_excerpt:string|null;article_size:number|null;quote_of:string|null}
-const postProjection=`
+type PostRow=PublicAccount&{post_id:string;body:string;created:number;edited_at:number|null;media:string|null;media_kind:'image'|'video'|null;likes:number;liked:number;comments:number;reposts:number;reposted:number;search_public:number;article_id:string|null;article_title:string|null;article_summary:string|null;article_excerpt:string|null;article_size:number|null;quote_of:string|null}
+const postColumns=`
     SELECT u.id,u.name,u.role,u.username,u.verified,u.teacher,u.dob,u.avatar_media,u.cover_media,u.bio,p.id post_id,p.body,p.created,p.edited_at,p.media,p.media_kind,p.search_public,p.article_id,p.quote_of,
     (SELECT title FROM articles WHERE id=p.article_id) article_title,
     (SELECT summary FROM articles WHERE id=p.article_id) article_summary,
@@ -965,15 +1032,10 @@ const postProjection=`
     EXISTS(SELECT 1 FROM reactions r WHERE r.post_id=p.id AND r.user_id=? AND kind='like') liked,
     (SELECT COUNT(*) FROM comments x WHERE x.post_id=p.id) comments,
     (SELECT COUNT(*) FROM reactions r WHERE r.post_id=p.id AND kind='repost') reposts,
-    EXISTS(SELECT 1 FROM reactions r WHERE r.post_id=p.id AND r.user_id=? AND kind='repost') reposted,
-    ((
-      (SELECT COUNT(*) FROM reactions r WHERE r.post_id=p.id AND kind='like') * 3 +
-      (SELECT COUNT(*) FROM comments x WHERE x.post_id=p.id) * 5 +
-      (SELECT COUNT(*) FROM reactions r WHERE r.post_id=p.id AND kind='repost') * 7 +
-      CASE WHEN u.role='tech' OR u.verified=1 OR u.teacher=1 THEN 4 ELSE 0 END
-    ) * CASE WHEN u.role='tech' OR u.verified=1 OR u.teacher=1 THEN 1.2 ELSE 1 END)
-      / (1 + ((strftime('%s','now') * 1000 - p.created) / 3600000.0) / 12.0) rank_score
-    FROM posts p JOIN users u ON u.id=p.author
+    EXISTS(SELECT 1 FROM reactions r WHERE r.post_id=p.id AND r.user_id=? AND kind='repost') reposted
+`
+const postSource='FROM posts p JOIN users u ON u.id=p.author'
+const postProjection=`${postColumns} ${postSource}
 `
 const articleExcerpt=(text:string)=>{const plain=text.replace(/^\s*(#{1,6}|>|[-*])\s+/gm,'').replace(/\*\*/g,'').replace(/\s+/g,' ').trim();return plain.length>220?plain.slice(0,220).replace(/\s+\S*$/,'')+'…':plain}
 const postView=(r:PostRow,url:string)=>({id:r.post_id,author:person(r,url),body:r.body,time:time(r.created),createdAt:r.created,editedAt:r.edited_at?time(r.edited_at):undefined,likes:r.likes,liked:Boolean(r.liked),comments:r.comments,reposts:r.reposts,reposted:Boolean(r.reposted),searchPublic:Boolean(r.search_public),articleId:r.article_id??undefined,article:r.article_id&&r.article_title!=null?{id:r.article_id,title:r.article_title,summary:r.article_summary??'',excerpt:articleExcerpt(r.article_excerpt??''),minutes:Math.max(1,Math.ceil((r.article_size??0)/1200))}:undefined,kind:r.media_kind??undefined,media:r.media?new URL('/api/media/'+r.media,url).href:undefined})
@@ -1009,11 +1071,19 @@ async function postsView(db:D1Database,rows:PostRow[],viewer:string,url:string){
 app.get('/api/feed',async c=>{
   const id=c.get('user').id
   const following=c.req.query('following')==='1'
-  const {results}=await c.env.DB.prepare(`${postProjection}
-    WHERE ?=0 OR p.author=? OR EXISTS(SELECT 1 FROM follows WHERE follower=? AND target=p.author)
-      OR EXISTS(SELECT 1 FROM post_authors a WHERE a.post_id=p.id AND a.status='accepted' AND (a.user_id=? OR a.user_id IN (SELECT target FROM follows WHERE follower=?)))
-    ORDER BY p.created DESC LIMIT 60
-  `).bind(id,id,Number(following),id,id,id,id).all<PostRow>()
+  // `before` is the createdAt of the last post already shown, so older posts can be requested page by page.
+  const before=Number(c.req.query('before'))
+  const cursor=Number.isFinite(before)&&before>0?before:Number.MAX_SAFE_INTEGER
+  const limit=Math.min(60,Math.max(1,Math.floor(Number(c.req.query('limit')))||60))
+  const {results}=await c.env.DB.prepare(`${postColumns}
+    FROM (
+      SELECT * FROM posts q
+      WHERE q.created<? AND (?=0 OR q.author=? OR EXISTS(SELECT 1 FROM follows WHERE follower=? AND target=q.author)
+        OR EXISTS(SELECT 1 FROM post_authors a WHERE a.post_id=q.id AND a.status='accepted' AND (a.user_id=? OR a.user_id IN (SELECT target FROM follows WHERE follower=?))))
+      ORDER BY q.created DESC LIMIT ?
+    ) p JOIN users u ON u.id=p.author
+    ORDER BY p.created DESC
+  `).bind(id,id,cursor,Number(following),id,id,id,id,limit).all<PostRow>()
   c.header('Cache-Control',c.req.query('refresh')?'no-store':'private, max-age=15, stale-while-revalidate=30')
   return c.json(await postsView(c.env.DB,results,id,c.req.url))
 })
@@ -1064,7 +1134,7 @@ app.post('/api/posts',async c=>{
       const duration=Number(form?.get('duration')??0)
       const videoLimit=hasVerifiedBenefits(user)?verifiedStoryVideoLimit:storyVideoLimit
       if(isVideo&&(!Number.isFinite(duration)||duration<=0||duration>videoLimit+.25))return c.json({error:'Videos can be up to '+videoLimit+' seconds.'},400)
-      const contentType=isVideo&&file.size<=25*1024*1024?file.type:await imageType(file)
+      const contentType=isVideo?await avType(file,'video'):await imageType(file)
       if(!contentType||(!isVideo&&file.size>5*1024*1024))return c.json({error:'Choose a valid image or video.'},400)
       mediaKind=isVideo?'video':'image'
       media=id
@@ -1240,14 +1310,23 @@ app.post('/api/posts/:id/comments',async c=>{
 app.get('/api/people',async c=>{
   const user=c.get('user').id
   const q=clean(c.req.query('q'),60).toLowerCase()
+  // Mutual follows come from one pass over the viewer's own follows. The post count, which is only a tie-breaker, is worked out for the 100 best matches rather than for every account.
   const {results}=await c.env.DB.prepare(`
-    SELECT id,name,role,username,verified,teacher,dob,avatar_media,cover_media,bio,
-      EXISTS(SELECT 1 FROM follows WHERE follower=? AND target=u.id) following,
-      EXISTS(SELECT 1 FROM follows WHERE follower=u.id AND target=?) follows_viewer,
-      (SELECT COUNT(*) FROM follows f1 JOIN follows f2 ON f1.target=f2.target WHERE f1.follower=? AND f2.follower=u.id) mutuals,
-      ((SELECT COUNT(*) FROM posts p WHERE p.author=u.id)+(SELECT COUNT(*) FROM post_authors a WHERE a.user_id=u.id AND a.status='accepted')) post_count
-    FROM users u
-    WHERE id!=? AND (instr(lower(name),?)>0 OR instr(username,?)>0)
+    WITH mutual AS (
+      SELECT f2.follower id,COUNT(*) n FROM follows f1 JOIN follows f2 ON f2.target=f1.target WHERE f1.follower=? GROUP BY f2.follower
+    ), shortlist AS (
+      SELECT u.id,u.name,u.role,u.username,u.verified,u.teacher,u.dob,u.avatar_media,u.cover_media,u.bio,
+        EXISTS(SELECT 1 FROM follows WHERE follower=? AND target=u.id) following,
+        EXISTS(SELECT 1 FROM follows WHERE follower=u.id AND target=?) follows_viewer,
+        COALESCE(m.n,0) mutuals
+      FROM users u LEFT JOIN mutual m ON m.id=u.id
+      WHERE u.id!=? AND (instr(lower(u.name),?)>0 OR instr(u.username,?)>0)
+      ORDER BY following ASC, mutuals DESC, u.name ASC
+      LIMIT 100
+    )
+    SELECT shortlist.*,
+      ((SELECT COUNT(*) FROM posts p WHERE p.author=shortlist.id)+(SELECT COUNT(*) FROM post_authors a WHERE a.user_id=shortlist.id AND a.status='accepted')) post_count
+    FROM shortlist
     ORDER BY following ASC, mutuals DESC, post_count DESC, name ASC
     LIMIT 30
   `).bind(user,user,user,user,q,q.replace(/^@/,'')||q).all<PublicAccount&{following:number;follows_viewer:number;mutuals:number;post_count:number}>()
@@ -1361,7 +1440,7 @@ app.get('/api/rooms',async c=>{
     const callActivity=r.call_connected_at?`${r.call_video?'Video call':'Voice call'} · ${Math.floor(duration/60)}m ${String(duration%60).padStart(2,'0')}s`:r.call_state==='declined'?r.call_caller===user?'Call declined':'Declined '+label:r.call_caller===user?'No answer':'Missed '+label
     return {id:r.room,person:person(r,c.req.url),lastActivity:latestCall?callActivity:r.last_body??undefined,lastActivityAt:r.call_at&&latestCall?time(r.call_at):r.message_at?time(r.message_at):undefined,streak:r.streak_expires?{count:r.streak_count??0,status:r.streak_count?'active':'pending',expiresAt:time(r.streak_expires)}:undefined,unreadCount:r.unread_count}
   })
-  const groupRooms=groupResults.map(r=>({id:r.room,person:{id:r.room,name:r.name,initials:initials(r.name),role:'tech' as const,color:'#C8F53F',detail:'Group · '+r.members+' members',group:true,avatar:r.photo_media?mediaUrl(r.photo_media,c.req.url):undefined},lastActivity:r.last_body??'Group created',lastActivityAt:time(r.message_at??r.created),unreadCount:r.unread_count}))
+  const groupRooms=await Promise.all(groupResults.map(async r=>({id:r.room,person:{id:r.room,name:r.name,initials:initials(r.name),role:'tech' as const,color:'#C8F53F',detail:'Group · '+r.members+' members',group:true,avatar:r.photo_media?await privateMediaUrl(c.env,r.photo_media,c.req.url):undefined},lastActivity:r.last_body??'Group created',lastActivityAt:time(r.message_at??r.created),unreadCount:r.unread_count})))
   const merged=[...directRooms,...groupRooms].sort((a,b)=>Date.parse(b.lastActivityAt??'')-Date.parse(a.lastActivityAt??''))
   const rooms=merged.slice(paged?cursor:0,(paged?cursor:0)+(paged?20:60))
   c.header('Cache-Control','no-store')
@@ -1417,7 +1496,7 @@ app.get('/api/groups/:id',async c=>{
   if(!group)return c.json({error:'Group unavailable.'},404)
   const {results}=await db.prepare(`SELECT u.id,u.name,u.role,u.username,u.verified,u.teacher,u.dob,u.avatar_media,u.cover_media,u.bio,gm.role member_role
     FROM group_members gm JOIN users u ON u.id=gm.user_id WHERE gm.group_id=? ORDER BY gm.role DESC,u.name`).bind(id).all<PublicAccount&{member_role:'admin'|'member'}>()
-  return c.json({id:group.id,name:group.name,photo:group.photo_media?mediaUrl(group.photo_media,c.req.url):undefined,isAdmin:results.some(item=>item.id===viewer&&item.member_role==='admin'),inviteCode:group.invite_code??undefined,members:results.map(item=>({person:person(item,c.req.url),role:item.member_role,owner:item.id===group.owner}))})
+  return c.json({id:group.id,name:group.name,photo:group.photo_media?await privateMediaUrl(c.env,group.photo_media,c.req.url):undefined,isAdmin:results.some(item=>item.id===viewer&&item.member_role==='admin'),inviteCode:group.invite_code??undefined,members:results.map(item=>({person:person(item,c.req.url),role:item.member_role,owner:item.id===group.owner}))})
 })
 app.post('/api/groups/:id/members',async c=>{
   const id=c.req.param('id'),viewer=c.get('user').id,db=c.env.DB
@@ -1453,7 +1532,7 @@ app.post('/api/groups/join/:code',async c=>{
   if(!group)return c.json({error:'This group invite is invalid or expired.'},404)
   await db.prepare("INSERT INTO group_members(group_id,user_id,joined,role) VALUES (?,?,?,'member') ON CONFLICT DO NOTHING").bind(group.id,user,now()).run()
   const count=await db.prepare('SELECT COUNT(*) count FROM group_members WHERE group_id=?').bind(group.id).first<{count:number}>()
-  return c.json({id:group.id,person:{id:group.id,name:group.name,initials:initials(group.name),role:'tech',color:'#C8F53F',detail:'Group · '+(count?.count??1)+' members',group:true,avatar:group.photo_media?mediaUrl(group.photo_media,c.req.url):undefined}})
+  return c.json({id:group.id,person:{id:group.id,name:group.name,initials:initials(group.name),role:'tech',color:'#C8F53F',detail:'Group · '+(count?.count??1)+' members',group:true,avatar:group.photo_media?await privateMediaUrl(c.env,group.photo_media,c.req.url):undefined}})
 })
 app.put('/api/groups/:id/photo',async c=>{
   const id=c.req.param('id'),viewer=c.get('user').id,db=c.env.DB
@@ -1466,7 +1545,7 @@ app.put('/api/groups/:id/photo',async c=>{
   await c.env.MEDIA.put(media,await upload.arrayBuffer(),{httpMetadata:{contentType}})
   await db.prepare('UPDATE chat_groups SET photo_media=? WHERE id=?').bind(media,id).run()
   if(previous?.photo_media)c.executionCtx.waitUntil(c.env.MEDIA.delete(previous.photo_media))
-  return c.json({url:mediaUrl(media,c.req.url)})
+  return c.json({url:await privateMediaUrl(c.env,media,c.req.url)})
 })
 type WhotRow={id:string;invited_by:string;accepted:number;version:number;state:string}
 function whotView(row:WhotRow,user:string){
@@ -1558,7 +1637,7 @@ app.get('/api/rooms/:id/messages',async c=>{
   for(const entry of reactionRows.results)reactionsByMessage.set(entry.message_id,[...(reactionsByMessage.get(entry.message_id)??[]),{userId:entry.user_id,emoji:entry.emoji}])
   const viewer=c.get('user').id
   const items=[
-    ...messages.results.map(r=>{const kind=r.media_type??r.media_kind;return {...note(r,c.req.url),readAt:r.read_at?time(r.read_at):undefined,createdAt:time(r.created),reply:replyView(r),reactions:reactionsByMessage.get(r.note_id),chatMedia:r.media&&!r.view_once&&kind?{kind,url:mediaUrl(r.media,c.req.url)}:undefined,viewOnce:r.view_once&&kind&&kind!=='audio'?{kind,opened:Boolean(r.viewed_at),canOpen:r.id!==viewer&&!r.viewed_at}:undefined}}),
+    ...await Promise.all(messages.results.map(async r=>{const kind=r.media_type??r.media_kind;return {...note(r,c.req.url),readAt:r.read_at?time(r.read_at):undefined,createdAt:time(r.created),reply:replyView(r),reactions:reactionsByMessage.get(r.note_id),chatMedia:r.media&&!r.view_once&&kind?{kind,url:await privateMediaUrl(c.env,r.media,c.req.url)}:undefined,viewOnce:r.view_once&&kind&&kind!=='audio'?{kind,opened:Boolean(r.viewed_at),canOpen:r.id!==viewer&&!r.viewed_at}:undefined}})),
     ...calls.results.map(r=>{
       const connected=!!r.connected_at
       const label=r.video?'Video call':'Voice call'
@@ -1603,7 +1682,7 @@ app.post('/api/rooms/:id/messages',async c=>{
     if(viewOnce&&mediaKind==='audio')return c.json({error:'Voice notes are sent as normal chat media.'},400)
     const duration=Number(form?.get('duration')??0)
     if(viewOnce&&mediaKind==='video'&&(!Number.isFinite(duration)||duration<=0||duration>10.25))return c.json({error:'View-once videos can be up to 10 seconds.'},400)
-    contentType=mediaKind!=='image'&&upload.size<=25*1024*1024?upload.type:await imageType(upload)
+    contentType=mediaKind==='image'?await imageType(upload):await avType(upload,mediaKind)
     const limit=mediaKind==='image'?5:25
     if(upload.size>limit*1024*1024)return c.json({error:'This file is still too large after compression.'},400)
     if(!contentType)return c.json({error:'This file type isn’t supported. Use a JPEG, PNG or WebP photo, or an MP4 video.'},400)
@@ -1631,7 +1710,7 @@ app.post('/api/rooms/:id/messages',async c=>{
       await Promise.all(results.map(item=>createNotification(c.env,c.executionCtx,c.env.DB,item.user_id,author.id,'message',room,'sent a message in '+group.name,'room:'+room)))
     }
   }
-  const response={...message,chatMedia:message.chatMedia&&media?{...message.chatMedia,url:mediaUrl(media,c.req.url)}:undefined}
+  const response={...message,chatMedia:message.chatMedia&&media?{...message.chatMedia,url:await privateMediaUrl(c.env,media,c.req.url)}:undefined}
   c.executionCtx.waitUntil(c.env.ROOMS.getByName(room).fetch('https://room.internal/notify',{method:'POST',body:JSON.stringify(response)}))
   return c.json(response,201)
 })
@@ -1760,6 +1839,18 @@ app.put('/api/calls/:id/end',async c=>{
   const result=await c.env.DB.prepare('UPDATE calls SET state=?,ended_at=? WHERE id=? AND state NOT IN (\'ended\',\'declined\')').bind(user===row.callee&&row.state!=='answered'?'declined':'ended',now(),id).run()
   if(result.meta.changes)c.executionCtx.waitUntil(c.env.ROOMS.getByName(row.room).fetch('https://room.internal/notify',{method:'POST',body:JSON.stringify({type:'call-history',id})}))
   return c.json({ok:true})
+})
+app.post('/api/rooms/:id/socket-ticket',async c=>{
+  const room=c.req.param('id')
+  const user=c.get('user').id
+  if(!await member(c.env.DB,room,user))return c.json({error:'Conversation unavailable.'},404)
+  const bytes=crypto.getRandomValues(new Uint8Array(32))
+  const ticket=Array.from(bytes,byte=>byte.toString(16).padStart(2,'0')).join('')
+  await c.env.DB.batch([
+    c.env.DB.prepare('DELETE FROM socket_tickets WHERE expires<?').bind(now()),
+    c.env.DB.prepare('INSERT INTO socket_tickets(token_hash,user_id,room_id,expires) VALUES (?,?,?,?)').bind(await hash(ticket),user,room,now()+30000),
+  ])
+  return c.json({ticket})
 })
 app.get('/api/rooms/:id/socket',async c=>{
   const room=c.req.param('id')

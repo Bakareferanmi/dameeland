@@ -3,9 +3,13 @@ const defaultApi = 'https://dameeland-api.bakareferanmi96.workers.dev'
 
 export type SearchFunction = {request: Request; env?: {PUBLIC_API_ORIGIN?: string}}
 
-export async function publicApi({env}: SearchFunction, path: string) {
+// Crawlers and link-preview bots hit these pages constantly, so successful lookups are kept at Cloudflare's edge for a few minutes
+// instead of reaching the Worker and database each time. A change to a post or profile can take up to `seconds` to show on its public page.
+export async function publicApi({env}: SearchFunction, path: string, seconds = 300) {
   try {
-    return await fetch(new URL('/api/public/' + path, env?.PUBLIC_API_ORIGIN || defaultApi))
+    return await fetch(new URL('/api/public/' + path, env?.PUBLIC_API_ORIGIN || defaultApi), {
+      cf: {cacheEverything: true, cacheTtlByStatus: {'200-299': seconds, '404': 60, '500-599': 0}},
+    } as RequestInit)
   } catch {
     return new Response(null, {status: 503})
   }

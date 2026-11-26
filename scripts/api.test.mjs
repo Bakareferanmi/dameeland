@@ -30,9 +30,10 @@ const oneMessage=socket=>new Promise((resolve,reject)=>{
   const timer=setTimeout(()=>reject(new Error('Timed out waiting for Durable Object broadcast')),5000)
   socket.addEventListener('message',event=>{clearTimeout(timer);resolve(JSON.parse(event.data))},{once:true})
 })
-const openSocket=(path,token,origin)=>new Promise((resolve,reject)=>{
+const socketTicket=async(path,token)=>(await request(path+'-ticket',{token,method:'POST'})).ticket
+const openSocket=(path,token,origin,ticket)=>new Promise(async(resolve,reject)=>{
   const socket=new WebSocket(base.replace(/^http/,'ws')+'/api'+path,{
-    protocols:['dameeland','ticket.'+token],
+    protocols:['dameeland','ticket.'+(ticket??await socketTicket(path,token))],
     headers:origin?{Origin:origin}:{},
   })
   const timer=setTimeout(()=>{socket.close();reject(new Error('WebSocket handshake timed out'))},5000)
@@ -183,6 +184,16 @@ test('chat WebSockets allow both production sites and native clients',async()=>{
     const socket=await openSocket(path,tobi.token,origin)
     socket.close()
   }
+  // Tickets are single use, bound to one room, and the session token itself is not accepted in their place.
+  const used=await socketTicket(path,tobi.token)
+  ;(await openSocket(path,tobi.token,undefined,used)).close()
+  await assert.rejects(openSocket(path,tobi.token,undefined,used),/handshake failed/)
+  await assert.rejects(openSocket(path,tobi.token,undefined,tobi.token),/handshake failed/)
+  const otherRoom=await request('/rooms',{token:tobi.token,method:'POST',body:{target:(await create('Third Qa')).user.id}})
+  await assert.rejects(openSocket(path,tobi.token,undefined,await socketTicket('/rooms/'+otherRoom.id+'/socket',tobi.token)),/handshake failed/)
+  const outsider=await create('Out Sider')
+  await request(path+'-ticket',{token:outsider.token,method:'POST',status:404})
+  await request(path+'-ticket',{method:'POST',status:401})
 })
 test('message read receipts and call invitations work outside an open chat',async()=>{
   const caller=await create('Call Sender')
@@ -472,6 +483,31 @@ test('local Worker persists accounts, social activity, media, and private realti
     assert.equal((await event).id,message.id)
     assert.equal((await request(roomPath+'/messages',{token:tobi.token}))[0].body,'Ready for the quiz?')
   }finally{socket.close()}
+  // Chat media is private: only the signed link the server hands to room members works, and it cannot be edited or reused for another file.
+  const chatForm=()=>{const form=new FormData();form.append('image',new Blob([Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jA5sAAAAASUVORK5CYII=','base64')],{type:'image/png'}),'chat.png');return form}
+  const sentImage=await request(roomPath+'/messages',{token:ada.token,method:'POST',form:chatForm(),status:201})
+  const signed=new URL(sentImage.chatMedia.url)
+  assert.ok(signed.searchParams.get('sig')&&signed.searchParams.get('exp'),'chat media link is signed')
+  assert.equal((await fetch(signed)).status,200)
+  assert.match((await fetch(signed)).headers.get('Cache-Control'),/private/)
+  const bare=new URL(signed);bare.search=''
+  assert.equal((await fetch(bare)).status,404)
+  const forged=new URL(signed);forged.searchParams.set('sig','0'.repeat(32))
+  assert.equal((await fetch(forged)).status,404)
+  const stretched=new URL(signed);stretched.searchParams.set('exp',String(Number(signed.searchParams.get('exp'))+86400000))
+  assert.equal((await fetch(stretched)).status,404)
+  const listedImage=(await request(roomPath+'/messages',{token:tobi.token})).find(item=>item.id===sentImage.id)
+  assert.equal((await fetch(listedImage.chatMedia.url)).status,200)
+  // Video and audio are checked by their first bytes, not by the type the client declares.
+  const avForm=(field,bytes,type,name)=>{const form=new FormData();form.append(field,new Blob([bytes],{type}),name);return form}
+  const mp4=Buffer.concat([Buffer.from([0,0,0,24]),Buffer.from('ftypmp42'),Buffer.alloc(16)])
+  await request(roomPath+'/messages',{token:ada.token,method:'POST',form:avForm('video',Buffer.from('<script>alert(1)</script>'),'video/mp4','x.mp4'),status:400})
+  await request(roomPath+'/messages',{token:ada.token,method:'POST',form:avForm('audio',Buffer.from('<html></html>'),'audio/webm','x.webm'),status:400})
+  await request(roomPath+'/messages',{token:ada.token,method:'POST',form:avForm('video',Buffer.from('ID3'+'x'.repeat(30)),'video/mp4','x.mp4'),status:400})
+  const sentVideo=await request(roomPath+'/messages',{token:ada.token,method:'POST',form:avForm('video',mp4,'video/x-made-up','clip.mp4'),status:201})
+  assert.equal((await fetch(sentVideo.chatMedia.url)).headers.get('Content-Type'),'video/mp4')
+  const sentVoice=await request(roomPath+'/messages',{token:ada.token,method:'POST',form:avForm('audio',Buffer.from([0x1a,0x45,0xdf,0xa3,...Buffer.alloc(24)]),'audio/webm;codecs=opus','voice.webm'),status:201})
+  assert.equal((await fetch(sentVoice.chatMedia.url)).headers.get('Content-Type'),'audio/webm')
   const caller=await openSocket(roomPath+'/socket',ada.token)
   const callee=await openSocket(roomPath+'/socket',tobi.token)
   try{
@@ -510,4 +546,22 @@ test('local Worker persists accounts, social activity, media, and private realti
   assert.equal((await request('/birthdays',{token:tobi.token})).find(item=>item.person.id===ada.user.id).wished,true)
   const wishMessages=await request('/rooms/'+wish.room+'/messages',{token:ada.token})
   assert.match(wishMessages.at(-1).body,/^Happy birthday, Ada/)
+})
+
+test('feed pages with a before cursor and people search ranks shortlisted accounts',async()=>{
+  const author=await create('Pager Author')
+  const reader=await create('Pager Reader')
+  const ids=[]
+  for(const text of ['one','two','three']){
+    ids.push((await request('/posts',{token:author.token,method:'POST',body:{body:text},status:201})).id)
+    await new Promise(done=>setTimeout(done,5))
+  }
+  const first=await request('/feed?limit=2',{token:reader.token})
+  assert.equal(first.length,2)
+  const older=await request('/feed?limit=2&before='+first.at(-1).createdAt,{token:reader.token})
+  assert.ok(older.every(post=>post.createdAt<first.at(-1).createdAt))
+  assert.ok(!older.some(post=>first.some(seen=>seen.id===post.id)))
+  const found=await request('/people?q='+encodeURIComponent(author.username),{token:reader.token})
+  assert.ok(found.some(person=>person.id===author.user.id))
+  assert.ok(!found.some(person=>person.id===reader.user.id))
 })
