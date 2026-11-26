@@ -5,7 +5,7 @@ const namespace = 'http://www.sitemaps.org/schemas/sitemap/0.9'
 function xml(root: 'sitemapindex' | 'urlset', entry: 'sitemap' | 'url', paths: string[]) {
   const entries = paths.map(path => `<${entry}><loc>${origin}${path}</loc></${entry}>`).join('\n')
   return new Response(`<?xml version="1.0" encoding="UTF-8"?>\n<${root} xmlns="${namespace}">\n${entries}\n</${root}>\n`, {
-    headers: {'Content-Type': 'application/xml; charset=utf-8', 'Cache-Control': 'no-store'},
+    headers: {'Content-Type': 'application/xml; charset=utf-8', 'Cache-Control': 'public, max-age=1800'},
   })
 }
 
