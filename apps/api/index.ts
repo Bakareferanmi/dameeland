@@ -496,6 +496,16 @@ async function readStories(env:Env,user:string){
   const list=await env.STORIES.get<StoryRecord[]>(storyKey(user),'json')
   return Array.isArray(list)?list:[]
 }
+// Reads many authors' stories in one KV operation per 100 keys instead of one operation per author, which keeps the stories tray well under the per-request subrequest limit.
+async function readManyStories(env:Env,users:string[]){
+  const stories=new Map<string,StoryRecord[]>()
+  for(let start=0;start<users.length;start+=100){
+    const chunk=users.slice(start,start+100)
+    const found=await env.STORIES.get<StoryRecord[]>(chunk.map(storyKey),'json')
+    chunk.forEach(user=>{const list=found.get(storyKey(user));stories.set(user,Array.isArray(list)?list:[])})
+  }
+  return stories
+}
 // Stories live only in KV (one key per author) and R2, never in D1. The key expires on its own and
 // every read also filters by timestamp, so a story is never served after its account-specific lifetime even if cleanup lags.
 async function writeStories(env:Env,user:string,list:StoryRecord[]){
@@ -897,7 +907,8 @@ app.get('/api/stories',async c=>{
     WHERE id=?1 OR id IN (SELECT target FROM follows WHERE follower=?1 LIMIT 40)
   `).bind(me.id).all<PublicAccount>()
   const at=now()
-  const groups=await Promise.all(results.map(async author=>({author,stories:(await readStories(c.env,author.id)).filter(story=>storyExpiry(story)>at)})))
+  const lists=await readManyStories(c.env,results.map(author=>author.id))
+  const groups=results.map(author=>({author,stories:(lists.get(author.id)??[]).filter(story=>storyExpiry(story)>at)}))
   const authors=groups.filter(group=>group.stories.length).map(group=>group.author.id)
   const likes=authors.length?(await c.env.DB.prepare(`SELECT story_id,COUNT(*) likes,MAX(user_id=?) liked FROM story_likes WHERE author_id IN (${authors.map(()=>'?').join(',')}) GROUP BY story_id`).bind(me.id,...authors).all<{story_id:string;likes:number;liked:number}>()).results:[]
   const byStory=new Map(likes.map(item=>[item.story_id,item]))
