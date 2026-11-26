@@ -63,11 +63,12 @@ function usePressScale(disabled=false){
   return {scale,onPressIn:()=>animate(.94),onPressOut:()=>animate(1)}
 }
 
-export function Button({label,onPress,variant='primary',disabled=false,leading,trailing}:{label:string;onPress:()=>void;variant?:'primary'|'secondary'|'fun'|'plain'|'danger';disabled?:boolean;leading?:Glyph;trailing?:Glyph}){
+export function Button({label,onPress,variant='primary',disabled=false,leading,trailing,textColor}:{label:string;onPress:()=>void;variant?:'primary'|'secondary'|'fun'|'plain'|'danger';disabled?:boolean;leading?:Glyph;trailing?:Glyph;textColor?:string}){
   const {theme}=useDesign()
   const {scale,...press}=usePressScale(disabled)
   const colors={primary:[theme.purple,'#fff'],secondary:[theme.chip,theme.ink],fun:[lime,'#1B1233'],plain:['transparent',theme.text],danger:[danger,'#fff']}
-  const [backgroundColor,color]=colors[variant]
+  const [backgroundColor,defaultColor]=colors[variant]
+  const color=textColor??defaultColor
   return <Pressable accessibilityRole="button" accessibilityLabel={label} disabled={disabled} onPress={onPress} {...press}
     style={({pressed})=>({...row,gap:8,minHeight:46,minWidth:44,paddingHorizontal:17,borderRadius:14,justifyContent:'center',backgroundColor,opacity:disabled?.5:pressed?.75:1})}>
     <Animated.View style={{...row,gap:8,justifyContent:'center',transform:[{scale}]}}>
