@@ -32,12 +32,12 @@ export function LinkedText({children,size=14,weight=500,color,linkColor}:{childr
     if(!/^(?:https?:\/\/|www\.)/i.test(piece)){
       const parts=piece.split(/(@[a-zA-Z0-9_]{3,24}(?![\w@]))/g)
       if(parts.length===1)return piece
-      return <React.Fragment key={index}>{parts.map((part,at)=>part.startsWith('@')&&!/[\w@]$/.test(parts[at-1]??' ')?<Text key={at} style={[{color:linkColor??theme.purple},font(800)]}>{part}</Text>:part)}</React.Fragment>
+      return <React.Fragment key={index}>{parts.map((part,at)=>part.startsWith('@')&&!/[\w@]$/.test(parts[at-1]??' ')?<Text key={at} style={[{color:linkColor??theme.ink},font(800)]}>{part}</Text>:part)}</React.Fragment>
     }
     const match=piece.match(/^(.*?)([.,!?;:)}\]]*)$/)
     const label=match?.[1]??piece,suffix=match?.[2]??''
     const url=/^www\./i.test(label)?'https://'+label:label
-    return <React.Fragment key={index}><Text accessibilityRole="link" accessibilityLabel={'Open '+label} onPress={event=>{event.stopPropagation?.();void Linking.openURL(url)}} style={[{color:linkColor??theme.purple,textDecorationLine:'underline'},font(800)]}>{label}</Text>{suffix}</React.Fragment>
+    return <React.Fragment key={index}><Text accessibilityRole="link" accessibilityLabel={'Open '+label} onPress={event=>{event.stopPropagation?.();void Linking.openURL(url)}} style={[{color:linkColor??theme.ink,textDecorationLine:'underline'},font(800)]}>{label}</Text>{suffix}</React.Fragment>
   })}</Text>
 }
 
