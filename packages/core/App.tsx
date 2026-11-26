@@ -36,7 +36,7 @@ function ChatWhot({base,token,room,opponent}:{base:string;token:string;room:stri
   const [open,setOpen]=useState(false)
   return <>
     <IconButton name="game" label="Play Whot together" onPress={()=>setOpen(true)}/>
-    {open&&<Modal visible animationType="fade" onRequestClose={()=>setOpen(false)}>
+    {open&&<Modal visible animationType="fade" onRequestClose={()=>setOpen(false)} {...({accessibilityLabel:'Game'} as object)}>
       <ChatWhotPanel close={()=>setOpen(false)} {...{base,token,room,opponent}}/>
     </Modal>}
   </>
@@ -103,6 +103,8 @@ type Props={
   onReady?:()=>void;
 }
 type Overlay={kind:'connections';list:FollowListKind;person:Person}|{kind:'comments'|'share'|'post'|'editPost';post:Post;targetId?:string}|{kind:'editMessage';message:Note}|{kind:'article';articleId:string}|{kind:'story';person:Person}|{kind:'photo';person:Person;photo:'avatar'|'cover'}|{kind:'create'|'createGroup'|'groupSettings'|'wish'|'newStory'|'editProfile'|'editUsername'}|{kind:'call';video:boolean;person:Person;ringing?:boolean;incoming?:boolean}
+// Dialogs need an accessible name so screen readers announce what opened.
+const overlayNames:Record<string,string>={connections:'People',comments:'Comments',share:'Share post',post:'Post',editPost:'Edit post',editMessage:'Edit message',article:'Article',story:'Story',photo:'Photo',create:'Create post',createGroup:'New group',groupSettings:'Group settings',wish:'Birthday wish',newStory:'New story',editProfile:'Edit profile',editUsername:'Change username',call:'Call'}
 type PageEntry={page:Page;profile:Person;room:Room|null;overlays:Overlay[];scrollY:number;lessonId:string;practiceTopic:PracticeTopic}
 const tabs:[Page,Glyph][]=[['Home','home'],['Learn','book'],['Explore','search'],['Play','game']]
 const localRooms=people.filter(p=>p.id in initialChats).map(person=>({id:person.id,person}))
@@ -352,14 +354,14 @@ function PostCard({post,onReact,onOverlay,onProfile,onArticle,onQuote,onInvite,d
         <Text numberOfLines={1} style={[{color:theme.text,fontSize:14},font(800)]}>{authors.map((entry,index)=>(index===0?'':index===authors.length-1?' & ':', ')+firstName(entry.person.name)+(entry.status==='pending'?' (invited)':'')).join('')}</Text>
         <Copy color={theme.muted} size={12}>{shortTime(post.time)}{post.editedAt?' · Edited':''}</Copy>
       </View>
-    </View>:<Pressable accessibilityRole="button" accessibilityLabel={'Open '+displayHandle(post.author)+' profile'} onPress={()=>onProfile(post.author)} style={row}><Avatar person={post.author} size={40}/><View style={{flex:1}}><PersonName person={post.author}/><Copy color={theme.muted} size={12}>{shortTime(post.time)}{post.editedAt?' · Edited':''}</Copy>{team.length>0&&<Text numberOfLines={2} style={{color:theme.muted,fontSize:12,lineHeight:17}}>with {team.map((entry,index)=>(index?', ':'')+'@'+displayHandle(entry.person)+(entry.status==='pending'?' (invited)':'')).join('')}</Text>}</View></Pressable>}
+    </View>:<Pressable accessibilityRole="button" accessibilityLabel={'Open '+displayHandle(post.author)+' profile'} onPress={()=>onProfile(post.author)} style={{...row,minHeight:44}}><Avatar person={post.author} size={40}/><View style={{flex:1}}><PersonName person={post.author}/><Copy color={theme.muted} size={12}>{shortTime(post.time)}{post.editedAt?' · Edited':''}</Copy>{team.length>0&&<Text numberOfLines={2} style={{color:theme.muted,fontSize:12,lineHeight:17}}>with {team.map((entry,index)=>(index?', ':'')+'@'+displayHandle(entry.person)+(entry.status==='pending'?' (invited)':'')).join('')}</Text>}</View></Pressable>}
     {post.article?<Pressable accessibilityRole="button" accessibilityLabel={'Read article: '+post.article.title} onPress={()=>onArticle?.(post.article!.id)} style={({pressed})=>({borderRadius:16,borderWidth:1,borderColor:theme.border,backgroundColor:theme.chip,padding:14,gap:8,opacity:pressed?.8:1})}>
       <View style={{...row,gap:6}}><Icon name="type" size={14} color={theme.purple}/><Copy size={11} weight={800} color={theme.purple}>PRESS CLUB · {post.article.minutes} MIN READ</Copy></View>
       <Text numberOfLines={3} style={{fontFamily:articleSerif,fontSize:21,lineHeight:28,fontWeight:'800',color:theme.text}}>{post.article.title}</Text>
       {!!post.article.summary&&<Text numberOfLines={2} style={{fontFamily:articleSerif,fontSize:15,lineHeight:22,color:theme.text}}>{post.article.summary}</Text>}
       {!!post.article.excerpt&&<Text numberOfLines={3} style={{fontFamily:articleSerif,fontSize:14,lineHeight:21,color:theme.muted}}>{post.article.excerpt}</Text>}
       <Copy weight={800} color={theme.purple}>Read full article →</Copy>
-    </Pressable>:!!post.body&&(detail?<LinkedText size={15}>{post.body}</LinkedText>:<Pressable accessibilityRole="button" accessibilityLabel="Open post details" onPress={()=>onOverlay({kind:'post',post})} style={{minHeight:32,justifyContent:'center'}}><LinkedText size={15}>{post.body}</LinkedText></Pressable>)}
+    </Pressable>:!!post.body&&(detail?<LinkedText size={15}>{post.body}</LinkedText>:<Pressable accessibilityRole="button" accessibilityLabel="Open post details" onPress={()=>onOverlay({kind:'post',post})} style={{minHeight:44,justifyContent:'center'}}><LinkedText size={15}>{post.body}</LinkedText></Pressable>)}
     {post.media?<UploadedMedia post={post} eager={detail}/>:post.kind&&<PreviewMedia kind={post.kind}/>}
     {post.quote&&<QuoteEmbed quote={post.quote} onPress={post.quote.unavailable?undefined:()=>onOverlay({kind:'post',post:{...post,id:post.quote!.id}})}/>}
     {!post.article&&!!post.articleId&&!!onArticle&&<Button label="Read the full article" leading="type" onPress={()=>onArticle(post.articleId!)}/>}
@@ -2058,7 +2060,7 @@ export default function App(props:Props){
       <Pressable accessibilityRole="button" accessibilityLabel="View cover photo" onPress={()=>selectOverlay({kind:'photo',person:profile,photo:'cover'})} style={{height:136,backgroundColor:'#4F25D6'}}>{profile.cover&&<Image accessibilityLabel="Cover photo" source={{uri:profile.cover}} resizeMode="cover" style={{width:'100%',height:'100%'}}/>}</Pressable>
       <View style={{padding:18,paddingTop:0,gap:14}}>
         <Pressable accessibilityRole="button" accessibilityLabel="View profile picture" onPress={()=>selectOverlay({kind:'photo',person:profile,photo:'avatar'})} style={{alignSelf:'flex-start',marginTop:-40}}><Avatar person={profile} size={74} ring/></Pressable>
-        <View style={{gap:4}}><Copy size={27} weight={800}>{displayHandle(profile)}</Copy>{!!profile.bio&&<Copy color={theme.muted}>{profile.bio}</Copy>}{!demo&&<View style={{...row,gap:5}}><View style={{width:7,height:7,borderRadius:4,backgroundColor:profilePresence?.online?'#2FB66D':theme.muted}}/><Copy size={12} color={profilePresence?.online?'#2FB66D':theme.muted}>{profilePresence?.online?'Online':profilePresence?.lastSeen?'Last seen '+shortTime(profilePresence.lastSeen||''):'Offline'}</Copy></View>}</View>
+        <View style={{gap:4}}><Copy size={27} weight={800}>{displayHandle(profile)}</Copy>{!!profile.bio&&<Copy color={theme.muted}>{profile.bio}</Copy>}{!demo&&<View style={{...row,gap:5}}><View style={{width:7,height:7,borderRadius:4,backgroundColor:profilePresence?.online?'#2FB66D':theme.muted}}/><Copy size={12} color={profilePresence?.online?theme.text:theme.muted}>{profilePresence?.online?'Online':profilePresence?.lastSeen?'Last seen '+shortTime(profilePresence.lastSeen||''):'Offline'}</Copy></View>}</View>
         <View style={{...row,gap:22,borderTopWidth:1,borderColor:theme.border,paddingTop:12}}>
           {([{label:'Followers',count:followers},{label:'Following',count:following}]).map(({label,count})=>
             <Pressable key={label} accessibilityRole="button" accessibilityLabel={'View '+label.toLowerCase()+(count===undefined?'':' ('+count+')')} onPress={()=>selectOverlay({kind:'connections',list:label==='Followers'?'followers':'following',person:profile})} style={{gap:2,minWidth:72,minHeight:48}}>
@@ -2346,9 +2348,9 @@ export default function App(props:Props){
         </ScrollView>}
       </View>}
     {toast&&!overlay&&<Toast key={toast.id} item={toast} reduced={reduced} onDismiss={dismissToast} bottom={desktop?24:page==='Chat'?146:76}/>}
-    <Modal presentationStyle="fullScreen" visible={overlay!==null} animationType={reduced||modalSlides.current?'none':'fade'} onRequestClose={modalClose}>
+    <Modal presentationStyle="fullScreen" visible={overlay!==null} animationType={reduced||modalSlides.current?'none':'fade'} onRequestClose={modalClose} {...({accessibilityLabel:overlayNames[overlay?.kind??'']??'Dialog'} as object)}>
       <ModalViewport color={story?(personalStory?.background??(personalStory?.image?'#120D1F':'#4F25D6')):theme.bg}>
-      {overlay?.kind==='call'&&!overlay.ringing?<CallPreview video={overlay.video} person={overlay.person} onClose={modalClose}/>:story?<View accessibilityViewIsModal style={{flex:1,backgroundColor:personalStory?.background??(personalStory?.image?'#120D1F':'#4F25D6'),padding:18}}>
+      {overlay?.kind==='call'&&!overlay.ringing?<CallPreview video={overlay.video} person={overlay.person} onClose={modalClose}/>:story?<View accessibilityViewIsModal accessibilityLabel={overlayNames[overlay?.kind??'']??'Dialog'} style={{flex:1,backgroundColor:personalStory?.background??(personalStory?.image?'#120D1F':'#4F25D6'),padding:18}}>
         <View style={{width:'100%',maxWidth:640,alignSelf:'center',flex:1,gap:14}}>
           <View accessibilityLabel={`Story ${activeIndex+1} of ${liveGroup?.stories.length??1}`} style={{...row,gap:7}}><View style={{...row,flex:1,gap:4}}>{Array.from({length:liveGroup?.stories.length??1},(_,index)=><View key={index} style={{flex:1,height:3,borderRadius:3,backgroundColor:index<=activeIndex?lime:'rgba(255,255,255,.35)'}}/>)}</View><Copy color="#fff" size={11} weight={800}>{activeIndex+1}/{liveGroup?.stories.length??1}</Copy></View>
           <View style={spread}>
@@ -2379,7 +2381,7 @@ export default function App(props:Props){
             <Button label="Delete story" variant="danger" disabled={busy} onPress={()=>void deleteStory(liveItem.id)}/>
           </View>}
         </View>
-      </View>:<View accessibilityViewIsModal style={{flex:1,backgroundColor:theme.bg}}>
+      </View>:<View accessibilityViewIsModal accessibilityLabel={overlayNames[overlay?.kind??'']??'Dialog'} style={{flex:1,backgroundColor:theme.bg}}>
         <View style={{backgroundColor:theme.card,borderBottomWidth:1,borderColor:theme.border}}>
           <View style={{...row,width:'100%',maxWidth:720,alignSelf:'center',minHeight:60,paddingHorizontal:16}}>
             <IconButton name={overlayHistory.current.length?'back':'close'} label={overlayHistory.current.length?'Back':'Close'} onPress={modalClose}/>
@@ -2396,7 +2398,7 @@ export default function App(props:Props){
       </View>}
       </ModalViewport>
     </Modal>
-    <Modal presentationStyle="fullScreen" visible={Boolean(openedOnce)} animationType="fade" onRequestClose={()=>setOpenedOnce(null)}>
+    <Modal presentationStyle="fullScreen" visible={Boolean(openedOnce)} animationType="fade" onRequestClose={()=>setOpenedOnce(null)} {...({accessibilityLabel:'View once media'} as object)}>
       <ModalViewport color="#120D1F">
         <View style={{flex:1,padding:16,gap:16,justifyContent:'center'}}>
           <View style={{position:'absolute',right:12,top:12,zIndex:2}}><IconButton name="close" label="Close view-once media" tint="#fff" onPress={()=>setOpenedOnce(null)}/></View>
@@ -2405,7 +2407,7 @@ export default function App(props:Props){
         </View>
       </ModalViewport>
     </Modal>
-    <Modal presentationStyle="fullScreen" visible={Boolean(!demo&&page==='Chat'&&room&&roomCall.call&&callMedia)} animationType={reduced?'none':'fade'} onRequestClose={()=>roomCall.end()}>
+    <Modal presentationStyle="fullScreen" visible={Boolean(!demo&&page==='Chat'&&room&&roomCall.call&&callMedia)} animationType={reduced?'none':'fade'} onRequestClose={()=>roomCall.end()} {...({accessibilityLabel:'Call'} as object)}>
       <ModalViewport color="#130D25">
         {room&&roomCall.call&&callMedia&&<RoomCall key={roomCall.call.id} person={room.person} media={callMedia} call={roomCall.call} accept={roomCall.accept} end={()=>roomCall.end()} switchCamera={()=>void roomCall.switchCamera()} canSwitchCamera={roomCall.canSwitchCamera}/>}
       </ModalViewport>
