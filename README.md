@@ -145,6 +145,8 @@ npx playwright install chromium
 npm run test:browser
 ```
 
+The web app falls back to the deployed API when `VITE_API_URL` is unset. For the live signup, posting and logout steps to hit your local Worker, start the web server with an empty value so requests go through the Vite proxy: `VITE_API_URL= npm run dev:web`.
+
 The browser check covers the 390 px layout, desktop navigation, onboarding, social interactions, quiz results and API-backed signup, session restore, posting and logout.
 
 ```bash

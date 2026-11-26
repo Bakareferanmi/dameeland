@@ -129,5 +129,5 @@ export async function api<T>(base:string,path:string,options:RequestInit={},toke
   return result as unknown as T
 }
 
-export {lessons,dailyLesson,subjects,type Subject} from './learningCatalog'
+export {lessons,dailyLesson,lessonsFor,subjects,passMark,practiceTopics,practiceSession,practiceSessionSize,practiceQuestion,practicePool,isSubject,shuffled,type Subject,type Lesson,type Question,type PracticeQuestion,type PracticeTopic} from './learningCatalog'
 

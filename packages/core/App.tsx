@@ -1,5 +1,5 @@
-import {Learning,LearningProgress,StudyLesson} from './Learning'
-import {dailyLesson} from './learningCatalog'
+import {Learning,LearningProgress,Practice,StudyLesson,type PracticeAnswer,type PracticeStat} from './Learning'
+import {dailyLesson,practiceQuestion,type PracticeTopic} from './learningCatalog'
 import {browserCallMedia,RoomCall,useRoomCall,type CallMedia} from './calls'
 import {readCallSignal,type CallSignal} from './callSignal'
 import React,{lazy,Suspense,useCallback,useEffect,useLayoutEffect,useRef,useState} from 'react'
@@ -44,7 +44,7 @@ function ChatWhot({base,token,room,opponent}:{base:string;token:string;room:stri
 
 const sampleFollows:Record<string,string[]>={ada:['tobi','zee'],tobi:['ada','code'],zee:['ada','bello'],bello:['ada'],code:['tobi'],maths:['bello'],squad:['code']}
 
-type Page=ExtraPage|'Home'|'Learn'|'Explore'|'Play'|'Messages'|'Chat'|'Notifications'|'Profile'|'Settings'|'Quiz'|'Admin'|'Press'
+type Page=ExtraPage|'Home'|'Learn'|'Explore'|'Play'|'Messages'|'Chat'|'Notifications'|'Profile'|'Settings'|'Quiz'|'Admin'|'Press'|'Practice'
 type Room={id:string;person:Person;lastActivity?:string;lastActivityAt?:string;streak?:ChatStreak;unreadCount?:number}
 type RoomPage={items:Room[];nextCursor:string|null}
 type MessagePage={items:Note[];nextCursor:string|null}
@@ -105,7 +105,7 @@ type Props={
 type Overlay={kind:'connections';list:FollowListKind;person:Person}|{kind:'comments'|'share'|'post'|'editPost';post:Post;targetId?:string}|{kind:'editMessage';message:Note}|{kind:'article';articleId:string}|{kind:'story';person:Person}|{kind:'photo';person:Person;photo:'avatar'|'cover'}|{kind:'create'|'createGroup'|'groupSettings'|'wish'|'newStory'|'editProfile'|'editUsername'}|{kind:'call';video:boolean;person:Person;ringing?:boolean;incoming?:boolean}
 // Dialogs need an accessible name so screen readers announce what opened.
 const overlayNames:Record<string,string>={connections:'People',comments:'Comments',share:'Share post',post:'Post',editPost:'Edit post',editMessage:'Edit message',article:'Article',story:'Story',photo:'Photo',create:'Create post',createGroup:'New group',groupSettings:'Group settings',wish:'Birthday wish',newStory:'New story',editProfile:'Edit profile',editUsername:'Change username',call:'Call'}
-type PageEntry={page:Page;profile:Person;room:Room|null;overlays:Overlay[];scrollY:number;lessonId:string}
+type PageEntry={page:Page;profile:Person;room:Room|null;overlays:Overlay[];scrollY:number;lessonId:string;practiceTopic:PracticeTopic}
 const tabs:[Page,Glyph][]=[['Home','home'],['Learn','book'],['Explore','search'],['Play','game']]
 const localRooms=people.filter(p=>p.id in initialChats).map(person=>({id:person.id,person}))
 const storyPeople=[people[0],people[3],people[4],people[2],people[1]]
@@ -182,7 +182,7 @@ function Intro({step,onNext,onBack,onSkip,reduced,desktop,showPublicBrand}:{step
   const {font}=useDesign()
   const slide=slides[step]
   const description=showPublicBrand&&step===0
-    ?'Chat with classmates and practise mathematics, English and digital technologies with short lessons.'
+    ?'Chat with classmates and practise ten school subjects with short lessons and quick quizzes.'
     :slide.description
   const illustration:Glyph=(['book','grp','trophy'] as const)[step]
   return <ScrollView style={{backgroundColor:'#4F25D6'}} contentContainerStyle={{flexGrow:1,justifyContent:'center',padding:desktop?48:14}}>
@@ -505,6 +505,8 @@ export default function App(props:Props){
   const [wishes,setWishes]=useState<string[]>([])
   const [lessonId,setLessonId]=useState(()=>dailyLesson().id)
   const [completedLessons,setCompletedLessons]=useState<string[]>([])
+  const [practiceTopic,setPracticeTopic]=useState<PracticeTopic>('Mixed')
+  const [practiceStats,setPracticeStats]=useState<PracticeStat[]>([])
   const [learningError,setLearningError]=useState(false)
   const [learningRetry,setLearningRetry]=useState(0)
   const [profileNameDraft,setProfileNameDraft]=useState('')
@@ -736,7 +738,9 @@ export default function App(props:Props){
     if(demo||!token||page!=='Home')return
     let alive=true
     setLoading(true);setFeedError('')
-    api<Post[]>(base,'/feed?limit='+feedPageSize+(followingOnly?'&following=1':''),{},token)
+    // The feed response is cached for a few seconds. A deliberate refetch (after posting, or Try again) reloads it and replaces the cached copy,
+    // otherwise the new post is missing from this and the next load until the cache expires.
+    api<Post[]>(base,'/feed?limit='+feedPageSize+(followingOnly?'&following=1':''),retry>0?{cache:'reload'}:{},token)
       .then(data=>{if(alive){setPosts(arrangeFeed(data));setFeedHasMore(data.length>=feedPageSize)}})
       .catch(reason=>{if(alive)setFeedError(errorMessage(reason))})
       .finally(()=>{if(alive)setLoading(false)})
@@ -1044,18 +1048,19 @@ export default function App(props:Props){
     setOverlay(null)
     clearComment()
   }
-  function open(next:Page,details?:{profile?:Person;room?:Room;lessonId?:string;articleId?:string}){
-    const sameDestination=next===page&&(!details?.profile||details.profile.id===profile.id)&&(!details?.room||details.room.id===room?.id)&&(!details?.lessonId||details.lessonId===lessonId)
+  function open(next:Page,details?:{profile?:Person;room?:Room;lessonId?:string;practiceTopic?:PracticeTopic;articleId?:string}){
+    const sameDestination=next===page&&(!details?.profile||details.profile.id===profile.id)&&(!details?.room||details.room.id===room?.id)&&(!details?.lessonId||details.lessonId===lessonId)&&(!details?.practiceTopic||details.practiceTopic===practiceTopic)
     const isTab=tabs.some(([tab])=>tab===next)
     if(sameDestination&&!overlay){
       if(isTab)scroll.current?.scrollTo({y:0,animated:!reduced})
       return
     }
-    pageHistory.current.push({page,profile,room,lessonId,scrollY:pageScroll.current,overlays:overlay?[...overlayHistory.current,overlay]:[]})
+    pageHistory.current.push({page,profile,room,lessonId,practiceTopic,scrollY:pageScroll.current,overlays:overlay?[...overlayHistory.current,overlay]:[]})
     if(overlay)dismissOverlays()
     if(details?.profile)setProfile(details.profile)
     if(details?.room)setRoom(details.room)
     if(details?.lessonId)setLessonId(details.lessonId)
+    if(details?.practiceTopic)setPracticeTopic(details.practiceTopic)
     if(next==='Press')setPressArticle(details?.articleId)
     changePage(next,isTab?scrollOffsets.current[next]??0:0)
   }
@@ -1070,6 +1075,7 @@ export default function App(props:Props){
   const startQuiz=()=>open('Quiz')
   const featuredLesson=dailyLesson(clock)
   const openLesson=(id:string)=>open('Lesson',{lessonId:id})
+  const openPractice=(topic:PracticeTopic)=>open('Practice',{practiceTopic:topic})
   useEffect(()=>{
     if(demo||!token)return
     const controller=new AbortController()
@@ -1077,12 +1083,37 @@ export default function App(props:Props){
     api<string[]>(base,'/me/lessons',{signal:controller.signal},token)
       .then(ids=>{if(!controller.signal.aborted)setCompletedLessons(previous=>[...new Set([...previous,...ids])])})
       .catch(()=>{if(!controller.signal.aborted)setLearningError(true)})
+    api<PracticeStat[]>(base,'/me/practice',{signal:controller.signal},token)
+      .then(stats=>{if(!controller.signal.aborted)setPracticeStats(stats)})
+      .catch(()=>{})
     return ()=>controller.abort()
   },[base,demo,token,learningRetry])
-  async function completeLesson(id:string,answer:number){
+  async function completeLesson(id:string,answers:number[]){
     const session=demoSession.current
-    if(!demo)await call('/me/lessons/'+encodeURIComponent(id),json({answer},'PUT'))
+    if(!demo)await call('/me/lessons/'+encodeURIComponent(id),json({answers},'PUT'))
     if(session===demoSession.current)setCompletedLessons(current=>current.includes(id)?current:[...current,id])
+  }
+  async function savePractice(topic:PracticeTopic,answers:PracticeAnswer[]){
+    const session=demoSession.current
+    if(!demo)await call('/me/practice',json({topic,answers},'POST'))
+    if(session!==demoSession.current)return
+    const added=new Map<string,{correct:number;total:number}>()
+    for(const entry of answers){
+      const question=practiceQuestion(entry.id)
+      if(!question)continue
+      const bucket=added.get(question.subject)??{correct:0,total:0}
+      bucket.total++
+      if(entry.answer===question.answer)bucket.correct++
+      added.set(question.subject,bucket)
+    }
+    setPracticeStats(current=>{
+      const merged=new Map(current.map(item=>[item.subject,item]))
+      for(const [subject,value] of added){
+        const previous=merged.get(subject)
+        merged.set(subject,{subject,correct:(previous?.correct??0)+value.correct,total:(previous?.total??0)+value.total,sessions:(previous?.sessions??0)+1})
+      }
+      return [...merged.values()]
+    })
   }
 
   useEffect(()=>{
@@ -1280,7 +1311,7 @@ export default function App(props:Props){
       roomCall.end();pageHistory.current=[];dismissOverlays();setToken('');setUser(me);setPage('Home');setStage('auth');setError('')
       setPosts(props.demo?initialPosts:[]);setNotes({});setCommentStatus({});setChats(props.demo?initialChats:{});setMessageNextCursor({});setRoomsLoading(true);setRoomsNextCursor(null);setFollows({});setProfileStats(null)
       setNotificationItems([]);setNotificationCursor('');setNotificationNextCursor(null);setNotificationHistory([]);setUnread(false);setMessageUnread(0)
-      setRooms(props.demo?localRooms:[]);setRoom(null);setDraft('');setAttachment(null);setPostSearchPublic(false);clearComment();setMessage('');setSeen(new Set());setOwnStory(null);setDemoEntered(false);setBirthdays([]);setBirthdayWall([]);setWishedBirthdays(new Set());setLiveStories([]);setStoryIndex(0);setStoryMedia(null);setWishes([]);setCompletedLessons([]);setLearningError(false);setVoicePlaying(false);setQuietMode(false);setFollowingOnly(false)
+      setRooms(props.demo?localRooms:[]);setRoom(null);setDraft('');setAttachment(null);setPostSearchPublic(false);clearComment();setMessage('');setSeen(new Set());setOwnStory(null);setDemoEntered(false);setBirthdays([]);setBirthdayWall([]);setWishedBirthdays(new Set());setLiveStories([]);setStoryIndex(0);setStoryMedia(null);setWishes([]);setCompletedLessons([]);setPracticeStats([]);setLearningError(false);setVoicePlaying(false);setQuietMode(false);setFollowingOnly(false)
     }catch(reason){fail(reason)}
   }
   async function react(post:Post,kind:'like'|'repost'){
@@ -1550,7 +1581,7 @@ export default function App(props:Props){
     const key='comment-like:'+item.id
     if(item.pending||pending.current.has(key))return
     pending.current.add(key)
-    const patch=(change:Partial<Note>)=>setNotes(previous=>({...previous,[postId]:(previous[postId]??[]).map(note=>note.id===item.id?{...note,...change}:note)}))
+    const patch=(change:Partial<Note>)=>setNotes(previous=>({...previous,[postId]:(previous[postId]??(demo&&postId==='quadratics'?initialComments:[])).map(note=>note.id===item.id?{...note,...change}:note)}))
     const next=!item.liked
     patch({liked:next,likes:Math.max(0,(item.likes??0)+(next?1:-1))})
     try{
@@ -1843,9 +1874,9 @@ export default function App(props:Props){
             api<FollowStats>(base,'/people/'+encodeURIComponent(profile.id)+'/follow-stats',{},token),
           ])
           if(session===demoSession.current){setProfile(person);if(profile.id===user.id)setUser(person as Viewer);setProfileStats({id:profile.id,data:stats});setFollows(previous=>({...previous,[profile.id]:stats.followedByViewer}));refreshStats(value=>value+1)}
-        }else if(page==='Learn'||page==='Lesson'||page==='Progress'){
-          const completed=await api<string[]>(base,'/me/lessons',{},token)
-          if(session===demoSession.current)setCompletedLessons(completed)
+        }else if(page==='Learn'||page==='Lesson'||page==='Progress'||page==='Practice'){
+          const [completed,practice]=await Promise.all([api<string[]>(base,'/me/lessons',{},token),api<PracticeStat[]>(base,'/me/practice',{},token)])
+          if(session===demoSession.current){setCompletedLessons(completed);setPracticeStats(practice)}
         }else if(page==='Birthdays'){
           const entries=await api<BirthdayEntry[]>(base,'/birthdays',{},token)
           if(session===demoSession.current)setBirthdays(entries)
@@ -1901,6 +1932,7 @@ export default function App(props:Props){
     setProfile(previous.profile.id===user.id?user:previous.profile)
     setRoom(previous.room)
     setLessonId(previous.lessonId)
+    setPracticeTopic(previous.practiceTopic)
     if(previous.page==='Chat'){
       stickToChatEnd.current=true
       initialChatScroll.current=true
@@ -1973,7 +2005,7 @@ export default function App(props:Props){
     {section(query?'Search results':'Suggested for you')}
     {searchError?<Empty title="Search unavailable" detail={searchError} action="Try again" onPress={()=>setRetry(n=>n+1)}/>:searching?<Loading/>:displayedPeople.length?displayedPeople.map(person=><Card key={person.id} style={spread}><Pressable accessibilityRole="button" accessibilityLabel={'Open '+displayHandle(person)+' profile'} onPress={()=>showProfile(person)} style={{...row,flex:1}}><Avatar person={person}/><View style={{flex:1}}><PersonName person={person}/><Copy color={theme.muted} size={12}>{person.detail}</Copy></View></Pressable><Button label={follows[person.id]?'Following':'followsViewer' in person&&person.followsViewer?'Follow back':'Follow'} variant={follows[person.id]?'secondary':'primary'} onPress={()=>void follow(person)}/></Card>):<Empty title="No results" detail={query?'Try a different name or clear the search.':'Classmates will appear here after they sign up.'}/>}
   </>
-  const learning=<Learning featured={featuredLesson} done={completedLessons} onLesson={openLesson} onTimer={()=>open('Study timer')} onProgress={()=>open('Progress')}/>
+  const learning=<Learning featured={featuredLesson} done={completedLessons} onLesson={openLesson} onPractice={openPractice} onTimer={()=>open('Study timer')} onProgress={()=>open('Progress')}/>
   const play=<>
     <FeatureCard glyph="trophy" title="Quiz Duel" description="Race through questions and win XP." action="Play quiz" onPress={startQuiz}/>
     <ScreenLinks items={ [['Games','game'],...(demo?[['Leaderboard','trophy'] as const,['Rewards','gift'] as const]:[])] } open={open}/>
@@ -2098,7 +2130,8 @@ export default function App(props:Props){
   const content:Partial<Record<Page,React.ReactNode>>={
     Home:home,Explore:explore,Learn:learning,Play:play,Messages:inbox,Chat:chat,Profile:profileContent,Settings:settings,
     Lesson:<StudyLesson key={lessonId} id={lessonId} done={completedLessons.includes(lessonId)} onComplete={completeLesson}/>,
-    Progress:<LearningProgress done={completedLessons} error={learningError} retry={()=>setLearningRetry(n=>n+1)} open={openLesson}/>,
+    Progress:<LearningProgress done={completedLessons} error={learningError} retry={()=>setLearningRetry(n=>n+1)} open={openLesson} practice={practiceStats} onPractice={openPractice}/>,
+    Practice:<Practice key={practiceTopic} topic={practiceTopic} onSave={savePractice}/>,
     Quiz:<Quiz onBack={goBack}/>,
     Press:<Suspense fallback={<Loading/>}><Press base={base} token={token} demo={demo} initialArticle={pressArticle} onSeen={()=>setPressUnread(0)}/></Suspense>,
     Admin:(demo||user.isAdmin)&&<Suspense fallback={<Loading/>}><Admin base={base} token={token}
