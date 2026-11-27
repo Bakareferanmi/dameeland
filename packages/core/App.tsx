@@ -444,8 +444,18 @@ export default function App(props:Props){
   const {width}=useWindowDimensions()
   const desktop=width>=900&&!phone
   const rail=width>=1100&&!phone
-  const [appearance,setAppearance]=useState<Theme|'system'>('system')
+  // The light/dark/system choice is remembered on this device (web). Native apps start on the system setting.
+  const [appearance,setAppearance]=useState<Theme|'system'>(()=>{
+    if(Platform.OS!=='web')return 'system'
+    try{const saved=window.localStorage.getItem('dameeland-appearance');return saved==='light'||saved==='dark'||saved==='system'?saved:'system'}catch{return 'system'}
+  })
   const themeName=appearance==='system'?props.initialTheme:appearance
+  useEffect(()=>{
+    if(Platform.OS!=='web')return
+    try{window.localStorage.setItem('dameeland-appearance',appearance)}catch{}
+  },[appearance])
+  // Tell the browser which scheme the page is in, so scrollbars, form controls and overscroll match the theme.
+  useEffect(()=>{if(Platform.OS==='web')document.documentElement.style.colorScheme=themeName},[themeName])
   const theme=themes[themeName]
   const [reduced,setReduced]=useState(false)
   const [starting,setStarting]=useState(true)
@@ -1309,22 +1319,24 @@ export default function App(props:Props){
     const key=kind+post.id
     if(pending.current.has(key))return
     pending.current.add(key)
+    // The heart and counter change immediately and are put back if the request fails, so the tap never waits on the network.
+    const apply=(on:boolean)=>setPosts(previous=>previous.map(item=>item.id!==post.id?item:kind==='like'?{...item,liked:on,likes:Math.max(0,item.likes+(on?1:-1))}:{...item,reposted:on,reposts:Math.max(0,item.reposts+(on?1:-1))}))
+    apply(active)
     try{
       if(!demo)await call('/posts/'+post.id+'/'+kind,json({active},'PUT'))
-      setPosts(previous=>previous.map(item=>item.id!==post.id?item:kind==='like'?{...item,liked:active,likes:item.likes+(active?1:-1)}:{...item,reposted:active,reposts:item.reposts+(active?1:-1)}))
-    }catch(reason){fail(reason)}finally{pending.current.delete(key)}
+    }catch(reason){apply(!active);fail(reason)}finally{pending.current.delete(key)}
   }
   async function follow(person:Person){
     const active=!follows[person.id],key='follow'+person.id
     if(pending.current.has(key))return
     pending.current.add(key)
+    setFollows(previous=>({...previous,[person.id]:active}))
     try{
       if(!demo){
         await call('/people/'+person.id+'/follow',json({active},'PUT'))
         refreshStats(value=>value+1)
       }
-      setFollows(previous=>({...previous,[person.id]:active}))
-    }catch(reason){fail(reason)}finally{pending.current.delete(key)}
+    }catch(reason){setFollows(previous=>({...previous,[person.id]:!active}));fail(reason)}finally{pending.current.delete(key)}
   }
   async function saveProfile(){
     if(busy||!profileNameDraft.trim()||Array.from(bioDraft.trim()).length>50)return
@@ -2023,13 +2035,13 @@ export default function App(props:Props){
     </View>:(()=>{
       const own=item.author.id===user.id
       const canEdit=own&&verifiedBenefits&&(demo||withinEditWindow(item.createdAt))
-      return <SwipeToReply key={item.id} own={own} onReply={()=>setMessageReply(item)} onLongPress={()=>setActionTarget(item)}><View style={{backgroundColor:own?theme.purple:theme.card,borderRadius:18,borderBottomLeftRadius:own?18:5,borderBottomRightRadius:own?5:18,borderWidth:1,borderColor:own?theme.purple:theme.border,padding:12,gap:5}}>
+      return <SwipeToReply key={item.id} own={own} onReply={()=>setMessageReply(item)} onLongPress={()=>setActionTarget(item)}><View style={{backgroundColor:own?(themeName==='dark'?theme.deep:theme.purple):theme.card,borderRadius:18,borderBottomLeftRadius:own?18:5,borderBottomRightRadius:own?5:18,borderWidth:1,borderColor:own?(themeName==='dark'?theme.deep:theme.purple):theme.border,padding:12,gap:5}}>
         {!own&&room.person.group&&<View style={{...row,gap:6}}><Avatar person={item.author} size={20}/><Copy size={11} weight={800} color={theme.purple}>{displayHandle(item.author)}</Copy></View>}
         {item.reply&&<ReplyPreview reply={item.reply} own={own}/>}
         {!!item.body&&<LinkedText color={own?'#fff':theme.text} linkColor={own?lime:theme.purple}>{item.body}</LinkedText>}
         {item.chatMedia&&<View style={{gap:7,minWidth:220}}>
           {item.chatMedia.kind==='image'?<Image accessibilityLabel="Chat photo" source={{uri:item.chatMedia.url}} resizeMode="cover" style={{width:260,maxWidth:'100%',height:220,borderRadius:13}}/>:item.chatMedia.kind==='video'?(Platform.OS==='web'?React.createElement('video',{src:item.chatMedia.url,controls:true,playsInline:true,style:{width:'100%',maxHeight:280,borderRadius:13,backgroundColor:'#000'}}):props.renderVideo?<props.renderVideo uri={item.chatMedia.url}/>:<Copy color={own?'#fff':theme.text}>Video</Copy>):Platform.OS==='web'?React.createElement('audio',{src:item.chatMedia.url,controls:true,style:{width:'100%'}}):props.renderAudio?<props.renderAudio uri={item.chatMedia.url}/>:<Copy color={own?'#fff':theme.text}>Voice note</Copy>}
-          {props.saveMedia&&<Button label="Save to device" variant="plain" onPress={()=>void saveChatMedia(item)}/>}
+          {props.saveMedia&&<Button label="Save to device" variant="plain" textColor={own?'#fff':undefined} onPress={()=>void saveChatMedia(item)}/>}
         </View>}
         {item.viewOnce&&<Pressable accessibilityRole="button" disabled={own||item.viewOnce.opened||!item.viewOnce.canOpen||busy} onPress={()=>void openViewOnce(item)} style={{...row,minHeight:48,paddingHorizontal:10,borderRadius:13,backgroundColor:own?'#FFFFFF20':theme.chip}}><Icon name={item.viewOnce.kind==='video'?'vid':'image'} color={own?'#fff':theme.purple}/><View style={{flex:1}}><Copy color={own?'#fff':theme.text} weight={800}>{item.viewOnce.opened?'Opened':own?'View once sent':'Tap to view once'}</Copy><Copy color={own?'#FFFFFFCC':theme.muted} size={11}>{item.viewOnce.kind==='video'?'Video · up to 10 seconds':'Photo'}</Copy></View></Pressable>}
         {!!item.editedAt&&<Copy size={10} color={own?'#FFFFFFCC':theme.muted}>Edited</Copy>}
@@ -2201,7 +2213,7 @@ export default function App(props:Props){
     sheet=<>
       <Segmented options={['Text','Photo','Video']} selected={storyMode} onSelect={setStoryMode}/>
       {storyMode==='Text'&&<Motion key={storyBackground} reduced={reduced} distance={4} style={{gap:8}}><Copy size={12} weight={800}>Background colour</Copy><View style={{...row,gap:10,flexWrap:'wrap'}}>{['#4F25D6','#120D1F','#E9E0FF','#C8F53F','#F0447A','#FF6B6B','#FF9F43','#00B8A9','#5B8CFF','#B05CFF'].map(color=><Pressable key={color} accessibilityRole="button" accessibilityLabel={'Use '+color+' background'} onPress={()=>setStoryBackground(color)} style={{width:38,height:38,borderRadius:19,backgroundColor:color,borderWidth:storyBackground===color?3:1,borderColor:storyBackground===color?'#fff':theme.border}}/>)}</View></Motion>}
-      {storyMode==='Photo'&&<>{storyImage&&<Image source={{uri:storyImage}} style={{width:'100%',height:140,borderRadius:12}}/>}{props.pickMedia&&<Button label={storyImage?'Replace photo':'Choose photo'} leading="image" variant="secondary" onPress={()=>{void props.pickMedia?.().then(value=>{if(value&&value.kind!=='video'){setStoryImage(value.uri);setStoryMedia(value)}}).catch(fail)}}/>}</>}
+      {storyMode==='Photo'&&<>{storyImage&&<Image accessibilityLabel="Story photo preview" source={{uri:storyImage}} style={{width:'100%',height:140,borderRadius:12}}/>}{props.pickMedia&&<Button label={storyImage?'Replace photo':'Choose photo'} leading="image" variant="secondary" onPress={()=>{void props.pickMedia?.().then(value=>{if(value&&value.kind!=='video'){setStoryImage(value.uri);setStoryMedia(value)}}).catch(fail)}}/>}</>}
       {storyMode==='Video'&&<>{storyMedia?.kind==='video'&&<Card><IconTile name="vid"/><Copy weight={800}>Video ready · {videoLimit} seconds maximum</Copy></Card>}{props.pickMedia&&<Button label={storyMedia?.kind==='video'?'Replace video':'Choose video'} leading="vid" variant="secondary" onPress={()=>{void props.pickMedia?.().then(value=>{if(!value||value.kind!=='video')return;if(!value.duration||value.duration>videoLimit+.25){fail(new Error('Story videos can be up to '+videoLimit+' seconds.'));return}setStoryImage(undefined);setStoryMedia(value)}).catch(fail)}}/>}</>}
       <Field label={storyMode==='Text'?'What’s your story?':'Caption'} value={comment} onChangeText={setComment} multiline maxLength={240}/>
       <Copy size={12} color={theme.muted}>{verifiedBenefits?'Verified accounts can keep up to '+verifiedStoryLimit+' stories live for 18 hours.':'Stories disappear 12 hours after you share them.'}</Copy>
@@ -2213,7 +2225,7 @@ export default function App(props:Props){
       <Card style={{gap:12}}>
         <View style={row}><Avatar person={post.author} size={42}/><View><PersonName person={post.author}/><Copy color={theme.muted} size={12}>Post on dameen</Copy></View></View>
         <LinkedText>{post.body||'Shared a post'}</LinkedText>
-        {post.media&&post.kind==='image'&&<Image source={{uri:post.media}} resizeMode="cover" style={{width:'100%',height:180,borderRadius:14}}/>}
+        {post.media&&post.kind==='image'&&<Image accessibilityLabel="Photo attached to the post" source={{uri:post.media}} resizeMode="cover" style={{width:'100%',height:180,borderRadius:14}}/>}
       </Card>
       {!demo&&post.author.id===user.id&&<SearchVisibility label="Show post in web search" detail="Search engines can show this post and its media to anyone." value={Boolean(post.searchPublic)} onChange={value=>void updatePostSearchVisibility(post,value)} disabled={busy}/>}
       {verifiedBenefits&&post.author.id===user.id&&<View style={{...row,flexWrap:'wrap'}}>{(demo||withinEditWindow(post.time))&&<Button label="Edit post" variant="secondary" onPress={()=>{setComment(post.body);selectOverlay({kind:'editPost',post})}}/>}<Button label="Delete post" variant="danger" onPress={()=>void deletePost(post)}/></View>}
