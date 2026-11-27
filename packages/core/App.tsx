@@ -4,7 +4,7 @@ import {browserCallMedia,RoomCall,useRoomCall,type CallMedia} from './calls'
 import {readCallSignal,type CallSignal} from './callSignal'
 import React,{lazy,Suspense,useCallback,useEffect,useLayoutEffect,useRef,useState} from 'react'
 import {AccessibilityInfo,ActivityIndicator,Animated,AppState,BackHandler,Easing,Image,Keyboard,KeyboardAvoidingView,Modal,PanResponder,Platform,Pressable,RefreshControl,ScrollView,Switch,Text,TextInput,View,useWindowDimensions,type ViewStyle} from 'react-native'
-import {api,vapidBytes,ApiError,birthdayToday,validBirthDate,storyLifetime,verifiedStoryLifetime,storyVideoLimit,verifiedStoryVideoLimit,verifiedStoryLimit,capitalizeName,normalizeUsername,usernameHint,validUsername,initialChats,initialComments,initialPosts,initials,lime,me,people,questions,slides,themes,type FollowListKind,type FollowPage,type FollowStats,type Note,type Person,type Post,type BirthdayEntry,type Role,type Story,type StoryGroup,type Theme} from './index'
+import {api,friendlyMessage,vapidBytes,ApiError,birthdayToday,validBirthDate,storyLifetime,verifiedStoryLifetime,storyVideoLimit,verifiedStoryVideoLimit,verifiedStoryLimit,capitalizeName,normalizeUsername,usernameHint,validUsername,initialChats,initialComments,initialPosts,initials,lime,me,people,questions,slides,themes,type FollowListKind,type FollowPage,type FollowStats,type Note,type Person,type Post,type BirthdayEntry,type Role,type Story,type StoryGroup,type Theme} from './index'
 import {Avatar,Button,Card,Copy,Design,displayHandle,Field,Icon,IconButton,IconTile,LinkedText,Logo,PersonName,ScreenLinks,Segmented,VerifiedBadge,row,spread,stack,useDesign,type Glyph,type IconRendererProps} from './ui'
 import type {ExtraPage} from './FeatureScreens'
 import {LoadingScreen} from './LoadingScreen'
@@ -128,7 +128,7 @@ const storyLeft=(ms:number)=>{const minutes=Math.max(1,Math.ceil(ms/60000));retu
 const uid=()=>Date.now().toString(36)+Math.random().toString(36).slice(2)
 const json=(body:unknown,method='POST')=>({method,body:JSON.stringify(body)})
 const foreground=()=>Platform.OS==='web'?document.visibilityState==='visible':AppState.currentState==='active'
-const errorMessage=(error:unknown)=>error instanceof Error?error.message:'Something went wrong. Try again.'
+const errorMessage=(error:unknown)=>friendlyMessage(error)
 const demoUsernameTaken=(username:string)=>people.some(person=>person.id===username)||[...welcomeAccounts.values()].some(account=>account.user.username===username)
 const welcomeAccounts=new Map<string,{user:Person;password:string}>()
 const shortTime=(value:string)=>{

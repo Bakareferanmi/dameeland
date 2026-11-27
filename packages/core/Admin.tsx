@@ -1,6 +1,6 @@
 import React,{useEffect,useState} from 'react'
 import {ActivityIndicator,AppState,View} from 'react-native'
-import {api,type AdminAccount,type AdminAccounts,type AdminOverview,type Role} from './index'
+import {api,friendlyMessage,type AdminAccount,type AdminAccounts,type AdminOverview,type Role} from './index'
 import AdminChart,{sampleAdminSeries} from './AdminChart'
 import {Avatar,Button,Card,Copy,Field,PersonName,Segmented,row,useDesign} from './ui'
 
@@ -10,7 +10,7 @@ const metrics=[
   ['comments','Comments'],['likes','Likes'],['reposts','Reposts'],['follows','Follows'],['messages','Messages'],
 ] as const
 const actions={signup:'joined',post:'published a post',comment:'left a comment'} as const
-const message=(error:unknown)=>error instanceof Error?error.message:'Try again in a moment.'
+const message=(error:unknown)=>friendlyMessage(error,'Try again in a moment.')
 
 export default function Admin({base,token,sample,onSampleChange}:{base:string;token:string;sample?:{overview:AdminOverview;accounts:AdminAccount[]};onSampleChange:(id:string,role:Role,verified:boolean,teacher:boolean)=>void}){
   const {theme}=useDesign()

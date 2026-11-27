@@ -116,6 +116,40 @@ export class ApiError extends Error {
   constructor(message:string,readonly status:number){super(message);this.name='ApiError'}
 }
 
+// Turns any error into a short sentence a student would understand. Server messages are already written for people and pass through;
+// network failures, browser permission errors and code-level exceptions are replaced so nobody sees "Failed to fetch" or a stack trace.
+const statusMessages:Record<number,string>={
+  400:'That didn’t go through. Please check what you entered and try again.',
+  401:'Your session has expired. Please log in again.',
+  403:'You don’t have permission to do that.',
+  404:'We couldn’t find that. It may have been removed.',
+  408:'That took too long. Please try again.',
+  409:'That changed while you were working. Refresh and try again.',
+  413:'That file is too large. Try a smaller one.',
+  429:'You’re going a little fast. Wait a moment and try again.',
+}
+export const friendlyStatus=(status:number)=>statusMessages[status]??(status>=500?'We’re having a problem on our side. Please try again in a moment.':'Something went wrong. Please try again.')
+const technical=/typeerror|referenceerror|syntaxerror|rangeerror|domexception|undefined|\bnull\b|\bnan\b|unexpected token|\bjson\b|cannot read|is not a function|is not defined|is not iterable|\bat \S+:\d+|\n|:\d+:\d+|econn|enotfound|etimedout|failed to fetch|load failed|networkerror|network request failed|\bfetch\b|status code|\bhttp \d{3}\b|exception|errno|stack|0x[0-9a-f]{2,}|\bsdp\b|\bice\b|websocket|\bxhr\b|cors/i
+export function friendlyMessage(error:unknown,fallback='Something went wrong. Please try again.'):string{
+  if(error instanceof ApiError){
+    // Messages that name a code-level problem (an unknown action, an invalid request) are replaced; the rest were written for people.
+    return !error.message||technical.test(error.message)?friendlyStatus(error.status):error.message
+  }
+  const name=(error as {name?:string}|null)?.name
+  const text=error instanceof Error?error.message:typeof error==='string'?error:''
+  if(name==='NotAllowedError'||name==='PermissionDeniedError'||name==='SecurityError')return 'Permission was blocked. Allow access in your browser or phone settings, then try again.'
+  if(name==='NotFoundError'||name==='DevicesNotFoundError'||name==='OverconstrainedError')return 'We couldn’t find a camera or microphone on this device.'
+  if(name==='NotReadableError'||name==='TrackStartError')return 'Your camera or microphone is being used by another app. Close it and try again.'
+  if(name==='QuotaExceededError')return 'Your device is out of storage space. Free some up and try again.'
+  if(name==='NotSupportedError')return 'This isn’t supported on your device or browser.'
+  if(name==='AbortError'||name==='TimeoutError')return 'That took too long. Please try again.'
+  if(typeof navigator!=='undefined'&&navigator.onLine===false)return 'You’re offline. Check your connection and try again.'
+  if(name==='TypeError'&&/fetch|network|load failed/i.test(text))return 'We couldn’t reach dameen. Check your internet connection and try again.'
+  // Messages the app itself wrote are short plain sentences. Anything long or code-like is replaced.
+  if(!text||text.length>160||technical.test(text))return fallback
+  return text
+}
+
 export async function api<T>(base:string,path:string,options:RequestInit={},token?:string):Promise<T>{
   const headers = new Headers(options.headers)
   if(typeof options.body === 'string') headers.set('Content-Type','application/json')
@@ -123,7 +157,7 @@ export async function api<T>(base:string,path:string,options:RequestInit={},toke
   const response = await fetch(base.replace(/\/$/,'')+'/api'+path,{...options,headers})
   if(!response.ok){
     const result=await response.json().catch(()=>null) as {error?:string}|null
-    throw new ApiError(result?.error ?? 'Something went wrong. Try again.',response.status)
+    throw new ApiError(result?.error ?? friendlyStatus(response.status),response.status)
   }
   const result=await response.json()
   return result as unknown as T

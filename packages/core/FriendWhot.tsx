@@ -1,5 +1,5 @@
 import React,{useEffect,useRef,useState} from 'react'
-import {api} from './index'
+import {api,friendlyMessage} from './index'
 import {Button,Card,Copy} from './ui'
 import {WhotTable} from './WhotGame'
 import type {PlayingCard,Shape} from './whotRules'
@@ -35,7 +35,7 @@ export default function FriendWhot({base,token,room,opponent}:{base:string;token
     setError('')
     try{
       setMatch(await api<MatchView|null>(base,path,{method:'POST',body:JSON.stringify({action,id:match?.id,version:match?.version,index,shape})},token))
-    }catch(reason){setError(reason instanceof Error?reason.message:'Couldn’t update the match.')}
+    }catch(reason){setError(friendlyMessage(reason,'Couldn’t update the match.'))}
     finally{sending.current=false;setBusy(false)}
   }
   return <>

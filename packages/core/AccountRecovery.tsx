@@ -1,6 +1,6 @@
 import React,{useState} from 'react'
 import {View} from 'react-native'
-import {api} from './index'
+import {api,friendlyMessage} from './index'
 import {Button,Copy,Field,Segmented,useDesign} from './ui'
 
 type Kind='password'|'username'
@@ -26,7 +26,7 @@ export default function AccountRecovery({base,demoEmail,findDemoAccount,onBack}:
         ?kind==='username'?(account?.user.username?'Your demo username is '+account.user.username+'.':'Create a demo account first to try username recovery.')
           :(account?'Use this demo reset code: DAME7.':'Create a demo account first to try a password reset.')
         :kind==='username'?'If an account matches, we’ll email its username.':'If an account matches, we’ll email a reset code.')
-    }catch(reason){setError(reason instanceof Error?reason.message:'Couldn’t request recovery. Try again.')}
+    }catch(reason){setError(friendlyMessage(reason,'Couldn’t request recovery. Try again.'))}
     finally{setBusy(false)}
   }
   async function reset(){
@@ -39,7 +39,7 @@ export default function AccountRecovery({base,demoEmail,findDemoAccount,onBack}:
         account.password=password
       }else await api(base,'/auth/recovery/reset',{method:'POST',body:JSON.stringify({email:sentTo,code,password})})
       setDone(true);setNotice('Password updated. You can log in now.')
-    }catch(reason){setError(reason instanceof Error?reason.message:'Couldn’t reset your password. Try again.')}
+    }catch(reason){setError(friendlyMessage(reason,'Couldn’t reset your password. Try again.'))}
     finally{setBusy(false)}
   }
   const enteringCode=kind==='password'&&!!sentTo&&!done
