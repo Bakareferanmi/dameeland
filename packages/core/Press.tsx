@@ -1,13 +1,13 @@
 import React,{useEffect,useRef,useState} from 'react'
 import {ActivityIndicator,Platform,Pressable,Text,TextInput,View} from 'react-native'
-import {api,type Person} from './index'
+import {api,friendlyMessage,type Person} from './index'
 import {Avatar,Button,Card,Copy,Field,Segmented,displayHandle,row,useDesign} from './ui'
 
 type Article={id:string;title:string;summary:string;author:Person;status:'draft'|'published';minutes:number;publishedAt?:string;updatedAt:string;body?:string}
 type Screen={name:'list'|'mine'}|{name:'read';id:string;back:'list'|'mine'}|{name:'edit';id?:string}
 
 const serif=Platform.select({ios:'Georgia',android:'serif',default:'Georgia, "Times New Roman", serif'})
-const message=(error:unknown)=>error instanceof Error?error.message:'Try again in a moment.'
+const message=(error:unknown)=>friendlyMessage(error,'Try again in a moment.')
 const dateLabel=(iso?:string)=>{
   if(!iso)return ''
   try{return new Date(iso).toLocaleDateString(undefined,{day:'numeric',month:'short',year:'numeric'})}catch{return iso.slice(0,10)}

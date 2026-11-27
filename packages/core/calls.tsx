@@ -2,7 +2,7 @@ import React,{useEffect,useRef,useState} from 'react'
 import {Animated,Platform,Pressable,View,useWindowDimensions} from 'react-native'
 import type {CallSignal} from './callSignal'
 import {Avatar,Button,Copy,Icon,displayHandle,row,useDesign,type Glyph} from './ui'
-import type {Person} from './index'
+import {friendlyMessage,type Person} from './index'
 
 type Track={enabled:boolean;stop:()=>void;_switchCamera?:()=>void}
 export type CallStream={getTracks:()=>Track[];getAudioTracks:()=>Track[];getVideoTracks:()=>Track[]}
@@ -213,7 +213,7 @@ export function useRoomCall(media:CallMedia|undefined,roomKey:string|undefined,s
         timeout(active,active.offer?'The call couldn’t connect.':'No answer yet.',65000)
       }
     }catch(reason){
-      if(current.current===active)end(reason instanceof Error?reason.message:'Couldn’t access call media.')
+      if(current.current===active)end(friendlyMessage(reason,'Couldn’t access call media.'))
     }
   }
   function start(video:boolean){
@@ -259,7 +259,7 @@ export function useRoomCall(media:CallMedia|undefined,roomKey:string|undefined,s
     try{
       active.local=await media.switchCamera(active.local,active.peer)
       update(active)
-    }catch(reason){notify(reason instanceof Error?reason.message:'Couldn’t switch camera.')}
+    }catch(reason){notify(friendlyMessage(reason,'Couldn’t switch camera.'))}
   }
   return {call,start,receive,end,switchCamera,canSwitchCamera:Boolean(media?.switchCamera),accept:()=>{const active=current.current;if(active?.state==='incoming')void connect(active)}}
 }

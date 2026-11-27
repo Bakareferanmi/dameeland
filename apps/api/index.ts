@@ -189,7 +189,7 @@ app.use('/api/*',async(c,next)=>{
   const mediaUpload=c.req.path==='/api/posts'||c.req.path==='/api/stories'||/^\/api\/rooms\/[^/]+\/messages$/.test(c.req.path)
   const imageUpload=c.req.path.startsWith('/api/me/photos/')||/^\/api\/posts\/[^/]+\/comments$/.test(c.req.path)||/^\/api\/groups\/[^/]+\/photo$/.test(c.req.path)
   const maxSize=mediaUpload?30000000:imageUpload?5300000:8192
-  return bodyLimit({maxSize,onError:()=>{throw new HTTPException(413,{message:'The request is too large.'})}})(c,next)
+  return bodyLimit({maxSize,onError:()=>{throw new HTTPException(413,{message:'That’s too large to send. Try a smaller file or message.'})}})(c,next)
 })
 app.get('/api/health',c=>c.json({ok:true}))
 app.use('/api/public/*',async(c,next)=>{
@@ -241,7 +241,7 @@ app.get('/api/auth/username',async c=>{
 const emailPattern=/^[^\s@]+@[^\s@]+\.[^\s@]+$/
 app.post('/api/auth/recovery/request',async c=>{
   const {DB,RESEND_API_KEY,RECOVERY_FROM}=c.env
-  if(!RESEND_API_KEY||!RECOVERY_FROM)return c.json({error:'Email recovery is not configured yet.'},503)
+  if(!RESEND_API_KEY||!RECOVERY_FROM)return c.json({error:'Password recovery isn’t available right now. Please try again later.'},503)
   const input=await readBody(c.req.raw)
   const email=clean(input?.email,254).toLowerCase()
   const kind=input?.kind
@@ -296,7 +296,7 @@ app.post('/api/auth/recovery/reset',async c=>{
 })
 app.post('/api/auth/:action',async c=>{
   const action=c.req.param('action')
-  if(action!=='signup'&&action!=='login') return c.json({error:'Unknown action.'},404)
+  if(action!=='signup'&&action!=='login') return c.json({error:'That didn’t work. Refresh and try again.'},404)
   const body=await readBody(c.req.raw)
   const email=clean(body?.email,254).toLowerCase()
   const identifier=clean(body?.identifier??body?.email,254).toLowerCase()
@@ -340,7 +340,7 @@ app.post('/api/auth/:action',async c=>{
 type GoogleAttempt={mode:'signup'|'login';client:'web'|'mobile';username:string|null;dob:string|null;referral_code:string|null;verifier:string;status:string;user_id:string|null;error:string|null}
 app.post('/api/google/start',async c=>{
   const {DB,GOOGLE_CLIENT_ID,GOOGLE_CLIENT_SECRET,GOOGLE_REDIRECT_URI}=c.env
-  if(!GOOGLE_CLIENT_ID||!GOOGLE_CLIENT_SECRET||!GOOGLE_REDIRECT_URI)return c.json({error:'Google sign-in is not configured.'},503)
+  if(!GOOGLE_CLIENT_ID||!GOOGLE_CLIENT_SECRET||!GOOGLE_REDIRECT_URI)return c.json({error:'Google sign-in isn’t available right now.'},503)
   if(!await authAllowed(DB,c.req.header('CF-Connecting-IP')??'local','google'))return c.json({error:'Too many attempts. Try again in a few minutes.'},429)
   const body=await readBody(c.req.raw)
   const mode=body?.mode==='signup'?'signup':'login'
@@ -434,7 +434,7 @@ app.get('/api/google/callback',async c=>{
 app.post('/api/google/exchange',async c=>{
   const body=await readBody(c.req.raw)
   const state=clean(body?.state,48),exchange=clean(body?.exchange,64)
-  if(!/^[a-f0-9]{48}$/.test(state)||!/^[a-f0-9]{64}$/.test(exchange))return c.json({error:'Invalid Google sign-in request.'},400)
+  if(!/^[a-f0-9]{48}$/.test(state)||!/^[a-f0-9]{64}$/.test(exchange))return c.json({error:'Google sign-in couldn’t start. Please try again.'},400)
   const {DB}=c.env
   const key=await hash(exchange)
   const attempt=await DB.prepare('SELECT status,error FROM google_attempts WHERE state=? AND exchange_hash=? AND expires>?').bind(state,key,now()).first<GoogleAttempt>()
@@ -528,7 +528,7 @@ app.get('/api/story-media/:user/:id',async c=>{
   object.writeHttpMetadata(headers)
   return new Response(object.body,{headers})
 })
-app.get('/api/notification-public-key',c=>c.env.VAPID_PUBLIC_KEY?c.json({publicKey:c.env.VAPID_PUBLIC_KEY}):c.json({error:'Push notifications are not configured.'},503))
+app.get('/api/notification-public-key',c=>c.env.VAPID_PUBLIC_KEY?c.json({publicKey:c.env.VAPID_PUBLIC_KEY}):c.json({error:'Notifications aren’t available right now.'},503))
 app.use('/api/*',async(c,next)=>{
   const header=c.req.header('Authorization')
   // Browsers cannot send an Authorization header on a WebSocket, so the chat socket carries a one-time ticket in its subprotocol instead.
@@ -579,7 +579,7 @@ app.get('/api/notifications',async c=>{
   const user=c.get('user').id
   const cursor=c.req.query('cursor')??''
   const match=/^(\d{13}):([a-f0-9-]{36})$/.exec(cursor)
-  if(cursor&&!match)return c.json({error:'Invalid notification page.'},400)
+  if(cursor&&!match)return c.json({error:'We couldn’t load more notifications. Refresh and try again.'},400)
   const cutoff=match?Number(match[1]):Number.MAX_SAFE_INTEGER
   const lastId=match?.[2]??''
   const {results}=await c.env.DB.prepare(`${notificationSelect}
@@ -913,7 +913,7 @@ async function imageType(file:File,allowGif=false){
 }
 app.put('/api/me/photos/:kind',async c=>{
   const kind=c.req.param('kind')
-  if(kind!=='avatar'&&kind!=='cover')return c.json({error:'Unknown photo type.'},404)
+  if(kind!=='avatar'&&kind!=='cover')return c.json({error:'That photo type isn’t supported. Choose a different photo.'},404)
   const file:unknown=(await c.req.raw.formData().catch(()=>null))?.get('image')
   const contentType=file instanceof File?await imageType(file):null
   if(!(file instanceof File)||!contentType)return c.json({error:'Choose a PNG, JPEG or WebP image under 5 MB.'},400)
@@ -963,7 +963,7 @@ app.put('/api/stories/:author/:id/view',async c=>{
 app.put('/api/stories/:author/:id/like',async c=>{
   const {author,id}=c.req.param(),me=c.get('user').id
   const active=(await readBody(c.req.raw))?.active
-  if(typeof active!=='boolean')return c.json({error:'Invalid story reaction.'},400)
+  if(typeof active!=='boolean')return c.json({error:'That reaction isn’t available.'},400)
   if(!(await readStories(c.env,author)).some(story=>story.id===id&&storyExpiry(story)>now()))return c.json({error:'Story unavailable.'},404)
   const db=c.env.DB
   const result=await db.prepare(active?'INSERT INTO story_likes(story_id,author_id,user_id) VALUES (?,?,?) ON CONFLICT DO NOTHING':'DELETE FROM story_likes WHERE story_id=? AND author_id=? AND user_id=?').bind(id,author,me).run()
@@ -1215,7 +1215,7 @@ app.put('/api/posts/:id/coauthor',async c=>{
 })
 app.put('/api/posts/:id/:kind',async c=>{
   const {id,kind}=c.req.param()
-  if(kind!=='like'&&kind!=='repost') return c.json({error:'Unknown reaction.'},404)
+  if(kind!=='like'&&kind!=='repost') return c.json({error:'That reaction isn’t available.'},404)
   const body=await readBody(c.req.raw)
   if(typeof body?.active!=='boolean') return c.json({error:'Choose a reaction state.'},400)
   const db=c.env.DB
@@ -1255,7 +1255,7 @@ app.get('/api/posts/:id/comments',async c=>{
 app.put('/api/comments/:id/like',async c=>{
   const id=c.req.param('id'),me=c.get('user').id
   const active=(await readBody(c.req.raw))?.active
-  if(typeof active!=='boolean')return c.json({error:'Invalid comment reaction.'},400)
+  if(typeof active!=='boolean')return c.json({error:'That reaction isn’t available.'},400)
   const db=c.env.DB
   const comment=await db.prepare('SELECT author,post_id FROM comments WHERE id=?').bind(id).first<{author:string;post_id:string}>()
   if(!comment)return c.json({error:'Comment unavailable.'},404)
@@ -1284,7 +1284,7 @@ app.post('/api/posts/:id/comments',async c=>{
   if(multipart&&(!contentType||!(file instanceof File)))return c.json({error:'Choose a PNG, JPEG, WebP or GIF under 5 MB.'},400)
   if(!body&&!contentType&&gif===undefined&&sticker===undefined)return c.json({error:'Write a comment or add an attachment.'},400)
   const parent=parentId?await DB.prepare('SELECT x.author,u.username FROM comments x JOIN users u ON u.id=x.author WHERE x.id=? AND x.post_id=?').bind(parentId,post).first<{author:string;username:string|null}>():null
-  if(parentId&&!parent)return c.json({error:'Reply target unavailable.'},404)
+  if(parentId&&!parent)return c.json({error:'The message you’re replying to is no longer available.'},404)
   const media=contentType?contentType==='image/gif'?id+'.gif':id:null
   if(media&&file instanceof File&&contentType)await MEDIA.put(media,await file.arrayBuffer(),{httpMetadata:{contentType}})
   const attachment={media,gif:(gif??null) as CommentRow['gif'],sticker:(sticker??null) as CommentRow['sticker']}
@@ -1358,7 +1358,7 @@ app.get('/api/people/:id/presence',async c=>{
 })
 app.get('/api/people/:id/connections/:kind',async c=>{
   const {id,kind}=c.req.param()
-  if(kind!=='followers'&&kind!=='following')return c.json({error:'Unknown connections list.'},404)
+  if(kind!=='followers'&&kind!=='following')return c.json({error:'We couldn’t load that list. Refresh and try again.'},404)
   const db=c.env.DB
   if(!await db.prepare('SELECT id FROM users WHERE id=?').bind(id).first())return c.json({error:'Profile unavailable.'},404)
   const cursor=clean(c.req.query('cursor'),80)
@@ -1376,7 +1376,7 @@ app.put('/api/people/:id/follow',async c=>{
   const target=c.req.param('id')
   const me=c.get('user').id
   const body=await readBody(c.req.raw)
-  if(typeof body?.active!=='boolean'||target===me) return c.json({error:'Invalid follow request.'},400)
+  if(typeof body?.active!=='boolean'||target===me) return c.json({error:'That didn’t work. Refresh and try again.'},400)
   const db=c.env.DB
   if(!(await db.prepare('SELECT id FROM users WHERE id=?').bind(target).first())) return c.json({error:'Profile unavailable.'},404)
   await db.prepare(body.active?'INSERT INTO follows VALUES (?,?) ON CONFLICT DO NOTHING':'DELETE FROM follows WHERE follower=? AND target=?').bind(me,target).run()
@@ -1792,7 +1792,7 @@ const callState=(row:CallRow)=>row.expires<now()&&row.state!=='answered'?'ended'
 app.post('/api/rooms/:id/calls',async c=>{
   const room=c.req.param('id'),user=c.get('user').id
   const signal=readCallSignal((await readBody(c.req.raw))?.signal)
-  if(!signal||signal.kind!=='offer')return c.json({error:'Invalid call offer.'},400)
+  if(!signal||signal.kind!=='offer')return c.json({error:'The call couldn’t be set up. Try calling again.'},400)
   const peer=await c.env.DB.prepare('SELECT CASE WHEN first_user=? THEN second_user ELSE first_user END target FROM rooms WHERE id=? AND (first_user=? OR second_user=?)').bind(user,room,user,user).first<{target:string}>()
   if(!peer)return c.json({error:'Conversation unavailable.'},404)
   const at=now()
@@ -1824,7 +1824,7 @@ app.put('/api/calls/:id/ringing',async c=>{
 })
 app.put('/api/calls/:id/answer',async c=>{
   const signal=readCallSignal((await readBody(c.req.raw))?.signal)
-  if(!signal||signal.kind!=='answer'||signal.id!==c.req.param('id'))return c.json({error:'Invalid call answer.'},400)
+  if(!signal||signal.kind!=='answer'||signal.id!==c.req.param('id'))return c.json({error:'The call couldn’t be set up. Try calling again.'},400)
   const result=await c.env.DB.prepare("UPDATE calls SET answer=?,state='answered' WHERE id=? AND callee=? AND state IN ('offered','ringing') AND expires>?").bind(signal.sdp,signal.id,c.get('user').id,now()).run()
   if(!result.meta.changes)return c.json({error:'Call unavailable.'},404)
   return c.json({state:'answered'})
@@ -1859,9 +1859,9 @@ app.get('/api/rooms/:id/socket',async c=>{
   const room=c.req.param('id')
   const user=c.get('user').id
   if(!await member(c.env.DB,room,user)) return c.json({error:'Conversation unavailable.'},404)
-  if(c.req.header('Upgrade')?.toLowerCase()!=='websocket') return c.json({error:'WebSocket required.'},426)
+  if(c.req.header('Upgrade')?.toLowerCase()!=='websocket') return c.json({error:'This only works inside the app. Open dameen and try again.'},426)
   const origin=c.req.header('Origin')
-  if(origin&&!allowedOrigins(c.env).includes(origin)) return c.json({error:'Origin unavailable.'},403)
+  if(origin&&!allowedOrigins(c.env).includes(origin)) return c.json({error:'That request couldn’t be completed. Refresh the page and try again.'},403)
   await touchPresence(c.env.DB,user,true)
   return c.env.ROOMS.getByName(room).fetch('https://room.internal/socket',{headers:{Upgrade:'websocket','X-Room-User':user}})
 })
@@ -1955,9 +1955,9 @@ app.put('/api/admin/press/:id',async c=>{
   return c.json({writer:input.writer})
 })
 app.onError((error,c)=>{
-  if(error instanceof HTTPException)return c.json({error:error.message||'The request could not be completed.'},error.status)
+  if(error instanceof HTTPException)return c.json({error:error.message||'That couldn’t be completed. Please try again.'},error.status)
   console.error(error)
-  return c.json({error:'Something went wrong. Try again.'},500)
+  return c.json({error:'Something went wrong on our side. Please try again in a moment.'},500)
 })
 export class ChatRoom extends DurableObject<Env>{
   private async setPresence(user:string,online:boolean){await touchPresence(this.env.DB,user,online)}
